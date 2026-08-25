@@ -1436,7 +1436,7 @@ fn io_error(error: std::io::Error) -> TorbenError {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeMap, VecDeque},
+        collections::VecDeque,
         io::{Read as _, Write as _},
         net::TcpListener,
         str::FromStr,
@@ -1444,14 +1444,21 @@ mod tests {
         thread,
     };
 
+    #[cfg(windows)]
     use sha2::{Digest, Sha256};
+    #[cfg(windows)]
+    use std::collections::BTreeMap;
+    #[cfg(windows)]
     use tempfile::tempdir;
+    use torben_contracts::ExactVersion;
+    #[cfg(windows)]
     use torben_contracts::{
-        AppId, ExactVersion, OperationKind, SourceId,
+        AppId, OperationKind, SourceId,
         plugin::{InstallPlan, InstallStep},
     };
 
     use super::*;
+    #[cfg(windows)]
     use crate::{
         StateStore, TorbenCore, bundled_shim::BundledShim, node_plugin::BundledPlugin,
         operation::OperationJournal,

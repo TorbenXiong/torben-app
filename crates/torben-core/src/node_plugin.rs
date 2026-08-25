@@ -175,7 +175,7 @@ impl BundledPlugin {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     pub(crate) fn python_from_executable(executable: PathBuf) -> Self {
         Self::from_executable(
             executable,
@@ -185,7 +185,7 @@ impl BundledPlugin {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     pub(crate) fn git_from_executable(executable: PathBuf) -> Self {
         Self::from_executable(
             executable,
@@ -195,7 +195,7 @@ impl BundledPlugin {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     pub(crate) fn vscode_from_executable(executable: PathBuf) -> Self {
         Self::from_executable(
             executable,
@@ -205,7 +205,7 @@ impl BundledPlugin {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     pub(crate) fn codex_from_executable(executable: PathBuf) -> Self {
         Self::from_executable(
             executable,

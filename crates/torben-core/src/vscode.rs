@@ -988,11 +988,16 @@ mod tests {
         thread,
     };
 
+    #[cfg(windows)]
     use sha2::{Digest, Sha256};
+    #[cfg(windows)]
     use tempfile::tempdir;
-    use torben_contracts::{AppId, ExactVersion};
+    #[cfg(windows)]
+    use torben_contracts::AppId;
+    use torben_contracts::ExactVersion;
 
     use super::*;
+    #[cfg(windows)]
     use crate::{TorbenCore, bundled_shim::BundledShim, node_plugin::BundledPlugin};
 
     #[test]

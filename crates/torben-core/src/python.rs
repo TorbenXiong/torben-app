@@ -1365,9 +1365,12 @@ mod tests {
         thread,
     };
 
+    #[cfg(windows)]
     use tempfile::tempdir;
+    #[cfg(windows)]
     use torben_contracts::OperationKind;
 
+    #[cfg(windows)]
     use crate::{
         StateStore, TorbenCore, bundled_shim::BundledShim, node_plugin::BundledPlugin,
         operation::OperationJournal,
