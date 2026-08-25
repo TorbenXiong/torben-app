@@ -40,6 +40,10 @@ function safeRelative(root, path, description) {
   return value ? value.split(sep).join("/") : ".";
 }
 
+export function safeCanonicalRelative(root, path, description) {
+  return safeRelative(realpathSync(root), realpathSync(path), description);
+}
+
 function regularFile(path, description) {
   if (!existsSync(path)) fail(`${description} is missing: ${path}`);
   const metadata = lstatSync(path);
@@ -144,7 +148,7 @@ function scanWindowsRoot(root) {
 
 function executableFile(root, path, target, description, enforceExecutableMode = false) {
   const resolved = realpathSync(path);
-  safeRelative(root, resolved, description);
+  safeCanonicalRelative(root, resolved, description);
   const metadata = regularFile(resolved, description);
   if (enforceExecutableMode && (metadata.mode & 0o111) === 0) {
     fail(`${description} is not executable: ${resolved}`);
@@ -469,8 +473,14 @@ export async function runDesktopPackageSmoke({
       target: metadata.target,
       package: basename(packageFile),
       applicationRoot,
-      executable: safeRelative(applicationRoot, inspected.mainExecutable, "Desktop executable"),
-      sidecars: inspected.sidecars.map((path) => safeRelative(applicationRoot, path, "Sidecar")),
+      executable: safeCanonicalRelative(
+        applicationRoot,
+        inspected.mainExecutable,
+        "Desktop executable",
+      ),
+      sidecars: inspected.sidecars.map((path) =>
+        safeCanonicalRelative(applicationRoot, path, "Sidecar"),
+      ),
       signing: { status: metadata.signingStatus, verified: signatureRequired },
       launch: { timeoutMs: launchTimeoutMs, sustained: true },
     };

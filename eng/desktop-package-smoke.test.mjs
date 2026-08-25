@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { runDesktopPackageSmoke } from "./desktop-package-smoke.mjs";
+import { runDesktopPackageSmoke, safeCanonicalRelative } from "./desktop-package-smoke.mjs";
 import { createReleaseMetadata } from "./release-metadata.mjs";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -101,6 +101,31 @@ function macosPlistExecutor({ stage }) {
   if (!Object.hasOwn(values, stage)) throw new Error(`Unexpected fixture stage: ${stage}`);
   return { status: 0, stdout: `${values[stage]}\n`, stderr: "" };
 }
+
+test("canonical desktop path checks accept root aliases and reject real escapes", () => {
+  const root = fixtureRoot();
+  try {
+    const actualRoot = join(root, "actual");
+    const aliasRoot = join(root, "alias");
+    const outside = join(root, "outside");
+    mkdirSync(actualRoot);
+    mkdirSync(outside);
+    writeFileSync(join(actualRoot, "inside"), "inside");
+    writeFileSync(join(outside, "escaped"), "escaped");
+    symlinkSync(actualRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+
+    assert.equal(safeCanonicalRelative(aliasRoot, join(actualRoot, "inside"), "Fixture"), "inside");
+
+    const escapeLink = join(actualRoot, "escape");
+    symlinkSync(outside, escapeLink, process.platform === "win32" ? "junction" : "dir");
+    assert.throws(
+      () => safeCanonicalRelative(aliasRoot, join(escapeLink, "escaped"), "Fixture"),
+      /Fixture escapes its validation root/,
+    );
+  } finally {
+    removeFixture(root);
+  }
+});
 
 test("verifies an installed Windows package and sustained isolated launch", async (t) => {
   for (const format of ["nsis", "msi"]) {

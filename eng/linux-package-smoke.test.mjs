@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -193,7 +201,7 @@ test("installs deb and rpm packages only through their native manager before lau
 
         assert.equal(result.mode, "install");
         assert.equal(result.systemInstalled, true);
-        assert.ok(result.executable.startsWith(systemRoot));
+        assert.ok(result.executable.startsWith(realpathSync(systemRoot)));
         assert.deepEqual(
           calls.map((call) => call.stage),
           [`extract-${format}`, `install-${format}`, "launch"],
@@ -202,7 +210,7 @@ test("installs deb and rpm packages only through their native manager before lau
         assert.equal(installation.command, format === "deb" ? "apt-get" : "dnf");
         assert.equal(installation.args.at(-1).endsWith(`.${format}`), true);
         assert.equal(installation.args[0], format === "deb" ? "--quiet=2" : "--quiet");
-        assert.ok(calls[2].args.at(-1).startsWith(systemRoot));
+        assert.ok(calls[2].args.at(-1).startsWith(realpathSync(systemRoot)));
       } finally {
         removeFixture(root);
       }
