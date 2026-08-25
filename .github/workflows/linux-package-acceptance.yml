@@ -1,0 +1,100 @@
+name: Linux package acceptance
+
+on:
+  workflow_call:
+    inputs:
+      artifact-prefix:
+        description: Prefix used by the caller's per-target artifact names
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  install-and-launch:
+    name: ${{ matrix.distribution.name }} ${{ matrix.platform.target }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+        distribution:
+          - name: Ubuntu 24.04 AppImage
+            image: ubuntu:24.04
+            bootstrap: ubuntu
+            format: appimage
+          - name: Debian 13 deb
+            image: debian:13-slim
+            bootstrap: debian
+            format: deb
+          - name: Fedora 44 rpm
+            image: fedora:44
+            bootstrap: fedora
+            format: rpm
+          - name: Rocky Linux 9.8 rpm
+            image: rockylinux/rockylinux:9.8-minimal
+            bootstrap: rocky
+            format: rpm
+    runs-on: ${{ matrix.platform.runner }}
+    container:
+      image: ${{ matrix.distribution.image }}
+      options: --user 0
+    steps:
+      - name: Install isolated container prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.distribution.bootstrap }}" in
+            ubuntu)
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+                ca-certificates coreutils git tar xauth xvfb xz-utils \
+                libayatana-appindicator3-1 libgtk-3-0 librsvg2-2 libwebkit2gtk-4.1-0
+              ;;
+            debian)
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+                ca-certificates coreutils dpkg git tar xauth xvfb xz-utils
+              ;;
+            fedora)
+              dnf install --assumeyes \
+                ca-certificates coreutils cpio findutils git rpm tar which xz \
+                xorg-x11-server-Xvfb
+              ;;
+            rocky)
+              microdnf install --assumeyes \
+                ca-certificates coreutils cpio dnf findutils git rpm tar which xz \
+                xorg-x11-server-Xvfb
+              ;;
+            *)
+              echo "Unsupported acceptance bootstrap: ${{ matrix.distribution.bootstrap }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Check out exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+
+      - name: Download exact Linux target artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.artifact-prefix }}${{ matrix.platform.target }}
+          path: artifacts/${{ matrix.platform.target }}
+
+      - name: Install package and sustain isolated GUI launch
+        run: >-
+          node eng/linux-package-smoke.mjs
+          --artifacts artifacts/${{ matrix.platform.target }}
+          --format ${{ matrix.distribution.format }}
+          --mode install

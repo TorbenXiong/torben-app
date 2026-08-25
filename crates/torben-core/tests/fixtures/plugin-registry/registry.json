@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "sequence": 1,
+  "generatedAt": "2026-08-23T00:00:00Z",
+  "minimumHostVersion": "0.1.0",
+  "publishers": [
+    {
+      "id": "fixture.publisher",
+      "displayName": "Fixture Publisher",
+      "publicKey": "/RckOFqgx1tk+3jNYC+h2ZH96/drE8WO1wLqyDXp9hg=",
+      "revoked": false
+    }
+  ],
+  "entries": [
+    {
+      "pluginId": "app.example.online-fixture",
+      "version": "1.2.3",
+      "publisherId": "fixture.publisher",
+      "manifestPath": "packages/online-fixture/1.2.3/plugin.json",
+      "manifestSha256": "93666ab79b982057f611127de5d96bf3e89ccfc359b1b2a7838732bc88595656",
+      "revoked": false
+    }
+  ],
+  "signature": "jAO3OSQxLOOrpnoOxlm0E5X8k/l7oaCNSUMvepS1FdTOKe/akZwaEaVKAGibRD4HDat0SpYFkiOFvIJovnwQAg=="
+}

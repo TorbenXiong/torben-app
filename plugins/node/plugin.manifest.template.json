@@ -1,0 +1,25 @@
+{
+  "id": "app.torben.plugin.node",
+  "displayName": "Node.js",
+  "version": "0.1.0",
+  "protocolVersion": 1,
+  "minimumHostVersion": "0.1.0",
+  "publisher": "Torben App",
+  "capabilities": [
+    "version_discovery",
+    "external_discovery",
+    "managed_install",
+    "global_selection",
+    "managed_uninstall",
+    "schema_ui"
+  ],
+  "permissions": {
+    "networkDomains": ["nodejs.org"],
+    "filesystemRoots": ["managed_app_library", "download_cache", "staging"],
+    "externalCommands": ["node", "npm", "npx"],
+    "packageManagers": []
+  },
+  "targets": [],
+  "signature": null,
+  "revoked": false
+}

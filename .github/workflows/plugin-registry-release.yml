@@ -1,0 +1,198 @@
+name: Protected plugin registry artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      config_path:
+        description: Reviewed registry config path in this repository
+        required: true
+        type: string
+      source_directory:
+        description: Reviewed package source directory in this repository
+        required: true
+        type: string
+      previous_registry_path:
+        description: Previous signed registry.json path; empty only for sequence 1
+        required: false
+        default: ""
+        type: string
+      sequence:
+        description: Exact reviewed registry sequence
+        required: true
+        type: string
+      generated_at:
+        description: Exact reviewed whole-second UTC timestamp
+        required: true
+        type: string
+      minimum_host_version:
+        description: Exact reviewed minimum Torben App host version
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: torben-plugin-registry-artifact
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Sign and verify immutable registry tree
+    if: github.ref == 'refs/heads/main'
+    environment: official-plugin-registry
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      REGISTRY_CONFIG_PATH: ${{ inputs.config_path }}
+      REGISTRY_SOURCE_DIRECTORY: ${{ inputs.source_directory }}
+      PREVIOUS_REGISTRY_PATH: ${{ inputs.previous_registry_path }}
+      REGISTRY_SEQUENCE: ${{ inputs.sequence }}
+      REGISTRY_GENERATED_AT: ${{ inputs.generated_at }}
+      REGISTRY_MINIMUM_HOST_VERSION: ${{ inputs.minimum_host_version }}
+    steps:
+      - name: Check out exact reviewed main revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
+
+      - name: Select pinned Rust toolchain
+        run: rustup default 1.98.0
+
+      - name: Reject paths outside the reviewed checkout
+        shell: node {0}
+        run: |
+          const { lstatSync, realpathSync } = require("node:fs");
+          const { isAbsolute, relative, resolve } = require("node:path");
+          const workspace = realpathSync(process.env.GITHUB_WORKSPACE);
+          function inspect(name, kind, optional = false) {
+            const value = process.env[name];
+            if (optional && value === "") return;
+            if (!value || /[\u0000-\u001f\u007f]/u.test(value)) {
+              throw new Error(`${name} is missing or contains control characters.`);
+            }
+            const requested = resolve(workspace, value);
+            const actual = realpathSync(requested);
+            const child = relative(workspace, actual);
+            if (isAbsolute(value) || child === ".." || child.startsWith("../")) {
+              throw new Error(`${name} must stay inside the reviewed checkout.`);
+            }
+            const metadata = lstatSync(requested);
+            if (metadata.isSymbolicLink() || (kind === "file" ? !metadata.isFile() : !metadata.isDirectory())) {
+              throw new Error(`${name} must name a regular non-link ${kind}.`);
+            }
+            return requested;
+          }
+          const configPath = inspect("REGISTRY_CONFIG_PATH", "file");
+          inspect("REGISTRY_SOURCE_DIRECTORY", "directory");
+          inspect("PREVIOUS_REGISTRY_PATH", "file", true);
+          const config = require(configPath);
+          const reviewed = {
+            sequence: process.env.REGISTRY_SEQUENCE,
+            generatedAt: process.env.REGISTRY_GENERATED_AT,
+            minimumHostVersion: process.env.REGISTRY_MINIMUM_HOST_VERSION,
+          };
+          for (const [key, value] of Object.entries(reviewed)) {
+            if (`${config[key]}` !== value) throw new Error(`${key} does not match the reviewed config.`);
+          }
+          if ((config.sequence === 1) !== (process.env.PREVIOUS_REGISTRY_PATH === "")) {
+            throw new Error("Only sequence 1 may omit the previous signed registry.");
+          }
+
+      - name: Test deterministic registry release tooling
+        run: >-
+          node --test
+          eng/publish-plugin-registry.test.mjs
+          eng/plugin-registry-release.test.mjs
+          eng/workflow-policy.test.mjs
+
+      - name: Test Rust registry verifier
+        run: cargo test --locked -p torben-plugin-host
+
+      - name: Build Rust registry verification helper
+        run: cargo build --locked -p torben-plugin-host --example verify-plugin-registry
+
+      - name: Verify protected trust root and signed predecessor before key access
+        shell: bash
+        env:
+          EXPECTED_ROOT_PUBLIC_KEY: ${{ vars.TORBEN_PLUGIN_REGISTRY_ROOT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$EXPECTED_ROOT_PUBLIC_KEY"
+          if [[ -n "$PREVIOUS_REGISTRY_PATH" ]]; then
+            cargo run --locked -p torben-plugin-host --example verify-plugin-registry -- \
+              "$PREVIOUS_REGISTRY_PATH" "$EXPECTED_ROOT_PUBLIC_KEY"
+          fi
+
+      - name: Materialize private keys and create immutable registry tree
+        id: publish
+        shell: bash
+        env:
+          TORBEN_PLUGIN_REGISTRY_ROOT_PRIVATE_KEY: ${{ secrets.TORBEN_PLUGIN_REGISTRY_ROOT_PRIVATE_KEY }}
+          TORBEN_PLUGIN_REGISTRY_PUBLISHER_PRIVATE_KEYS_JSON: ${{ secrets.TORBEN_PLUGIN_REGISTRY_PUBLISHER_PRIVATE_KEYS_JSON }}
+        run: |
+          set -euo pipefail
+          key_root="$RUNNER_TEMP/torben-plugin-registry-keys-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          artifact_root="$RUNNER_TEMP/torben-plugin-registry-artifact-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          cleanup() {
+            case "$key_root" in
+              "$RUNNER_TEMP"/torben-plugin-registry-keys-*) rm -rf -- "$key_root" ;;
+              *) echo "Refusing to remove unexpected key directory: $key_root" >&2; return 1 ;;
+            esac
+          }
+          trap cleanup EXIT
+          test ! -e "$key_root"
+          test ! -e "$artifact_root"
+          node eng/plugin-registry-release.mjs materialize-keys \
+            --config "$REGISTRY_CONFIG_PATH" \
+            --output "$key_root"
+          mapfile -t publisher_arguments < <(
+            node -e 'for (const value of require(process.argv[1])) console.log(value)' \
+              "$key_root/publisher-arguments.json"
+          )
+          node eng/publish-plugin-registry.mjs \
+            --config "$REGISTRY_CONFIG_PATH" \
+            --source "$REGISTRY_SOURCE_DIRECTORY" \
+            --output "$artifact_root" \
+            --root-key "$key_root/registry-root.pem" \
+            "${publisher_arguments[@]}" \
+            --emit-root-public-key
+          echo "artifact_root=$artifact_root" >> "$GITHUB_OUTPUT"
+
+      - name: Re-verify trust chain, sequence, and complete file inventory
+        shell: bash
+        env:
+          ARTIFACT_ROOT: ${{ steps.publish.outputs.artifact_root }}
+          EXPECTED_ROOT_PUBLIC_KEY: ${{ vars.TORBEN_PLUGIN_REGISTRY_ROOT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$EXPECTED_ROOT_PUBLIC_KEY"
+          cargo run --locked -p torben-plugin-host --example verify-plugin-registry -- \
+            "$ARTIFACT_ROOT/registry.json" "$EXPECTED_ROOT_PUBLIC_KEY"
+          previous_arguments=()
+          if [[ -n "$PREVIOUS_REGISTRY_PATH" ]]; then
+            previous_arguments=(--previous-registry "$PREVIOUS_REGISTRY_PATH")
+          fi
+          node eng/plugin-registry-release.mjs verify \
+            --config "$REGISTRY_CONFIG_PATH" \
+            --registry "$ARTIFACT_ROOT/registry.json" \
+            --expected-root-key "$EXPECTED_ROOT_PUBLIC_KEY" \
+            --sequence "$REGISTRY_SEQUENCE" \
+            --generated-at "$REGISTRY_GENERATED_AT" \
+            --minimum-host-version "$REGISTRY_MINIMUM_HOST_VERSION" \
+            "${previous_arguments[@]}" \
+            --inventory "$ARTIFACT_ROOT/SHA256SUMS"
+
+      - name: Upload verified short-lived registry artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: plugin-registry-sequence-${{ inputs.sequence }}-${{ github.sha }}
+          path: ${{ steps.publish.outputs.artifact_root }}
+          if-no-files-found: error
+          retention-days: 14

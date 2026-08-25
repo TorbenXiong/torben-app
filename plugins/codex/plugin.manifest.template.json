@@ -1,0 +1,25 @@
+{
+  "id": "app.torben.plugin.codex",
+  "displayName": "Codex CLI",
+  "version": "0.1.0",
+  "protocolVersion": 1,
+  "minimumHostVersion": "0.1.0",
+  "publisher": "Torben App",
+  "capabilities": [
+    "version_discovery",
+    "external_discovery",
+    "managed_install",
+    "global_selection",
+    "managed_uninstall",
+    "schema_ui"
+  ],
+  "permissions": {
+    "networkDomains": ["api.github.com", "github.com", "release-assets.githubusercontent.com"],
+    "filesystemRoots": ["managed_app_library", "download_cache", "staging"],
+    "externalCommands": ["codex"],
+    "packageManagers": []
+  },
+  "targets": [],
+  "signature": null,
+  "revoked": false
+}

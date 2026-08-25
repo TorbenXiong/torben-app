@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "externalBin": [
+      "binaries/torben-plugin-node",
+      "binaries/torben-plugin-temurin",
+      "binaries/torben-plugin-python",
+      "binaries/torben-plugin-git",
+      "binaries/torben-plugin-vscode",
+      "binaries/torben-plugin-codex",
+      "binaries/torben-shim"
+    ]
+  }
+}
