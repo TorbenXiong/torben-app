@@ -1,0 +1,30 @@
+{
+  "id": "app.torben.plugin.temurin",
+  "displayName": "Eclipse Temurin",
+  "version": "0.1.0",
+  "protocolVersion": 1,
+  "minimumHostVersion": "0.1.0",
+  "publisher": "Torben App",
+  "capabilities": [
+    "version_discovery",
+    "external_discovery",
+    "managed_install",
+    "global_selection",
+    "managed_uninstall",
+    "schema_ui"
+  ],
+  "permissions": {
+    "networkDomains": [
+      "api.adoptium.net",
+      "github.com",
+      "release-assets.githubusercontent.com",
+      "packages.adoptium.net"
+    ],
+    "filesystemRoots": ["managed_app_library", "download_cache", "staging"],
+    "externalCommands": ["java", "javac"],
+    "packageManagers": []
+  },
+  "targets": [],
+  "signature": null,
+  "revoked": false
+}

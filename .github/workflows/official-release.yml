@@ -1,0 +1,394 @@
+name: Official signed release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: torben-official-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Sign ${{ matrix.target }}
+    environment: official-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            cli: target/release/torben.exe
+            bundle: target/x86_64-pc-windows-msvc/release/bundle
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            cli: target/release/torben.exe
+            bundle: target/aarch64-pc-windows-msvc/release/bundle
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            cli: target/release/torben
+            bundle: target/x86_64-apple-darwin/release/bundle
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            cli: target/release/torben
+            bundle: target/aarch64-apple-darwin/release/bundle
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            cli: target/release/torben
+            bundle: target/x86_64-unknown-linux-gnu/release/bundle
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            cli: target/release/torben
+            bundle: target/aarch64-unknown-linux-gnu/release/bundle
+    runs-on: ${{ matrix.runner }}
+    env:
+      TORBEN_UPDATER_PUBLIC_KEY: ${{ secrets.TORBEN_UPDATER_PUBLIC_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - name: Check out exact tagged revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+
+      - name: Validate tag and mandatory updater credentials
+        shell: node {0}
+        run: |
+          const version = require("./package.json").version;
+          if (process.env.GITHUB_REF !== `refs/tags/v${version}`) {
+            throw new Error(`Expected refs/tags/v${version}; received ${process.env.GITHUB_REF}.`);
+          }
+          for (const name of [
+            "TORBEN_UPDATER_PUBLIC_KEY",
+            "TAURI_SIGNING_PRIVATE_KEY",
+            "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+          ]) {
+            if (!process.env[name]) throw new Error(`Official release secret is missing: ${name}`);
+          }
+
+      - name: Install pnpm
+        run: npm install --global pnpm@11.19.0
+
+      - name: Install pinned Rust toolchain
+        run: >-
+          rustup toolchain install 1.98.0 --profile minimal
+          --component clippy,rustfmt --target ${{ matrix.target }}
+
+      - name: Select pinned Rust toolchain
+        run: rustup default 1.98.0
+
+      - name: Install Linux packaging prerequisites
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+          libssl-dev libgtk-3-dev patchelf
+
+      - name: Install locked frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release tooling and updater key
+        run: |
+          cargo test -p torben-release-tools --locked
+          cargo run --locked -p torben-release-tools -- validate-updater-key "$TORBEN_UPDATER_PUBLIC_KEY"
+          pnpm run test:release
+
+      - name: Import Windows signing certificate
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_SUBJECT: ${{ secrets.WINDOWS_CERTIFICATE_SUBJECT }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in @('WINDOWS_CERTIFICATE', 'WINDOWS_CERTIFICATE_PASSWORD', 'WINDOWS_CERTIFICATE_SUBJECT', 'WINDOWS_TIMESTAMP_URL')) {
+            if ([string]::IsNullOrWhiteSpace((Get-Item "Env:$name").Value)) { throw "Official release secret is missing: $name" }
+          }
+          if (-not $env:WINDOWS_TIMESTAMP_URL.StartsWith('https://')) { throw 'Windows timestamp URL must use HTTPS.' }
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'torben-signing.pfx'
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item -LiteralPath $certificatePath
+          if (-not $certificate.HasPrivateKey) { throw 'Windows certificate has no private key.' }
+          if ($certificate.Subject -ne $env:WINDOWS_CERTIFICATE_SUBJECT) { throw "Windows certificate subject mismatch: $($certificate.Subject)" }
+          "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $config = @{ bundle = @{ windows = @{ certificateThumbprint = $certificate.Thumbprint; digestAlgorithm = 'sha256'; timestampUrl = $env:WINDOWS_TIMESTAMP_URL } } }
+          New-Item -ItemType Directory -Path target -Force | Out-Null
+          $config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath target\official-signing.conf.json -Encoding utf8
+
+      - name: Import Apple Developer ID certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD; do
+            test -n "${!name}" || { echo "Official release secret is missing: $name" >&2; exit 1; }
+          done
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/torben-signing.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import "$RUNNER_TEMP/torben-signing.p12" -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/torben-signing.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          identity="$(security find-identity -v -p codesigning build.keychain | awk -F'"' '/Developer ID Application:/ {print $2; exit}')"
+          test -n "$identity"
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      - name: Prepare neutral platform signing config
+        if: runner.os != 'Windows'
+        shell: bash
+        run: mkdir -p target && printf '{}\n' > target/official-signing.conf.json
+
+      - name: Build locked CLI and release tools
+        run: cargo build -p torben-cli -p torben-release-tools --release --locked
+
+      - name: Prepare and verify native sidecars
+        run: pnpm --filter @torben-app/desktop run prepare:bundled-tools:release
+
+      - name: Sign Windows CLI and sidecars
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw 'signtool.exe was not found in the Windows SDK.' }
+          $files = @('${{ matrix.cli }}') + @(Get-ChildItem apps\desktop\src-tauri\binaries\*.exe | ForEach-Object FullName)
+          foreach ($file in $files) {
+            & $signtool sign /sha1 $env:WINDOWS_CERTIFICATE_THUMBPRINT /fd sha256 /tr $env:WINDOWS_TIMESTAMP_URL /td sha256 $file
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed: $file" }
+          }
+
+      - name: Sign macOS CLI and sidecars
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" '${{ matrix.cli }}'
+          find apps/desktop/src-tauri/binaries -maxdepth 1 -type f -exec codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" {} \;
+
+      - name: Build platform-signed desktop and updater artifacts
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: >-
+          pnpm --filter @torben-app/desktop exec tauri build
+          --ci --target ${{ matrix.target }}
+          --config src-tauri/tauri.bundle.conf.json
+          --config src-tauri/tauri.official.conf.json
+          --config ../../target/official-signing.conf.json
+          -- --locked
+
+      - name: Verify Windows Authenticode signatures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_SUBJECT: ${{ secrets.WINDOWS_CERTIFICATE_SUBJECT }}
+        run: |
+          $files = @('${{ matrix.cli }}') + @(Get-ChildItem apps\desktop\src-tauri\binaries\*.exe | ForEach-Object FullName)
+          $files += @(Get-ChildItem '${{ matrix.bundle }}\msi\*.msi','${{ matrix.bundle }}\nsis\*.exe' | ForEach-Object FullName)
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            if ($signature.Status -ne 'Valid') { throw "Invalid Authenticode signature: $file ($($signature.Status))" }
+            if ($signature.SignerCertificate.Subject -ne $env:WINDOWS_CERTIFICATE_SUBJECT) { throw "Unexpected Authenticode publisher: $file" }
+          }
+
+      - name: Verify macOS signing and notarization
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict '${{ matrix.bundle }}/macos/Torben App.app'
+          dmg="$(find '${{ matrix.bundle }}/dmg' -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$dmg"
+          xcrun stapler validate "$dmg"
+          spctl --assess --verbose=4 --type install "$dmg"
+
+      - name: Collect official packages and CLI
+        run: >-
+          node eng/collect-release-artifacts.mjs
+          --bundle-root ${{ matrix.bundle }}
+          --cli-binary ${{ matrix.cli }}
+          --output artifacts/${{ matrix.target }}
+          --target ${{ matrix.target }}
+
+      - name: Archive signed Windows CLI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          Compress-Archive -LiteralPath '${{ matrix.cli }}' -DestinationPath "artifacts/${{ matrix.target }}/torben-$version-${{ matrix.target }}.zip"
+
+      - name: Archive signed Unix CLI with executable mode
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          tar --create --gzip \
+            --file "artifacts/${{ matrix.target }}/torben-$version-${{ matrix.target }}.tar.gz" \
+            --directory target/release torben
+
+      - name: Collect signed updater artifacts
+        run: >-
+          node eng/collect-updater-artifacts.mjs
+          --bundle-root ${{ matrix.bundle }}
+          --output artifacts/${{ matrix.target }}
+          --target ${{ matrix.target }}
+
+      - name: Generate signed official metadata
+        run: >-
+          node eng/release-metadata.mjs create
+          --artifacts artifacts/${{ matrix.target }}
+          --target ${{ matrix.target }}
+          --revision ${{ github.sha }}
+          --source-ref ${{ github.ref }}
+          --release-kind official
+          --signing-status signed
+
+      - name: Verify every updater signature
+        run: >-
+          node eng/verify-updater-artifacts.mjs
+          --directory artifacts/${{ matrix.target }}
+          --target ${{ matrix.target }}
+
+      - name: Upload signed target artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: official-${{ matrix.target }}
+          path: artifacts/${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove imported Windows certificate
+        if: always() && runner.os == 'Windows' && env.WINDOWS_CERTIFICATE_THUMBPRINT != ''
+        shell: pwsh
+        run: Remove-Item -LiteralPath "Cert:\CurrentUser\My\$env:WINDOWS_CERTIFICATE_THUMBPRINT"
+
+  linux-package-acceptance:
+    name: Install and launch signed Linux packages
+    needs: build
+    uses: ./.github/workflows/linux-package-acceptance.yml
+    with:
+      artifact-prefix: official-
+
+  desktop-package-acceptance:
+    name: Install and launch signed Windows and macOS packages
+    needs: build
+    uses: ./.github/workflows/desktop-package-acceptance.yml
+    with:
+      artifact-prefix: official-
+
+  publish:
+    name: Verify and publish official release
+    needs: [build, desktop-package-acceptance, linux-package-acceptance]
+    environment: official-release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TORBEN_UPDATER_PUBLIC_KEY: ${{ secrets.TORBEN_UPDATER_PUBLIC_KEY }}
+    steps:
+      - name: Check out exact tagged revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
+
+      - name: Select pinned Rust toolchain
+        run: rustup default 1.98.0
+
+      - name: Download all signed targets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: official-*
+          path: artifacts/downloaded
+
+      - name: Normalize exact target directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/release-set
+          for target in x86_64-pc-windows-msvc aarch64-pc-windows-msvc x86_64-apple-darwin aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            mv "artifacts/downloaded/official-$target" "artifacts/release-set/$target"
+          done
+          test -z "$(find artifacts/downloaded -mindepth 1 -print -quit)"
+
+      - name: Re-verify every downloaded target and updater signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in x86_64-pc-windows-msvc aarch64-pc-windows-msvc x86_64-apple-darwin aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            root="artifacts/release-set/$target"
+            node eng/release-metadata.mjs verify --artifacts "$root"
+            node eng/verify-updater-artifacts.mjs --directory "$root" --target "$target"
+          done
+
+      - name: Resolve deterministic publication timestamp
+        id: publication
+        shell: bash
+        run: |
+          timestamp="$(git show -s --format=%cI | node -e 'process.stdin.once("data", value => process.stdout.write(new Date(value.toString().trim()).toISOString().replace(".000Z", "Z")))')"
+          echo "timestamp=$timestamp" >> "$GITHUB_OUTPUT"
+
+      - name: Generate signed static updater manifest
+        run: >-
+          node eng/generate-updater-manifest.mjs
+          --releases artifacts/release-set
+          --published-at ${{ steps.publication.outputs.timestamp }}
+          --notes "Torben App ${{ github.ref_name }}"
+
+      - name: Create and re-verify official six-target release set
+        run: |
+          node eng/verify-release-set.mjs create --releases artifacts/release-set
+          node eng/verify-release-set.mjs verify --releases artifacts/release-set
+
+      - name: Prepare unique flat GitHub Release assets
+        run: >-
+          node eng/prepare-github-release-assets.mjs
+          create
+          --releases artifacts/release-set
+          --output artifacts/publishing
+
+      - name: Re-verify flat GitHub Release assets
+        run: >-
+          node eng/prepare-github-release-assets.mjs
+          verify
+          --releases artifacts/release-set
+          --output artifacts/publishing
+
+      - name: Create immutable GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" artifacts/publishing/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --title "Torben App ${GITHUB_REF_NAME}" \
+            --notes "Signed Torben App release ${GITHUB_REF_NAME}. See SHA256SUMS and release-index.json for verified artifacts."

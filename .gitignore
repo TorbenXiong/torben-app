@@ -1,0 +1,31 @@
+# Rust
+/target/
+**/target/
+
+# Node.js
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+
+# Tauri
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/binaries/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local environment and runtime state
+.env
+.env.*
+!.env.example
+.tools/
+.torben-data/
+*.log
+
+# Test artifacts
+test-results/
+playwright-report/

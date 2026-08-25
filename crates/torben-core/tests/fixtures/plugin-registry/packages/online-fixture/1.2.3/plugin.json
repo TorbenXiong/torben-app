@@ -1,0 +1,49 @@
+{
+  "id": "app.example.online-fixture",
+  "displayName": "Online fixture",
+  "version": "1.2.3",
+  "protocolVersion": 1,
+  "minimumHostVersion": "0.1.0",
+  "publisher": "Fixture Publisher",
+  "capabilities": [],
+  "permissions": {
+    "networkDomains": [],
+    "filesystemRoots": [],
+    "externalCommands": [],
+    "packageManagers": []
+  },
+  "targets": [
+    {
+      "target": "windows-x86_64",
+      "executable": "bin/windows-x86_64/plugin.exe",
+      "sha256": "3c494e7212a228cf3c4594530a605563bd97d7bed7413de10c0599a7e3bf8646"
+    },
+    {
+      "target": "windows-aarch64",
+      "executable": "bin/windows-aarch64/plugin.exe",
+      "sha256": "3c494e7212a228cf3c4594530a605563bd97d7bed7413de10c0599a7e3bf8646"
+    },
+    {
+      "target": "linux-x86_64",
+      "executable": "bin/linux-x86_64/plugin",
+      "sha256": "3c494e7212a228cf3c4594530a605563bd97d7bed7413de10c0599a7e3bf8646"
+    },
+    {
+      "target": "linux-aarch64",
+      "executable": "bin/linux-aarch64/plugin",
+      "sha256": "3c494e7212a228cf3c4594530a605563bd97d7bed7413de10c0599a7e3bf8646"
+    },
+    {
+      "target": "macos-x86_64",
+      "executable": "bin/macos-x86_64/plugin",
+      "sha256": "3c494e7212a228cf3c4594530a605563bd97d7bed7413de10c0599a7e3bf8646"
+    },
+    {
+      "target": "macos-aarch64",
+      "executable": "bin/macos-aarch64/plugin",
+      "sha256": "3c494e7212a228cf3c4594530a605563bd97d7bed7413de10c0599a7e3bf8646"
+    }
+  ],
+  "signature": "SYuzJgWZwI6BCbZALWLtVWOoCkxozy3bcu+AhHISjWoipk8947aKh0SP54YeQHoLZtgUFkN7s9Jq+cOe6OW3Cw==",
+  "revoked": false
+}

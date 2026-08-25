@@ -1,0 +1,25 @@
+{
+  "id": "app.torben.plugin.python",
+  "displayName": "Python",
+  "version": "0.1.0",
+  "protocolVersion": 1,
+  "minimumHostVersion": "0.1.0",
+  "publisher": "Torben App",
+  "capabilities": [
+    "version_discovery",
+    "external_discovery",
+    "managed_install",
+    "global_selection",
+    "managed_uninstall",
+    "schema_ui"
+  ],
+  "permissions": {
+    "networkDomains": ["www.python.org"],
+    "filesystemRoots": ["managed_app_library", "download_cache", "staging"],
+    "externalCommands": ["py", "make", "cc", "python", "python3", "pip", "pip3"],
+    "packageManagers": []
+  },
+  "targets": [],
+  "signature": null,
+  "revoked": false
+}

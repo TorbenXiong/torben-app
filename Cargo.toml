@@ -1,0 +1,74 @@
+[workspace]
+members = [
+  "apps/desktop/src-tauri",
+  "crates/torben-cli",
+  "crates/torben-contracts",
+  "crates/torben-core",
+  "crates/torben-plugin-host",
+  "crates/torben-release-tools",
+  "crates/torben-shim",
+  "plugins/codex",
+  "plugins/git",
+  "plugins/node",
+  "plugins/python",
+  "plugins/temurin",
+  "plugins/vscode",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "Apache-2.0"
+repository = "https://github.com/TorbenXiong/torben-app"
+authors = ["Torben App contributors"]
+
+[workspace.dependencies]
+async-trait = "0.1.92"
+base64 = "0.23.1"
+clap = { version = "4.6.6", features = ["derive"] }
+directories = "6.0.0"
+ed25519-dalek = { version = "3.0.0", features = ["serde"] }
+flate2 = "1.1.9"
+fs4 = "1.1.0"
+futures-util = "0.3.34"
+hex = "0.4.3"
+minisign-verify = "=0.2.5"
+pgp = { version = "0.20.0", default-features = false }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+semver = { version = "1.0.28", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+sigstore-verify = "0.11.0"
+tar = "0.4.46"
+tauri = "2.11.5"
+tauri-build = "2.6.3"
+tauri-plugin-dialog = "2.7.2"
+tauri-plugin-log = "2.9.0"
+tauri-plugin-notification = "2.3.3"
+tauri-plugin-opener = "2.5.4"
+tauri-plugin-os = "2.3.2"
+tauri-plugin-process = "=2.3.1"
+tauri-plugin-updater = "=2.10.1"
+tempfile = "3.27.0"
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+url = { version = "2.5.8", features = ["serde"] }
+uuid = { version = "1.25.0", features = ["serde", "v4"] }
+walkdir = "2.5.0"
+xz2 = "0.1.7"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
