@@ -148,7 +148,7 @@ fn atomic_write(path: &Path, content: &[u8]) -> TorbenResult<()> {
     {
         std::fs::rename(&pending, path).map_err(|error| shell_file_error(path, error))?;
         sync_parent(parent)?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(unix))]
     {

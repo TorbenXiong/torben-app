@@ -44,8 +44,10 @@ pub trait PythonSigstoreVerifier: Send + Sync {
 }
 
 #[derive(Debug)]
+#[cfg(any(not(unix), test))]
 struct UnavailableSigstoreVerifier;
 
+#[cfg(any(not(unix), test))]
 impl PythonSigstoreVerifier for UnavailableSigstoreVerifier {
     fn verify(
         &self,

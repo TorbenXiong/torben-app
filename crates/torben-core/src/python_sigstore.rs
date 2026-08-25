@@ -70,21 +70,6 @@ impl PythonSigstoreVerifier for ProductionPythonSigstoreVerifier {
     }
 }
 
-#[cfg_attr(not(unix), allow(dead_code))]
-pub(crate) fn verify_production_sigstore_digest(
-    sha256: &str,
-    bundle: &[u8],
-    certificate_identity: &str,
-    oidc_issuer: &str,
-) -> TorbenResult<()> {
-    ProductionPythonSigstoreVerifier::new()?.verify(
-        sha256,
-        bundle,
-        certificate_identity,
-        oidc_issuer,
-    )
-}
-
 pub(crate) fn verify_production_sigstore_bundle(
     sha256: &str,
     bundle: &Bundle,

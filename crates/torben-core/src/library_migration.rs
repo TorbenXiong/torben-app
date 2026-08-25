@@ -623,7 +623,7 @@ mod tests {
         AppId, ExactVersion, InstallRecord, InstallScope, OperationId, OperationState, SourceId,
     };
 
-    use super::{migrate, recover, write_migration_receipt};
+    use super::{canonical_existing_directory, migrate, recover, write_migration_receipt};
     use crate::{StateStore, TorbenCore, TorbenPaths, operation::OperationJournal};
 
     fn record(install_path: std::path::PathBuf) -> InstallRecord {
@@ -651,6 +651,7 @@ mod tests {
         store.add_installation(&original).unwrap();
         let target = root.path().join("migrated-apps");
         std::fs::create_dir(&target).unwrap();
+        let target = canonical_existing_directory(&target).unwrap();
 
         let result = migrate(&paths, Arc::clone(&store), &target).unwrap();
 
