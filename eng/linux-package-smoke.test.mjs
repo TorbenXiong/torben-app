@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { runLinuxPackageSmoke } from "./linux-package-smoke.mjs";
+import { runLinuxPackageSmoke, safeCanonicalRelative } from "./linux-package-smoke.mjs";
 import { createReleaseMetadata } from "./release-metadata.mjs";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -96,6 +96,35 @@ function fixtureExecutor(calls, options = {}) {
     throw new Error(`Unexpected fixture command stage: ${stage}`);
   };
 }
+
+test("canonical path checks accept root aliases and reject real escapes", () => {
+  const root = fixtureRoot();
+  try {
+    const actualRoot = join(root, "actual");
+    const aliasRoot = join(root, "alias");
+    const nested = join(actualRoot, "nested");
+    const outside = join(root, "outside");
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(outside);
+    writeFileSync(join(nested, "inside"), "inside");
+    writeFileSync(join(outside, "escaped"), "escaped");
+    symlinkSync(actualRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+
+    assert.equal(
+      safeCanonicalRelative(aliasRoot, join(actualRoot, "nested", "inside"), "Fixture"),
+      "nested/inside",
+    );
+
+    const escapeLink = join(actualRoot, "escape");
+    symlinkSync(outside, escapeLink, process.platform === "win32" ? "junction" : "dir");
+    assert.throws(
+      () => safeCanonicalRelative(aliasRoot, join(escapeLink, "escaped"), "Fixture"),
+      /Fixture escapes the extraction root/,
+    );
+  } finally {
+    removeFixture(root);
+  }
+});
 
 test("verifies package contents and a sustained isolated launch for every Linux format", async (t) => {
   for (const format of ["appimage", "deb", "rpm"]) {

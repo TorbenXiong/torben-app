@@ -48,6 +48,10 @@ function safeRelative(root, path, description) {
   return value ? value.split(sep).join("/") : ".";
 }
 
+export function safeCanonicalRelative(root, path, description) {
+  return safeRelative(realpathSync(root), realpathSync(path), description);
+}
+
 function regularFile(path, description) {
   if (!existsSync(path)) fail(`${description} is missing: ${path}`);
   const metadata = lstatSync(path);
@@ -180,8 +184,7 @@ function scanExtractedTree(root) {
   };
   visit(root);
   for (const link of links) {
-    const target = realpathSync(link);
-    safeRelative(root, target, "Extracted package symbolic link");
+    safeCanonicalRelative(root, link, "Extracted package symbolic link");
   }
   return files;
 }
@@ -231,7 +234,7 @@ function execCommand(value) {
 function executableFile(root, path, expectedTarget, description, enforceExecutableMode) {
   if (!existsSync(path)) fail(`${description} is missing: ${path}`);
   const resolved = realpathSync(path);
-  safeRelative(root, resolved, description);
+  safeCanonicalRelative(root, resolved, description);
   const metadata = regularFile(resolved, description);
   if (enforceExecutableMode && (metadata.mode & 0o111) === 0) {
     fail(`${description} is not executable: ${resolved}`);
@@ -300,7 +303,7 @@ function inspectInstalledBundle(
   enforceExecutableMode,
 ) {
   const mapInstalledPath = (path, description) => {
-    const relativePath = safeRelative(extractedRoot, path, description);
+    const relativePath = safeCanonicalRelative(extractedRoot, path, description);
     const installed = resolve(systemRoot, relativePath);
     safeRelative(systemRoot, installed, `Installed ${description.toLowerCase()}`);
     return installed;
@@ -310,7 +313,7 @@ function inspectInstalledBundle(
     fail(`Installed desktop entry is missing: ${installedDesktopEntry}`);
   }
   const resolvedDesktopEntry = realpathSync(installedDesktopEntry);
-  safeRelative(systemRoot, resolvedDesktopEntry, "Installed desktop entry");
+  safeCanonicalRelative(systemRoot, resolvedDesktopEntry, "Installed desktop entry");
   regularFile(resolvedDesktopEntry, "Installed desktop entry");
   desktopEntry(resolvedDesktopEntry);
   const mainExecutable = executableFile(
@@ -480,12 +483,16 @@ export async function runLinuxPackageSmoke({
       package: basename(packagePath),
       desktopEntry: systemInstalled
         ? inspected.desktopEntry
-        : safeRelative(extraction.resultRoot, inspected.desktopEntry, "Desktop entry"),
+        : safeCanonicalRelative(extraction.resultRoot, inspected.desktopEntry, "Desktop entry"),
       executable: systemInstalled
         ? inspected.mainExecutable
-        : safeRelative(extraction.resultRoot, inspected.mainExecutable, "Desktop executable"),
+        : safeCanonicalRelative(
+            extraction.resultRoot,
+            inspected.mainExecutable,
+            "Desktop executable",
+          ),
       sidecars: inspected.sidecars.map((path) =>
-        systemInstalled ? path : safeRelative(extraction.resultRoot, path, "Sidecar"),
+        systemInstalled ? path : safeCanonicalRelative(extraction.resultRoot, path, "Sidecar"),
       ),
       launch: {
         executable: systemInstalled ? launchExecutable : basename(launchExecutable),

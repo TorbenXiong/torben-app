@@ -1824,14 +1824,16 @@ mod tests {
         } else {
             "fixture-plugin"
         });
-        fs::write(&executable, fixture_script(behavior)).unwrap();
+        let staging = directory.path().join("fixture-plugin.next");
+        fs::write(&staging, fixture_script(behavior)).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut permissions = fs::metadata(&executable).unwrap().permissions();
+            let mut permissions = fs::metadata(&staging).unwrap().permissions();
             permissions.set_mode(0o755);
-            fs::set_permissions(&executable, permissions).unwrap();
+            fs::set_permissions(&staging, permissions).unwrap();
         }
+        fs::rename(staging, &executable).unwrap();
         (directory, executable)
     }
 
