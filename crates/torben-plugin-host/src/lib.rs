@@ -642,7 +642,21 @@ impl PluginClient {
         call_timeout: Duration,
         capabilities: Option<Vec<PluginCapability>>,
     ) -> TorbenResult<Self> {
-        let mut child = Command::new(executable)
+        Self::spawn_command(
+            Command::new(executable),
+            executable,
+            call_timeout,
+            capabilities,
+        )
+    }
+
+    fn spawn_command(
+        mut command: Command,
+        executable: &Path,
+        call_timeout: Duration,
+        capabilities: Option<Vec<PluginCapability>>,
+    ) -> TorbenResult<Self> {
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -1145,13 +1159,20 @@ const fn capability_name(capability: &PluginCapability) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf, str::FromStr, time::Duration};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        str::FromStr,
+        time::Duration,
+    };
 
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use ed25519_dalek::{Signer as _, SigningKey};
     use serde_json::{Value, json};
     use sha2::Digest;
     use tempfile::{TempDir, tempdir};
+    #[cfg(unix)]
+    use tokio::process::Command;
     use torben_contracts::{
         ExactVersion, OperationId, PluginId,
         plugin::{
@@ -1182,7 +1203,7 @@ mod tests {
     #[tokio::test]
     async fn bundled_plugin_returns_a_typed_result() {
         let (_directory, executable) = fixture_plugin(FixtureBehavior::Success);
-        let mut client = PluginClient::spawn_bundled(&executable, Duration::from_secs(2)).unwrap();
+        let mut client = spawn_fixture(&executable, Duration::from_secs(2));
 
         let result: Value = client.call("fixture.success", &json!({})).await.unwrap();
 
@@ -1192,12 +1213,11 @@ mod tests {
     #[tokio::test]
     async fn scoped_plugin_denies_methods_without_the_declared_capability() {
         let (_directory, executable) = fixture_plugin(FixtureBehavior::Success);
-        let mut client = PluginClient::spawn_bundled_scoped(
+        let mut client = spawn_fixture_scoped(
             &executable,
             &[PluginCapability::VersionDiscovery],
             Duration::from_secs(2),
-        )
-        .unwrap();
+        );
 
         let denied = client
             .call::<_, Value>(method::SCHEMA_PAGES, &json!({}))
@@ -1223,7 +1243,7 @@ mod tests {
     async fn bundled_plugin_forwards_only_matching_bounded_operation_events() {
         let operation_id = OperationId::from_str("11111111-1111-4111-8111-111111111111").unwrap();
         let (_directory, executable) = fixture_plugin(FixtureBehavior::Progress);
-        let mut client = PluginClient::spawn_bundled(&executable, Duration::from_secs(2)).unwrap();
+        let mut client = spawn_fixture(&executable, Duration::from_secs(2));
         let mut events = Vec::new();
 
         let result: Value = client
@@ -1244,7 +1264,7 @@ mod tests {
     #[tokio::test]
     async fn bundled_plugin_rejects_notifications_for_plain_calls() {
         let (_directory, executable) = fixture_plugin(FixtureBehavior::UnexpectedProgress);
-        let mut client = PluginClient::spawn_bundled(&executable, Duration::from_secs(2)).unwrap();
+        let mut client = spawn_fixture(&executable, Duration::from_secs(2));
 
         let error = client
             .call::<_, Value>("fixture.success", &json!({}))
@@ -1262,7 +1282,7 @@ mod tests {
     async fn bundled_plugin_rejects_an_operation_event_for_another_request() {
         let operation_id = OperationId::from_str("11111111-1111-4111-8111-111111111111").unwrap();
         let (_directory, executable) = fixture_plugin(FixtureBehavior::WrongOperation);
-        let mut client = PluginClient::spawn_bundled(&executable, Duration::from_secs(2)).unwrap();
+        let mut client = spawn_fixture(&executable, Duration::from_secs(2));
 
         let error = client
             .call_with_operation_events::<_, Value, _>(
@@ -1281,7 +1301,7 @@ mod tests {
     async fn bundled_plugin_limits_operation_events_per_call() {
         let operation_id = OperationId::from_str("11111111-1111-4111-8111-111111111111").unwrap();
         let (_directory, executable) = fixture_plugin(FixtureBehavior::TooManyProgressEvents);
-        let mut client = PluginClient::spawn_bundled(&executable, Duration::from_secs(5)).unwrap();
+        let mut client = spawn_fixture(&executable, Duration::from_secs(5));
 
         let error = client
             .call_with_operation_events::<_, Value, _>(
@@ -1339,8 +1359,7 @@ mod tests {
     #[tokio::test]
     async fn bundled_plugin_timeout_is_isolated() {
         let (_directory, executable) = fixture_plugin(FixtureBehavior::Timeout);
-        let mut client =
-            PluginClient::spawn_bundled(&executable, Duration::from_millis(50)).unwrap();
+        let mut client = spawn_fixture(&executable, Duration::from_millis(50));
 
         let error = client
             .call::<_, Value>("fixture.timeout", &json!({}))
@@ -1357,7 +1376,7 @@ mod tests {
     #[tokio::test]
     async fn bundled_plugin_exit_is_isolated() {
         let (_directory, executable) = fixture_plugin(FixtureBehavior::Exit);
-        let mut client = PluginClient::spawn_bundled(&executable, Duration::from_secs(2)).unwrap();
+        let mut client = spawn_fixture(&executable, Duration::from_secs(2));
 
         let error = client
             .call::<_, Value>("fixture.exit", &json!({}))
@@ -1370,7 +1389,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_plugin_response_is_isolated() {
         let (_directory, executable) = fixture_plugin(FixtureBehavior::Malformed);
-        let mut client = PluginClient::spawn_bundled(&executable, Duration::from_secs(2)).unwrap();
+        let mut client = spawn_fixture(&executable, Duration::from_secs(2));
 
         let error = client
             .call::<_, Value>("fixture.malformed", &json!({}))
@@ -1383,7 +1402,7 @@ mod tests {
     #[tokio::test]
     async fn mismatched_plugin_response_is_isolated() {
         let (_directory, executable) = fixture_plugin(FixtureBehavior::MismatchedId);
-        let mut client = PluginClient::spawn_bundled(&executable, Duration::from_secs(2)).unwrap();
+        let mut client = spawn_fixture(&executable, Duration::from_secs(2));
 
         let error = client
             .call::<_, Value>("fixture.mismatch", &json!({}))
@@ -1835,6 +1854,35 @@ mod tests {
         }
         fs::rename(staging, &executable).unwrap();
         (directory, executable)
+    }
+
+    fn spawn_fixture(executable: &Path, call_timeout: Duration) -> PluginClient {
+        spawn_fixture_internal(executable, call_timeout, None)
+    }
+
+    fn spawn_fixture_scoped(
+        executable: &Path,
+        capabilities: &[PluginCapability],
+        call_timeout: Duration,
+    ) -> PluginClient {
+        spawn_fixture_internal(executable, call_timeout, Some(capabilities.to_vec()))
+    }
+
+    fn spawn_fixture_internal(
+        executable: &Path,
+        call_timeout: Duration,
+        capabilities: Option<Vec<PluginCapability>>,
+    ) -> PluginClient {
+        #[cfg(windows)]
+        {
+            PluginClient::spawn_bundled_internal(executable, call_timeout, capabilities).unwrap()
+        }
+        #[cfg(unix)]
+        {
+            let mut command = Command::new("/bin/sh");
+            command.arg(executable);
+            PluginClient::spawn_command(command, executable, call_timeout, capabilities).unwrap()
+        }
     }
 
     fn fixture_script(behavior: FixtureBehavior) -> &'static str {
