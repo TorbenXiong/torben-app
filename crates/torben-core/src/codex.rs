@@ -1411,13 +1411,23 @@ mod tests {
     #[tokio::test]
     async fn local_release_catalog_lists_supported_stable_versions() {
         let version = ExactVersion::from_str("0.149.1").unwrap();
+        let target = current_target_asset().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let base = Url::parse(&format!("http://{address}/")).unwrap();
         let asset_url = base
-            .join("assets/codex-x86_64-pc-windows-msvc.exe.zip")
+            .join(&format!("assets/{}", target.archive_name))
             .unwrap();
-        let release = release_fixture(&version, asset_url.as_str(), &"11".repeat(32), 100);
+        let mut release = release_fixture(&version, asset_url.as_str(), &"11".repeat(32), 100);
+        if let Some(sigstore_name) = target.sigstore_name {
+            let sigstore_url = base.join(&format!("assets/{sigstore_name}")).unwrap();
+            release.assets.push(asset_fixture(
+                &sigstore_name,
+                sigstore_url.as_str(),
+                &"22".repeat(32),
+                100,
+            ));
+        }
         let routes = vec![(
             "/releases?per_page=20&page=1".to_owned(),
             serde_json::to_vec(&vec![release]).unwrap(),

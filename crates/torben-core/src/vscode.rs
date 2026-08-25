@@ -1075,14 +1075,21 @@ mod tests {
     #[tokio::test]
     async fn local_catalog_requires_a_published_release_and_platform_metadata() {
         let version = ExactVersion::from_str("1.134.0").unwrap();
+        let target = current_target_archive().unwrap();
+        let archive_name = match &target.filename {
+            FilenameRule::Exact(name) => name.replace("{version}", &version.to_string()),
+            FilenameRule::Linux { architecture } => {
+                format!("code-stable-{architecture}-1787078154886.tar.gz")
+            }
+        };
         let release = serde_json::to_vec(&vec![release_fixture(&version)]).unwrap();
         let (base, server) = fixture_server(vec![
             ("/github?per_page=5".to_owned(), release),
             (
-                "/update/1.134.0/win32-x64-archive/stable".to_owned(),
+                format!("/update/{version}/{}/stable", target.platform),
                 serde_json::to_vec(&metadata_fixture(
                     &version,
-                    "http://127.0.0.1:1/assets/VSCode-win32-x64-1.134.0.zip",
+                    &format!("http://127.0.0.1:1/assets/{archive_name}"),
                     &"11".repeat(32),
                 ))
                 .unwrap(),

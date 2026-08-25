@@ -1553,17 +1553,12 @@ mod tests {
         } else {
             "/fixture/winget"
         });
-        let service = SourceAdapterService {
-            commands: BTreeMap::from([(
-                SourceAdapterKind::Winget,
-                AdapterCommands {
-                    primary: fake,
-                    query: None,
-                },
-            )]),
-            runner: Arc::new(SystemCommandRunner),
-            allow_unsupported_platform: false,
-        };
+        let service = SourceAdapterService::for_test(
+            SourceAdapterKind::Winget,
+            fake,
+            None,
+            Arc::new(SystemCommandRunner),
+        );
         let plan = service
             .plan(
                 SourceAction::Install,
