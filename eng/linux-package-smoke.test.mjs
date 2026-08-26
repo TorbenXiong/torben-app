@@ -165,6 +165,7 @@ test("verifies package contents and a sustained isolated launch for every Linux 
           calls.map((call) => call.stage),
           [`extract-${format}`, "launch"],
         );
+        if (format === "rpm") assert.equal(calls[0].command, "/bin/bash");
         const launch = calls[1];
         assert.ok(launch.args.includes("xvfb-run"));
         assert.ok(launch.args.at(-1).endsWith("torben-desktop"));
