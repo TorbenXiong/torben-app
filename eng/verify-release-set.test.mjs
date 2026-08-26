@@ -228,6 +228,11 @@ test("development workflow pins approved Actions and cannot publish an official 
   assert.match(acceptanceWorkflow, /apt-get install --yes --no-install-recommends/);
   assert.match(acceptanceWorkflow, /dnf install --assumeyes/);
   assert.match(acceptanceWorkflow, /microdnf install --assumeyes/);
+  const rockyBootstrap = acceptanceWorkflow.match(/ {12}rocky\)\r?\n([\s\S]*?) {14};;/)?.[1];
+  assert.ok(rockyBootstrap, "Rocky Linux acceptance bootstrap is missing");
+  const rockyPackages = rockyBootstrap.match(/microdnf install --assumeyes \\\r?\n([\s\S]*)/)?.[1];
+  assert.ok(rockyPackages, "Rocky Linux microdnf package list is missing");
+  assert.doesNotMatch(rockyPackages, /(?:^|\s)coreutils(?:\s|\\|$)/m);
   assert.doesNotMatch(acceptanceWorkflow, /continue-on-error|secrets\./);
   const acceptanceImages = [...acceptanceWorkflow.matchAll(/^\s+image: (\S+)$/gm)]
     .map((match) => match[1])
@@ -251,8 +256,14 @@ test("development workflow pins approved Actions and cannot publish an official 
   assert.match(desktopAcceptanceWorkflow, /^permissions:\r?\n {2}contents: read$/m);
   assert.match(desktopAcceptanceWorkflow, /^ {6}fail-fast: false$/m);
   assert.match(desktopAcceptanceWorkflow, /desktop-package-smoke\.mjs/);
-  assert.match(desktopAcceptanceWorkflow, /msiexec\.exe \/i \$package \/quiet \/norestart/);
-  assert.match(desktopAcceptanceWorkflow, /& \$package \/S/);
+  assert.match(desktopAcceptanceWorkflow, /Start-Process msiexec\.exe/);
+  assert.match(desktopAcceptanceWorkflow, /Start-Process \$package/);
+  assert.match(desktopAcceptanceWorkflow, /Start-Process \$uninstallers\[0\]\.FullName/);
+  assert.equal(
+    (desktopAcceptanceWorkflow.match(/-Wait -PassThru -WindowStyle Hidden/g) ?? []).length,
+    4,
+  );
+  assert.doesNotMatch(desktopAcceptanceWorkflow, /& msiexec\.exe|& \$package \/S/);
   assert.match(desktopAcceptanceWorkflow, /hdiutil attach -readonly -nobrowse/);
   assert.match(desktopAcceptanceWorkflow, /ditto "\$\{applications\[0\]\}" "\$installed_app"/);
   assert.doesNotMatch(desktopAcceptanceWorkflow, /continue-on-error|secrets\./);

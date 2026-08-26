@@ -77,11 +77,16 @@ jobs:
           $installRoot = $null
           try {
             if ($env:TORBEN_PACKAGE_FORMAT -eq 'msi') {
-              & msiexec.exe /i $package /quiet /norestart
-              if ($LASTEXITCODE -notin @(0, 3010)) { throw "MSI installation failed with exit code $LASTEXITCODE." }
+              $quotedPackage = '"' + $package + '"'
+              $installer = Start-Process msiexec.exe `
+                -ArgumentList @('/i', $quotedPackage, '/quiet', '/norestart') `
+                -Wait -PassThru -WindowStyle Hidden
+              if ($installer.ExitCode -notin @(0, 3010)) { throw "MSI installation failed with exit code $($installer.ExitCode)." }
             } else {
-              & $package /S
-              if ($LASTEXITCODE -ne 0) { throw "NSIS installation failed with exit code $LASTEXITCODE." }
+              $installer = Start-Process $package `
+                -ArgumentList @('/S') `
+                -Wait -PassThru -WindowStyle Hidden
+              if ($installer.ExitCode -ne 0) { throw "NSIS installation failed with exit code $($installer.ExitCode)." }
             }
 
             $registryPaths = @(
@@ -115,13 +120,18 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Windows package smoke test failed with exit code $LASTEXITCODE." }
           } finally {
             if ($env:TORBEN_PACKAGE_FORMAT -eq 'msi') {
-              & msiexec.exe /x $package /quiet /norestart
-              if ($LASTEXITCODE -notin @(0, 1605, 3010)) { throw "MSI cleanup failed with exit code $LASTEXITCODE." }
+              $quotedPackage = '"' + $package + '"'
+              $uninstaller = Start-Process msiexec.exe `
+                -ArgumentList @('/x', $quotedPackage, '/quiet', '/norestart') `
+                -Wait -PassThru -WindowStyle Hidden
+              if ($uninstaller.ExitCode -notin @(0, 1605, 3010)) { throw "MSI cleanup failed with exit code $($uninstaller.ExitCode)." }
             } elseif ($installRoot) {
               $uninstallers = @(Get-ChildItem -LiteralPath $installRoot -Filter uninstall.exe -File -Recurse)
               if ($uninstallers.Count -ne 1) { throw "Expected one NSIS uninstaller, found $($uninstallers.Count)." }
-              & $uninstallers[0].FullName /S
-              if ($LASTEXITCODE -ne 0) { throw "NSIS cleanup failed with exit code $LASTEXITCODE." }
+              $uninstaller = Start-Process $uninstallers[0].FullName `
+                -ArgumentList @('/S') `
+                -Wait -PassThru -WindowStyle Hidden
+              if ($uninstaller.ExitCode -ne 0) { throw "NSIS cleanup failed with exit code $($uninstaller.ExitCode)." }
             }
           }
 

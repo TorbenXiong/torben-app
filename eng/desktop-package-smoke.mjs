@@ -377,6 +377,8 @@ async function sustainedLaunch({ executable, cwd, env, timeoutMs, platform }) {
     let output = "";
     let settled = false;
     let timer;
+    let terminationTimer;
+    let launchWindowReached = false;
     const collect = (chunk) => {
       output = `${output}${chunk.toString()}`.slice(-maximumCommandOutput);
     };
@@ -386,12 +388,16 @@ async function sustainedLaunch({ executable, cwd, env, timeoutMs, platform }) {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (terminationTimer) clearTimeout(terminationTimer);
       resolveProbe(result);
     };
     child.once("error", (error) => finish({ sustained: false, error: error.message, output }));
-    child.once("exit", (code, signal) => finish({ sustained: false, code, signal, output }));
+    child.once("close", (code, signal) =>
+      finish({ sustained: launchWindowReached, code, signal, output }),
+    );
     timer = setTimeout(() => {
       if (settled) return;
+      launchWindowReached = true;
       const processId = child.pid;
       if (platform === "win32" && processId) {
         spawnSync("taskkill.exe", ["/PID", String(processId), "/T", "/F"], {
@@ -402,9 +408,38 @@ async function sustainedLaunch({ executable, cwd, env, timeoutMs, platform }) {
       } else {
         child.kill("SIGTERM");
       }
-      finish({ sustained: true, processId, output });
+      terminationTimer = setTimeout(
+        () =>
+          finish({
+            sustained: false,
+            processId,
+            error: "Torben App did not terminate after the sustained launch probe.",
+            output,
+          }),
+        10_000,
+      );
     }, timeoutMs);
   });
+}
+
+export async function removeTemporaryRoot(root, expectedPrefix) {
+  if (!root.startsWith(expectedPrefix)) {
+    fail(`Refusing to remove an unexpected smoke-test directory: ${root}`);
+  }
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    rmSync(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+    if (!existsSync(root)) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+      if (!existsSync(root)) return;
+    }
+  }
+  fail(`Smoke-test directory was recreated during process cleanup: ${root}`);
 }
 
 export async function runDesktopPackageSmoke({
@@ -485,10 +520,7 @@ export async function runDesktopPackageSmoke({
       launch: { timeoutMs: launchTimeoutMs, sustained: true },
     };
   } finally {
-    if (!temporaryRoot.startsWith(temporaryPrefix)) {
-      fail(`Refusing to remove an unexpected smoke-test directory: ${temporaryRoot}`);
-    }
-    rmSync(temporaryRoot, { recursive: true, force: true });
+    await removeTemporaryRoot(temporaryRoot, temporaryPrefix);
   }
 }
 
