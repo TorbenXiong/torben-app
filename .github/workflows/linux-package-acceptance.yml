@@ -72,7 +72,7 @@ jobs:
               # mutually exclusive full coreutils package makes microdnf fail before
               # the RPM under test is installed.
               microdnf install --assumeyes \
-                ca-certificates cpio dnf findutils git rpm tar which xz \
+                bash ca-certificates cpio dnf findutils git rpm tar which xz \
                 xorg-x11-server-Xvfb
               ;;
             *)
