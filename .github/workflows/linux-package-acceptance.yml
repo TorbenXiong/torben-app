@@ -37,8 +37,8 @@ jobs:
             image: fedora:44
             bootstrap: fedora
             format: rpm
-          - name: Rocky Linux 9.8 rpm
-            image: rockylinux/rockylinux:9.8-minimal
+          - name: Rocky Linux 10.2 rpm
+            image: rockylinux/rockylinux:10.2-minimal
             bootstrap: rocky
             format: rpm
     runs-on: ${{ matrix.platform.runner }}
@@ -70,10 +70,12 @@ jobs:
             rocky)
               # The minimal image already provides coreutils-single. Requesting the
               # mutually exclusive full coreutils package makes microdnf fail before
-              # the RPM under test is installed.
+              # the RPM under test is installed. Tauri 2 requires WebKitGTK 4.1,
+              # which Rocky Linux 10 provides through EPEL with CRB enabled.
               microdnf install --assumeyes \
-                bash ca-certificates cpio dnf findutils git rpm tar which xz \
+                bash ca-certificates cpio dnf dnf-plugins-core epel-release findutils git rpm tar which xz \
                 xorg-x11-server-Xvfb
+              dnf config-manager --set-enabled crb
               ;;
             *)
               echo "Unsupported acceptance bootstrap: ${{ matrix.distribution.bootstrap }}" >&2
