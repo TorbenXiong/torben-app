@@ -214,10 +214,7 @@ test("installs deb and rpm packages only through their native manager before lau
           [`extract-${format}`, `install-${format}`, "launch"],
         );
         const installation = calls[1];
-        assert.equal(
-          installation.command,
-          format === "deb" ? "/usr/bin/apt-get" : "/usr/bin/dnf",
-        );
+        assert.equal(installation.command, format === "deb" ? "/usr/bin/apt-get" : "/usr/bin/dnf");
         assert.equal(installation.args.at(-1).endsWith(`.${format}`), true);
         assert.equal(installation.args[0], format === "deb" ? "--quiet=2" : "--quiet");
         assert.ok(calls[2].args.at(-1).startsWith(realpathSync(systemRoot)));
