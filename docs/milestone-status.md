@@ -75,28 +75,38 @@ The authoritative test-to-requirement mapping is maintained in
 [release engineering](release.md), and registry key handling is maintained in
 [plugin registry publishing](plugin-registry-publishing.md).
 
+## Recorded external evidence
+
+- Pull request [#1](https://github.com/TorbenXiong/torben-app/pull/1) merged the reviewed bootstrap
+  into `main` as commit `785dfa4423710f29dad10d041bf54d62d854902b` on 2026-08-26.
+- The final pull-request CI
+  [run 32868153680](https://github.com/TorbenXiong/torben-app/actions/runs/32868153680)
+  passed on Windows, macOS, and Ubuntu for the exact feature revision before merge.
+- The post-merge `main` CI
+  [run 32909764190](https://github.com/TorbenXiong/torben-app/actions/runs/32909764190)
+  passed the same Windows, macOS, and Ubuntu matrix for the exact merge commit. The scheduled
+  official-catalog job was intentionally skipped because this run was triggered by a push.
+
 ## Evidence still requiring external state
 
 The following items are not proven by local source or simulated fixtures and must not be described
 as complete until their authoritative remote evidence exists:
 
-1. Commit the reviewed bootstrap and run ordinary CI on Windows, macOS, and Ubuntu. Preserve links
-   to successful runs; a workflow definition alone is not a passed run.
-2. Run the manual development release and retain the six-target build plus fourteen native package
+1. Run the manual development release and retain the six-target build plus fourteen native package
    acceptance results, including ARM64 hosted runners and Linux distribution containers.
-3. Configure the protected `official-release` environment with reviewed Windows, Apple, and Tauri
+2. Configure the protected `official-release` environment with reviewed Windows, Apple, and Tauri
    updater credentials. Only a successful exact-version tag run can prove Authenticode signing,
    Developer ID signing, notarization, updater signatures, and immutable GitHub Release publication.
-4. Configure the protected `official-plugin-registry` environment with the offline root,
+3. Configure the protected `official-plugin-registry` environment with the offline root,
    publisher keys, and reviewed public trust root. Generate and review an artifact from committed
    production registry inputs.
-5. Provision an immutable HTTPS origin for the reviewed registry tree, then configure release builds
+4. Provision an immutable HTTPS origin for the reviewed registry tree, then configure release builds
    with its exact `registry.json` URL and trust root. Refresh and install every published plugin on
    each supported platform. Public hosting is not currently live.
-6. Record successful scheduled read-only checks against every official provider catalog. Local
+5. Record successful scheduled read-only checks against every official provider catalog. Local
    fixtures remain the default test authority for deterministic behavior, not proof of current
    upstream availability.
-7. Complete project-name, domain, trademark, and package-registry registration checks before a
+6. Complete project-name, domain, trademark, and package-registry registration checks before a
    public release. The repository's initial name collision search is not legal clearance.
 
 Until these steps are complete, locally built packages are development artifacts. Missing signing
