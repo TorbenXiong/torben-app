@@ -68,8 +68,11 @@ jobs:
                 xorg-x11-server-Xvfb
               ;;
             rocky)
+              # The minimal image already provides coreutils-single. Requesting the
+              # mutually exclusive full coreutils package makes microdnf fail before
+              # the RPM under test is installed.
               microdnf install --assumeyes \
-                ca-certificates coreutils cpio dnf findutils git rpm tar which xz \
+                ca-certificates cpio dnf findutils git rpm tar which xz \
                 xorg-x11-server-Xvfb
               ;;
             *)

@@ -1,11 +1,23 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { runDesktopPackageSmoke, safeCanonicalRelative } from "./desktop-package-smoke.mjs";
+import {
+  removeTemporaryRoot,
+  runDesktopPackageSmoke,
+  safeCanonicalRelative,
+} from "./desktop-package-smoke.mjs";
 import { createReleaseMetadata } from "./release-metadata.mjs";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -125,6 +137,30 @@ test("canonical desktop path checks accept root aliases and reject real escapes"
   } finally {
     removeFixture(root);
   }
+});
+
+test("temporary cleanup removes only validated smoke roots", async () => {
+  const prefix = join(tmpdir(), "torben-desktop-package-smoke-");
+  const root = mkdtempSync(prefix);
+  mkdirSync(join(root, "profile", "AppData", "Roaming"), { recursive: true });
+  await assert.rejects(
+    removeTemporaryRoot(root, join(tmpdir(), "unrelated-prefix-")),
+    /Refusing to remove an unexpected smoke-test directory/,
+  );
+  let recreated = false;
+  const recreateTimer = setInterval(() => {
+    if (!recreated && !existsSync(root)) {
+      mkdirSync(join(root, "profile", "AppData", "Roaming"), { recursive: true });
+      recreated = true;
+    }
+  }, 10);
+  try {
+    await removeTemporaryRoot(root, prefix);
+  } finally {
+    clearInterval(recreateTimer);
+  }
+  assert.equal(recreated, true);
+  assert.equal(existsSync(root), false);
 });
 
 test("verifies an installed Windows package and sustained isolated launch", async (t) => {
