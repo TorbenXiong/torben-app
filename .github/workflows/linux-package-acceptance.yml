@@ -96,6 +96,7 @@ jobs:
           path: artifacts/${{ matrix.platform.target }}
 
       - name: Install package and sustain isolated GUI launch
+        shell: /bin/sh -e {0}
         run: >-
           node eng/linux-package-smoke.mjs
           --artifacts artifacts/${{ matrix.platform.target }}

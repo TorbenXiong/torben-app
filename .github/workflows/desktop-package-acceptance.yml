@@ -109,7 +109,8 @@ jobs:
             if (${env:ProgramFiles(x86)}) { $candidateRoots += Join-Path ${env:ProgramFiles(x86)} 'Torben App' }
             $executables = @(
               $candidateRoots | Select-Object -Unique | Where-Object { Test-Path -LiteralPath $_ } |
-                ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter torben-desktop.exe -File -Recurse }
+                ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter torben-desktop.exe -File -Recurse } |
+                Sort-Object -Property FullName -Unique
             )
             if ($executables.Count -ne 1) { throw "Expected one installed torben-desktop.exe, found $($executables.Count)." }
             $installRoot = $executables[0].Directory.FullName

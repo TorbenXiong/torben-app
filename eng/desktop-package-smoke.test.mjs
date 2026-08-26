@@ -163,6 +163,30 @@ test("temporary cleanup removes only validated smoke roots", async () => {
   assert.equal(existsSync(root), false);
 });
 
+test("temporary cleanup retries recoverable Windows handle errors", async () => {
+  const prefix = join(tmpdir(), "torben-desktop-package-smoke-");
+  const root = mkdtempSync(prefix);
+  let attempts = 0;
+  try {
+    await removeTemporaryRoot(root, prefix, {
+      remove: (path, options) => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("fixture directory is still in use");
+          error.code = "EPERM";
+          throw error;
+        }
+        rmSync(path, options);
+      },
+      wait: async () => {},
+    });
+  } finally {
+    if (existsSync(root)) removeFixture(root);
+  }
+  assert.equal(attempts, 2);
+  assert.equal(existsSync(root), false);
+});
+
 test("verifies an installed Windows package and sustained isolated launch", async (t) => {
   for (const format of ["nsis", "msi"]) {
     await t.test(format, async () => {

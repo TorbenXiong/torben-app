@@ -422,21 +422,34 @@ async function sustainedLaunch({ executable, cwd, env, timeoutMs, platform }) {
   });
 }
 
-export async function removeTemporaryRoot(root, expectedPrefix) {
+export async function removeTemporaryRoot(
+  root,
+  expectedPrefix,
+  {
+    remove = rmSync,
+    exists = existsSync,
+    wait = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds)),
+  } = {},
+) {
   if (!root.startsWith(expectedPrefix)) {
     fail(`Refusing to remove an unexpected smoke-test directory: ${root}`);
   }
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    rmSync(root, {
-      recursive: true,
-      force: true,
-      maxRetries: 10,
-      retryDelay: 100,
-    });
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
-    if (!existsSync(root)) {
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
-      if (!existsSync(root)) return;
+  const recoverableCodes = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      remove(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 2,
+        retryDelay: 100,
+      });
+    } catch (error) {
+      if (!recoverableCodes.has(error?.code)) throw error;
+    }
+    await wait(250);
+    if (!exists(root)) {
+      await wait(500);
+      if (!exists(root)) return;
     }
   }
   fail(`Smoke-test directory was recreated during process cleanup: ${root}`);
