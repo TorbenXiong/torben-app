@@ -228,6 +228,7 @@ test("development workflow pins approved Actions and cannot publish an official 
   assert.match(acceptanceWorkflow, /apt-get install --yes --no-install-recommends/);
   assert.match(acceptanceWorkflow, /dnf install --assumeyes/);
   assert.match(acceptanceWorkflow, /microdnf install --assumeyes/);
+  assert.match(acceptanceWorkflow, /shell: \/bin\/sh -e \{0\}/);
   const rockyBootstrap = acceptanceWorkflow.match(/ {12}rocky\)\r?\n([\s\S]*?) {14};;/)?.[1];
   assert.ok(rockyBootstrap, "Rocky Linux acceptance bootstrap is missing");
   const rockyPackages = rockyBootstrap.match(/microdnf install --assumeyes \\\r?\n([\s\S]*)/)?.[1];
@@ -256,6 +257,7 @@ test("development workflow pins approved Actions and cannot publish an official 
   assert.match(desktopAcceptanceWorkflow, /^permissions:\r?\n {2}contents: read$/m);
   assert.match(desktopAcceptanceWorkflow, /^ {6}fail-fast: false$/m);
   assert.match(desktopAcceptanceWorkflow, /desktop-package-smoke\.mjs/);
+  assert.match(desktopAcceptanceWorkflow, /Sort-Object -Property FullName -Unique/);
   assert.match(desktopAcceptanceWorkflow, /Start-Process msiexec\.exe/);
   assert.match(desktopAcceptanceWorkflow, /Start-Process \$package/);
   assert.match(desktopAcceptanceWorkflow, /Start-Process \$uninstallers\[0\]\.FullName/);
