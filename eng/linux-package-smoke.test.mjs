@@ -165,9 +165,15 @@ test("verifies package contents and a sustained isolated launch for every Linux 
           calls.map((call) => call.stage),
           [`extract-${format}`, "launch"],
         );
-        if (format === "rpm") assert.equal(calls[0].command, "/bin/bash");
+        if (format === "deb") assert.equal(calls[0].command, "/usr/bin/dpkg-deb");
+        if (format === "rpm") {
+          assert.equal(calls[0].command, "/bin/bash");
+          assert.match(calls[0].args[1], /\/usr\/bin\/rpm2cpio/);
+          assert.match(calls[0].args[1], /\/usr\/bin\/cpio/);
+        }
         const launch = calls[1];
-        assert.ok(launch.args.includes("xvfb-run"));
+        assert.equal(launch.command, "/usr/bin/timeout");
+        assert.ok(launch.args.includes("/usr/bin/xvfb-run"));
         assert.ok(launch.args.at(-1).endsWith("torben-desktop"));
         assert.equal(launch.env.PATH, "/fixture/bin");
         assert.equal(launch.env.LANG, "C.UTF-8");
@@ -208,7 +214,10 @@ test("installs deb and rpm packages only through their native manager before lau
           [`extract-${format}`, `install-${format}`, "launch"],
         );
         const installation = calls[1];
-        assert.equal(installation.command, format === "deb" ? "apt-get" : "dnf");
+        assert.equal(
+          installation.command,
+          format === "deb" ? "/usr/bin/apt-get" : "/usr/bin/dnf",
+        );
         assert.equal(installation.args.at(-1).endsWith(`.${format}`), true);
         assert.equal(installation.args[0], format === "deb" ? "--quiet=2" : "--quiet");
         assert.ok(calls[2].args.at(-1).startsWith(realpathSync(systemRoot)));

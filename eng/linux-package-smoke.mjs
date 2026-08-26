@@ -122,7 +122,7 @@ function extractionCommand(format, packagePath, temporaryRoot, extractedRoot) {
   mkdirSync(extractedRoot);
   if (format === "deb") {
     return {
-      command: "dpkg-deb",
+      command: "/usr/bin/dpkg-deb",
       args: ["--extract", packagePath, extractedRoot],
       cwd: temporaryRoot,
       resultRoot: extractedRoot,
@@ -132,7 +132,7 @@ function extractionCommand(format, packagePath, temporaryRoot, extractedRoot) {
     command: "/bin/bash",
     args: [
       "-c",
-      'set -o pipefail; rpm2cpio "$1" | cpio -idm --quiet --no-absolute-filenames',
+      'set -o pipefail; /usr/bin/rpm2cpio "$1" | /usr/bin/cpio -idm --quiet --no-absolute-filenames',
       "torben-rpm-extract",
       packagePath,
     ],
@@ -144,7 +144,7 @@ function extractionCommand(format, packagePath, temporaryRoot, extractedRoot) {
 function installationCommand(format, packagePath, temporaryRoot, environment) {
   if (format === "deb") {
     return {
-      command: "apt-get",
+      command: "/usr/bin/apt-get",
       args: ["--quiet=2", "install", "--yes", "--no-install-recommends", packagePath],
       cwd: temporaryRoot,
       env: { ...environment, DEBIAN_FRONTEND: "noninteractive" },
@@ -152,7 +152,7 @@ function installationCommand(format, packagePath, temporaryRoot, environment) {
   }
   if (format === "rpm") {
     return {
-      command: "dnf",
+      command: "/usr/bin/dnf",
       args: ["--quiet", "install", "--assumeyes", packagePath],
       cwd: temporaryRoot,
       env: environment,
@@ -453,12 +453,12 @@ export async function runLinuxPackageSmoke({
         ? extraction.packageExecutable
         : inspected.mainExecutable;
     const launchResult = execute({
-      command: "timeout",
+      command: "/usr/bin/timeout",
       args: [
         "--signal=TERM",
         "--kill-after=3s",
         `${launchTimeoutMs / 1_000}s`,
-        "xvfb-run",
+        "/usr/bin/xvfb-run",
         "-a",
         "-s",
         "-screen 0 1280x800x24",
