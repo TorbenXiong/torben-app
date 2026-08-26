@@ -129,7 +129,7 @@ function extractionCommand(format, packagePath, temporaryRoot, extractedRoot) {
     };
   }
   return {
-    command: "bash",
+    command: "/bin/bash",
     args: [
       "-c",
       'set -o pipefail; rpm2cpio "$1" | cpio -idm --quiet --no-absolute-filenames',
