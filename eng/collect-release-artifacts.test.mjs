@@ -8,6 +8,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -146,6 +147,61 @@ test("fails before output when a required package format is missing", () => {
       /rpm bundle directory is missing/,
     );
     assert.equal(existsSync(output), false);
+  } finally {
+    removeFixture(root);
+  }
+});
+
+test("ignores Tauri intermediate bundle directories while collecting final packages", () => {
+  const root = fixtureRoot();
+  try {
+    const target = "aarch64-unknown-linux-gnu";
+    const bundleRoot = createBundle(root, target);
+    const appDir = join(bundleRoot, "appimage", "Torben App.AppDir");
+    mkdirSync(appDir, { recursive: true });
+    writeFileSync(join(appDir, ".DirIcon"), "intermediate link placeholder");
+    writeFileSync(join(appDir, "Torben App.AppImage"), "intermediate package-shaped file");
+
+    const output = join(root, "artifacts");
+    const copied = collectReleaseArtifacts({
+      bundleRoot,
+      cliBinary: createCli(root, target),
+      output,
+      target,
+      repositoryRoot,
+    });
+
+    assert.equal(copied.filter((entry) => entry.format === "appimage").length, 1);
+    assert.equal(readdirSync(output).length, requiredPackages.linux.length + 1);
+  } finally {
+    removeFixture(root);
+  }
+});
+
+test("rejects a top-level package-shaped link", () => {
+  const root = fixtureRoot();
+  try {
+    const target = "aarch64-unknown-linux-gnu";
+    const bundleRoot = createBundle(root, target);
+    const linkTarget = join(root, "linked-package-target");
+    mkdirSync(linkTarget);
+    symlinkSync(
+      linkTarget,
+      join(bundleRoot, "appimage", "linked.AppImage"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    assert.throws(
+      () =>
+        collectReleaseArtifacts({
+          bundleRoot,
+          cliBinary: createCli(root, target),
+          output: join(root, "artifacts"),
+          target,
+          repositoryRoot,
+        }),
+      /appimage package must be a regular non-link file/,
+    );
   } finally {
     removeFixture(root);
   }
