@@ -59,25 +59,17 @@ function packageFiles(root, requirement) {
   if (!existsSync(directory) || !lstatSync(directory).isDirectory()) {
     fail(`Required ${requirement.format} bundle directory is missing: ${directory}`);
   }
-  const matches = [];
-  const visit = (current) => {
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const path = join(current, entry.name);
-      if (entry.isSymbolicLink()) {
-        fail(`Bundle directories cannot contain symbolic links: ${safeRelative(root, path)}`);
+  const matches = readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => extname(entry.name) === requirement.extension)
+    .map((entry) => {
+      const path = join(directory, entry.name);
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        fail(
+          `${requirement.format} package must be a regular non-link file: ${safeRelative(root, path)}`,
+        );
       }
-      if (entry.isDirectory()) {
-        visit(path);
-      } else if (entry.isFile()) {
-        if (extname(entry.name) === requirement.extension) {
-          matches.push(path);
-        }
-      } else {
-        fail(`Bundle entries must be regular files: ${safeRelative(root, path)}`);
-      }
-    }
-  };
-  visit(directory);
+      return path;
+    });
   if (matches.length !== 1) {
     fail(
       `Expected exactly one ${requirement.format} package, found ${matches.length} in ${directory}.`,
