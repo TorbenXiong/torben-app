@@ -51,6 +51,23 @@ test("ordinary CI runs locked lint and test gates", () => {
   assert.match(ci, /cargo test --workspace --locked/u);
 });
 
+test("release workflows preserve Cargo arguments and native package prerequisites", () => {
+  for (const name of ["release.yml", "official-release.yml"]) {
+    const release = readFileSync(join(workflowDirectory, name), "utf8");
+
+    assert.match(release, /working-directory: apps\/desktop/u, name);
+    assert.match(
+      release,
+      /node node_modules\/@tauri-apps\/cli\/tauri\.js build[\s\S]*?-- --locked/u,
+      name,
+    );
+    assert.doesNotMatch(release, /pnpm[^\n]*exec tauri build/u, name);
+    assert.match(release, /patchelf xdg-utils/u, name);
+    assert.doesNotMatch(release, /require\("\.\/package\.json"\)/u, name);
+    assert.match(release, /join\(process\.env\.GITHUB_WORKSPACE, "package\.json"\)/u, name);
+  }
+});
+
 test("plugin registry artifacts require a protected manual main-branch release", () => {
   const release = readFileSync(join(workflowDirectory, "plugin-registry-release.yml"), "utf8");
 
