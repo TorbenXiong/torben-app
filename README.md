@@ -12,13 +12,15 @@ the desktop app and the `torben` CLI. Package source adapters can discover winge
 and DNF, inspect installed package state, and produce exact operation plans. Mutations can run only
 after explicit confirmation; DNF additionally resolves and locks one complete repository NEVRA.
 
-Ordinary tests remain network-independent and use local fixtures. The weekly scheduled CI builds
-the real `torben` CLI beside all six official provider plugins, queries Node.js, Temurin, Python,
-Git, Visual Studio Code, and Codex through `torben version list <app> --json`, validates the stable
-JSON envelope and non-empty recommended catalog, and publishes only the six validated read-only
-snapshots as a short-lived CI artifact. The probe forwards an allowlisted local environment so CI
-credentials are not exposed to provider processes. The distinction between local coverage,
-configured native workflows, and authoritative remote acceptance evidence is documented in
+Ordinary tests remain network-independent and use local fixtures. The weekly scheduled CI, or its
+explicit manual preflight, builds the real `torben` CLI beside all six official provider plugins,
+queries Node.js, Temurin, Python, Git, Visual Studio Code, and Codex through
+`torben version list <app> --json`, validates the stable JSON envelope and non-empty recommended
+catalog, and publishes only the six validated read-only snapshots as a short-lived CI artifact.
+The probe forwards an allowlisted local environment so CI credentials are not exposed to provider
+processes. A manual preflight verifies the same live path but does not replace the required
+scheduled-run evidence. The distinction between local coverage, configured native workflows, and
+authoritative remote acceptance evidence is documented in
 [test and acceptance evidence](docs/testing.md). The complete original-plan mapping and the
 remaining credential- or hosting-dependent gates are tracked in
 [greenfield milestone status](docs/milestone-status.md).
