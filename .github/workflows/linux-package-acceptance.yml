@@ -29,18 +29,22 @@ jobs:
             image: ubuntu:24.04
             bootstrap: ubuntu
             format: appimage
+            display_backend: x11
           - name: Debian 13 deb
             image: debian:13-slim
             bootstrap: debian
             format: deb
+            display_backend: x11
           - name: Fedora 44 rpm
             image: fedora:44
             bootstrap: fedora
             format: rpm
-          - name: Rocky Linux 9.8 rpm
-            image: rockylinux/rockylinux:9.8-minimal
+            display_backend: x11
+          - name: Rocky Linux 10.2 rpm
+            image: rockylinux/rockylinux:10.2-minimal
             bootstrap: rocky
             format: rpm
+            display_backend: wayland
     runs-on: ${{ matrix.platform.runner }}
     container:
       image: ${{ matrix.distribution.image }}
@@ -70,10 +74,12 @@ jobs:
             rocky)
               # The minimal image already provides coreutils-single. Requesting the
               # mutually exclusive full coreutils package makes microdnf fail before
-              # the RPM under test is installed.
+              # the RPM under test is installed. Tauri 2 requires WebKitGTK 4.1,
+              # which Rocky Linux 10 provides through EPEL with CRB enabled.
               microdnf install --assumeyes \
-                bash ca-certificates cpio dnf findutils git rpm tar which xz \
-                xorg-x11-server-Xvfb
+                bash ca-certificates cpio dnf dnf-plugins-core epel-release findutils git rpm tar which xz
+              dnf config-manager --set-enabled crb
+              dnf install --assumeyes weston
               ;;
             *)
               echo "Unsupported acceptance bootstrap: ${{ matrix.distribution.bootstrap }}" >&2
@@ -101,4 +107,5 @@ jobs:
           node eng/linux-package-smoke.mjs
           --artifacts artifacts/${{ matrix.platform.target }}
           --format ${{ matrix.distribution.format }}
+          --display-backend ${{ matrix.distribution.display_backend }}
           --mode install

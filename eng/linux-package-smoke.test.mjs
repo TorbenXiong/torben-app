@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -94,9 +95,42 @@ function fixtureExecutor(calls, options = {}) {
       return { status: 0, stdout: "", stderr: "" };
     }
     if (stage === "install-deb" || stage === "install-rpm") {
-      if (options.installResult) return options.installResult;
+      const installResult = options.installResults?.shift() ?? options.installResult;
+      if (installResult) return installResult;
       writeExtractedBundle(options.systemRoot, options);
       return { status: 0, stdout: "", stderr: "" };
+    }
+    if (stage === "clean-rpm-packages") {
+      return options.cleanResult ?? { status: 0, stdout: "", stderr: "" };
+    }
+    if (stage === "download-rpm-dependencies") {
+      const result = options.downloadResult ?? { status: 0, stdout: "", stderr: "" };
+      if (result.status === 0) {
+        writeFileSync(join(cwd, "dependency-fixture.rpm"), "signed-rpm");
+        if (!options.omitDownloadedApplication) {
+          if (options.changedDownloadedApplication) {
+            writeFileSync(join(cwd, args.at(-1).split(/[\\/]/u).at(-1)), "changed-rpm");
+          } else {
+            copyFileSync(args.at(-1), join(cwd, args.at(-1).split(/[\\/]/u).at(-1)));
+          }
+        }
+      }
+      return result;
+    }
+    if (stage === "verify-rpm-dependency-signatures") {
+      return (
+        options.dependencySignatureResult ?? {
+          status: 0,
+          stdout: `${args
+            .slice(1)
+            .map((path) => `${path}: digests signatures OK`)
+            .join("\n")}\n`,
+          stderr: "",
+        }
+      );
+    }
+    if (stage === "install-rpm-dependencies") {
+      return options.dependencyInstallResult ?? { status: 0, stdout: "", stderr: "" };
     }
     if (stage === "launch") {
       return options.launchResult ?? { status: 124, stdout: "", stderr: "" };
@@ -161,13 +195,25 @@ test("verifies package contents and a sustained isolated launch for every Linux 
         assert.equal(result.target, "x86_64-unknown-linux-gnu");
         assert.equal(result.sidecars.length, 7);
         assert.equal(result.launch.observedStatus, 124);
+        assert.equal(result.launch.displayBackend, "x11");
         assert.deepEqual(
           calls.map((call) => call.stage),
           [`extract-${format}`, "launch"],
         );
-        if (format === "rpm") assert.equal(calls[0].command, "/bin/bash");
+        if (format === "deb") assert.equal(calls[0].command, "/usr/bin/dpkg-deb");
+        if (format === "rpm") {
+          assert.equal(calls[0].command, "/bin/bash");
+          assert.match(calls[0].args[1], /\/usr\/bin\/rpm2cpio/);
+          assert.match(calls[0].args[1], /\/usr\/bin\/cpio/);
+          assert.doesNotMatch(calls[0].args[1], /rpm2cpio[^\n]+\|[^\n]+cpio/);
+          assert.match(calls[0].args[1], /"\$rpm_status" -ne 0 && "\$rpm_status" -ne 1/);
+          assert.match(calls[0].args[1], /\[\[ ! -s "\$archive" \]\]/);
+          assert.match(calls[0].args[1], /"\$cpio_status" -ne 0/);
+          assert.ok(calls[0].args.at(-1).endsWith("payload.cpio"));
+        }
         const launch = calls[1];
-        assert.ok(launch.args.includes("xvfb-run"));
+        assert.equal(launch.command, "/usr/bin/timeout");
+        assert.ok(launch.args.includes("/usr/bin/xvfb-run"));
         assert.ok(launch.args.at(-1).endsWith("torben-desktop"));
         assert.equal(launch.env.PATH, "/fixture/bin");
         assert.equal(launch.env.LANG, "C.UTF-8");
@@ -177,6 +223,35 @@ test("verifies package contents and a sustained isolated launch for every Linux 
         removeFixture(root);
       }
     });
+  }
+});
+
+test("launches through a bounded headless Weston session when Wayland is selected", async () => {
+  const root = fixtureRoot();
+  try {
+    const artifacts = await artifactFixture(root, "rpm");
+    const calls = [];
+    const result = await runLinuxPackageSmoke({
+      artifacts,
+      displayBackend: "wayland",
+      format: "rpm",
+      repositoryRoot,
+      execute: fixtureExecutor(calls),
+      platform: "linux",
+      architecture: "x64",
+    });
+
+    const launch = calls[1];
+    assert.equal(result.launch.displayBackend, "wayland");
+    assert.equal(launch.command, "/usr/bin/timeout");
+    assert.ok(launch.args.includes("/bin/bash"));
+    assert.match(launch.args.at(-3), /\/usr\/bin\/weston/);
+    assert.match(launch.args.at(-3), /--backend=headless-backend\.so/);
+    assert.match(launch.args.at(-3), /--renderer=pixman/);
+    assert.equal(launch.args.at(-1).endsWith("torben-desktop"), true);
+    assert.equal(launch.env.GDK_BACKEND, "wayland");
+  } finally {
+    removeFixture(root);
   }
 });
 
@@ -208,9 +283,13 @@ test("installs deb and rpm packages only through their native manager before lau
           [`extract-${format}`, `install-${format}`, "launch"],
         );
         const installation = calls[1];
-        assert.equal(installation.command, format === "deb" ? "apt-get" : "dnf");
+        assert.equal(installation.command, format === "deb" ? "/usr/bin/apt-get" : "/usr/bin/dnf");
         assert.equal(installation.args.at(-1).endsWith(`.${format}`), true);
         assert.equal(installation.args[0], format === "deb" ? "--quiet=2" : "--quiet");
+        if (format === "rpm") {
+          assert.equal(installation.args.includes("--setopt=keepcache=True"), true);
+          assert.equal(installation.args.includes("--setopt=max_parallel_downloads=1"), true);
+        }
         assert.ok(calls[2].args.at(-1).startsWith(realpathSync(systemRoot)));
       } finally {
         removeFixture(root);
@@ -340,6 +419,371 @@ test("system installation fails closed for non-root and package-manager errors",
   });
 });
 
+test("cleans unreadable RPM cache entries once without disabling GPG verification", async () => {
+  const root = fixtureRoot();
+  try {
+    const artifacts = await artifactFixture(root, "rpm");
+    const systemRoot = join(root, "system-root");
+    const calls = [];
+    const result = await runLinuxPackageSmoke({
+      artifacts,
+      format: "rpm",
+      mode: "install",
+      repositoryRoot,
+      execute: fixtureExecutor(calls, {
+        systemRoot,
+        installResults: [
+          {
+            status: 1,
+            stdout: "",
+            stderr: "Problem opening package fixture.rpm\nError: GPG check FAILED",
+          },
+        ],
+      }),
+      platform: "linux",
+      architecture: "x64",
+      effectiveUserId: 0,
+      systemRoot,
+    });
+
+    assert.equal(result.systemInstalled, true);
+    assert.deepEqual(
+      calls.map((call) => call.stage),
+      [
+        "extract-rpm",
+        "install-rpm",
+        "clean-rpm-packages",
+        "download-rpm-dependencies",
+        "verify-rpm-dependency-signatures",
+        "install-rpm-dependencies",
+        "install-rpm",
+        "launch",
+      ],
+    );
+    const cleanup = calls[2];
+    assert.equal(cleanup.command, "/usr/bin/dnf");
+    assert.deepEqual(cleanup.args, ["--quiet", "clean", "packages"]);
+    const download = calls[3];
+    assert.equal(download.command, "/usr/bin/dnf");
+    assert.equal(download.args.includes("--refresh"), true);
+    assert.equal(download.args.includes("download"), true);
+    assert.equal(download.args.includes("--resolve"), true);
+    assert.equal(download.args.includes(`--destdir=${download.cwd}`), true);
+    assert.equal(download.args.includes("--setopt=keepcache=True"), true);
+    assert.equal(download.args.includes("--setopt=max_parallel_downloads=1"), true);
+    assert.equal(
+      download.args.some((argument) => argument.includes("dnf-recovery-cache")),
+      true,
+    );
+    const signatureVerification = calls[4];
+    assert.equal(signatureVerification.command, "/usr/bin/rpm");
+    assert.equal(signatureVerification.args[0], "--checksig");
+    assert.equal(signatureVerification.env.LC_ALL, "C");
+    const dependencyInstall = calls[5];
+    assert.equal(dependencyInstall.command, "/usr/bin/rpm");
+    assert.equal(dependencyInstall.args[0], "--install");
+    assert.equal(dependencyInstall.args.at(-1).endsWith("dependency-fixture.rpm"), true);
+    const packageInstall = calls[6];
+    assert.equal(packageInstall.args.includes("--disablerepo=*"), true);
+    assert.equal(packageInstall.args.includes("--setopt=localpkg_gpgcheck=True"), false);
+    for (const call of calls.filter((call) => call.stage.includes("rpm"))) {
+      assert.equal(call.args.includes("--nogpgcheck"), false);
+    }
+  } finally {
+    removeFixture(root);
+  }
+});
+
+test("RPM cache recovery fails closed at every package-manager stage", async (t) => {
+  const cacheFailure = {
+    status: 1,
+    stdout: "Problem opening package fixture.rpm",
+    stderr: "Error: GPG check FAILED",
+  };
+
+  await t.test("cleanup failure", async () => {
+    const root = fixtureRoot();
+    try {
+      const artifacts = await artifactFixture(root, "rpm");
+      const systemRoot = join(root, "system-root");
+      const calls = [];
+      await assert.rejects(
+        runLinuxPackageSmoke({
+          artifacts,
+          format: "rpm",
+          mode: "install",
+          repositoryRoot,
+          execute: fixtureExecutor(calls, {
+            systemRoot,
+            installResults: [cacheFailure],
+            cleanResult: { status: 1, stdout: "", stderr: "cache cleanup failed" },
+          }),
+          platform: "linux",
+          architecture: "x64",
+          effectiveUserId: 0,
+          systemRoot,
+        }),
+        /rpm package cache cleanup failed with status 1: cache cleanup failed/,
+      );
+      assert.deepEqual(
+        calls.map((call) => call.stage),
+        ["extract-rpm", "install-rpm", "clean-rpm-packages"],
+      );
+    } finally {
+      removeFixture(root);
+    }
+  });
+
+  await t.test("dependency download failure", async () => {
+    const root = fixtureRoot();
+    try {
+      const artifacts = await artifactFixture(root, "rpm");
+      const systemRoot = join(root, "system-root");
+      const calls = [];
+      await assert.rejects(
+        runLinuxPackageSmoke({
+          artifacts,
+          format: "rpm",
+          mode: "install",
+          repositoryRoot,
+          execute: fixtureExecutor(calls, {
+            systemRoot,
+            installResults: [cacheFailure],
+            downloadResult: { status: 1, stdout: "", stderr: "dependency download failed" },
+          }),
+          platform: "linux",
+          architecture: "x64",
+          effectiveUserId: 0,
+          systemRoot,
+        }),
+        /rpm dependency download failed with status 1: dependency download failed/,
+      );
+      assert.deepEqual(
+        calls.map((call) => call.stage),
+        ["extract-rpm", "install-rpm", "clean-rpm-packages", "download-rpm-dependencies"],
+      );
+    } finally {
+      removeFixture(root);
+    }
+  });
+
+  await t.test("dependency signature command failure", async () => {
+    const root = fixtureRoot();
+    try {
+      const artifacts = await artifactFixture(root, "rpm");
+      const systemRoot = join(root, "system-root");
+      const calls = [];
+      await assert.rejects(
+        runLinuxPackageSmoke({
+          artifacts,
+          format: "rpm",
+          mode: "install",
+          repositoryRoot,
+          execute: fixtureExecutor(calls, {
+            systemRoot,
+            installResults: [cacheFailure],
+            dependencySignatureResult: {
+              status: 1,
+              stdout: "",
+              stderr: "dependency signature failed",
+            },
+          }),
+          platform: "linux",
+          architecture: "x64",
+          effectiveUserId: 0,
+          systemRoot,
+        }),
+        /rpm dependency signature verification failed with status 1: dependency signature failed/,
+      );
+      assert.deepEqual(calls.at(-1).stage, "verify-rpm-dependency-signatures");
+    } finally {
+      removeFixture(root);
+    }
+  });
+
+  await t.test("dependency signature output is incomplete", async () => {
+    const root = fixtureRoot();
+    try {
+      const artifacts = await artifactFixture(root, "rpm");
+      const systemRoot = join(root, "system-root");
+      const calls = [];
+      await assert.rejects(
+        runLinuxPackageSmoke({
+          artifacts,
+          format: "rpm",
+          mode: "install",
+          repositoryRoot,
+          execute: fixtureExecutor(calls, {
+            systemRoot,
+            installResults: [cacheFailure],
+            dependencySignatureResult: {
+              status: 0,
+              stdout: "dependency-fixture.rpm: digests OK\n",
+              stderr: "",
+            },
+          }),
+          platform: "linux",
+          architecture: "x64",
+          effectiveUserId: 0,
+          systemRoot,
+        }),
+        /RPM did not confirm signatures for every downloaded dependency/,
+      );
+      assert.deepEqual(calls.at(-1).stage, "verify-rpm-dependency-signatures");
+    } finally {
+      removeFixture(root);
+    }
+  });
+
+  await t.test("dependency transaction failure", async () => {
+    const root = fixtureRoot();
+    try {
+      const artifacts = await artifactFixture(root, "rpm");
+      const systemRoot = join(root, "system-root");
+      const calls = [];
+      await assert.rejects(
+        runLinuxPackageSmoke({
+          artifacts,
+          format: "rpm",
+          mode: "install",
+          repositoryRoot,
+          execute: fixtureExecutor(calls, {
+            systemRoot,
+            installResults: [cacheFailure],
+            dependencyInstallResult: {
+              status: 1,
+              stdout: "",
+              stderr: "dependency transaction failed",
+            },
+          }),
+          platform: "linux",
+          architecture: "x64",
+          effectiveUserId: 0,
+          systemRoot,
+        }),
+        /rpm dependency transaction failed with status 1: dependency transaction failed/,
+      );
+      assert.deepEqual(calls.at(-1).stage, "install-rpm-dependencies");
+    } finally {
+      removeFixture(root);
+    }
+  });
+
+  for (const [name, option, message] of [
+    [
+      "missing application copy",
+      "omitDownloadedApplication",
+      /Downloaded RPM under test is missing/,
+    ],
+    ["changed application copy", "changedDownloadedApplication", /changed the RPM under test/],
+  ]) {
+    await t.test(name, async () => {
+      const root = fixtureRoot();
+      try {
+        const artifacts = await artifactFixture(root, "rpm");
+        const systemRoot = join(root, "system-root");
+        const calls = [];
+        await assert.rejects(
+          runLinuxPackageSmoke({
+            artifacts,
+            format: "rpm",
+            mode: "install",
+            repositoryRoot,
+            execute: fixtureExecutor(calls, {
+              systemRoot,
+              installResults: [cacheFailure],
+              [option]: true,
+            }),
+            platform: "linux",
+            architecture: "x64",
+            effectiveUserId: 0,
+            systemRoot,
+          }),
+          message,
+        );
+        assert.equal(calls.at(-1).stage, "download-rpm-dependencies");
+      } finally {
+        removeFixture(root);
+      }
+    });
+  }
+
+  await t.test("offline package installation failure", async () => {
+    const root = fixtureRoot();
+    try {
+      const artifacts = await artifactFixture(root, "rpm");
+      const systemRoot = join(root, "system-root");
+      const calls = [];
+      await assert.rejects(
+        runLinuxPackageSmoke({
+          artifacts,
+          format: "rpm",
+          mode: "install",
+          repositoryRoot,
+          execute: fixtureExecutor(calls, {
+            systemRoot,
+            installResults: [
+              cacheFailure,
+              { status: 1, stdout: "", stderr: "GPG check still failed" },
+            ],
+          }),
+          platform: "linux",
+          architecture: "x64",
+          effectiveUserId: 0,
+          systemRoot,
+        }),
+        /rpm system installation failed with status 1: GPG check still failed/,
+      );
+      assert.deepEqual(
+        calls.map((call) => call.stage),
+        [
+          "extract-rpm",
+          "install-rpm",
+          "clean-rpm-packages",
+          "download-rpm-dependencies",
+          "verify-rpm-dependency-signatures",
+          "install-rpm-dependencies",
+          "install-rpm",
+        ],
+      );
+    } finally {
+      removeFixture(root);
+    }
+  });
+});
+
+test("rejects every non-zero RPM extraction command result", async () => {
+  const root = fixtureRoot();
+  try {
+    const artifacts = await artifactFixture(root, "rpm");
+    const calls = [];
+    await assert.rejects(
+      runLinuxPackageSmoke({
+        artifacts,
+        format: "rpm",
+        repositoryRoot,
+        execute: (options) => {
+          calls.push(options);
+          return {
+            status: 1,
+            stdout: "",
+            stderr: "cpio failed with status 1",
+          };
+        },
+        platform: "linux",
+        architecture: "x64",
+      }),
+      /rpm extraction failed with status 1: cpio failed with status 1/,
+    );
+    assert.deepEqual(
+      calls.map((call) => call.stage),
+      ["extract-rpm"],
+    );
+  } finally {
+    removeFixture(root);
+  }
+});
+
 test("fails before extraction when the native host architecture does not match", async () => {
   const root = fixtureRoot();
   try {
@@ -362,6 +806,25 @@ test("fails before extraction when the native host architecture does not match",
   } finally {
     removeFixture(root);
   }
+});
+
+test("rejects an unsupported display backend before reading artifacts", async () => {
+  let executed = false;
+  await assert.rejects(
+    runLinuxPackageSmoke({
+      artifacts: "unused",
+      displayBackend: "virtual",
+      format: "rpm",
+      repositoryRoot,
+      execute: () => {
+        executed = true;
+      },
+      platform: "linux",
+      architecture: "x64",
+    }),
+    /display backend must be x11 or wayland/,
+  );
+  assert.equal(executed, false);
 });
 
 test("rejects missing sidecars and an application that exits before the launch window", async (t) => {

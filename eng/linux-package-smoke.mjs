@@ -1,15 +1,20 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   realpathSync,
   rmSync,
+  unlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -35,6 +40,11 @@ const sidecarNames = Object.freeze([
 const maximumExtractedEntries = 20_000;
 const maximumCommandOutput = 4 * 1024 * 1024;
 const defaultLaunchTimeoutMs = 8_000;
+const displayBackends = new Set(["x11", "wayland"]);
+const rpmDownloadSafetyOptions = Object.freeze([
+  "--setopt=keepcache=True",
+  "--setopt=max_parallel_downloads=1",
+]);
 
 function fail(message) {
   throw new Error(message);
@@ -59,6 +69,22 @@ function regularFile(path, description) {
     fail(`${description} must be a regular non-link file: ${path}`);
   }
   return metadata;
+}
+
+function sha256File(path) {
+  const digest = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const handle = openSync(path, "r");
+  try {
+    for (;;) {
+      const bytesRead = readSync(handle, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      digest.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    closeSync(handle);
+  }
+  return digest.digest("hex");
 }
 
 function onePackage(artifactRoot, metadata, format) {
@@ -122,7 +148,7 @@ function extractionCommand(format, packagePath, temporaryRoot, extractedRoot) {
   mkdirSync(extractedRoot);
   if (format === "deb") {
     return {
-      command: "dpkg-deb",
+      command: "/usr/bin/dpkg-deb",
       args: ["--extract", packagePath, extractedRoot],
       cwd: temporaryRoot,
       resultRoot: extractedRoot,
@@ -132,9 +158,36 @@ function extractionCommand(format, packagePath, temporaryRoot, extractedRoot) {
     command: "/bin/bash",
     args: [
       "-c",
-      'set -o pipefail; rpm2cpio "$1" | cpio -idm --quiet --no-absolute-filenames',
+      `set -euo pipefail
+archive="$2"
+cleanup() {
+  /usr/bin/rm -f -- "$archive"
+}
+trap cleanup EXIT
+umask 077
+set +e
+/usr/bin/rpm2cpio "$1" >"$archive"
+rpm_status=$?
+set -e
+if [[ "$rpm_status" -ne 0 && "$rpm_status" -ne 1 ]]; then
+  echo "rpm2cpio failed with status $rpm_status" >&2
+  exit "$rpm_status"
+fi
+if [[ ! -s "$archive" ]]; then
+  echo "rpm2cpio produced an empty archive with status $rpm_status" >&2
+  exit 90
+fi
+set +e
+/usr/bin/cpio -idm --quiet --no-absolute-filenames <"$archive"
+cpio_status=$?
+set -e
+if [[ "$cpio_status" -ne 0 ]]; then
+  echo "cpio failed with status $cpio_status" >&2
+  exit "$cpio_status"
+fi`,
       "torben-rpm-extract",
       packagePath,
+      join(temporaryRoot, "payload.cpio"),
     ],
     cwd: extractedRoot,
     resultRoot: extractedRoot,
@@ -144,7 +197,7 @@ function extractionCommand(format, packagePath, temporaryRoot, extractedRoot) {
 function installationCommand(format, packagePath, temporaryRoot, environment) {
   if (format === "deb") {
     return {
-      command: "apt-get",
+      command: "/usr/bin/apt-get",
       args: ["--quiet=2", "install", "--yes", "--no-install-recommends", packagePath],
       cwd: temporaryRoot,
       env: { ...environment, DEBIAN_FRONTEND: "noninteractive" },
@@ -152,13 +205,115 @@ function installationCommand(format, packagePath, temporaryRoot, environment) {
   }
   if (format === "rpm") {
     return {
-      command: "dnf",
-      args: ["--quiet", "install", "--assumeyes", packagePath],
+      command: "/usr/bin/dnf",
+      args: ["--quiet", ...rpmDownloadSafetyOptions, "install", "--assumeyes", packagePath],
       cwd: temporaryRoot,
       env: environment,
     };
   }
   fail(`System installation is not defined for ${format}.`);
+}
+
+function rpmPackageCacheFailure(result) {
+  if (result.error || result.status === 0) return false;
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  return output.includes("Problem opening package ") && output.includes("GPG check FAILED");
+}
+
+function rpmPackageCacheCleanup(temporaryRoot, environment) {
+  return {
+    command: "/usr/bin/dnf",
+    args: ["--quiet", "clean", "packages"],
+    cwd: temporaryRoot,
+    env: environment,
+  };
+}
+
+function rpmDependencyDownload(packagePath, temporaryRoot, dependencyRoot, environment) {
+  return {
+    command: "/usr/bin/dnf",
+    args: [
+      "--quiet",
+      "--refresh",
+      `--setopt=cachedir=${join(temporaryRoot, "dnf-recovery-cache")}`,
+      ...rpmDownloadSafetyOptions,
+      "download",
+      "--resolve",
+      `--destdir=${dependencyRoot}`,
+      packagePath,
+    ],
+    cwd: dependencyRoot,
+    env: environment,
+  };
+}
+
+function rpmDependencyPackages(dependencyRoot, packagePath) {
+  const packages = [];
+  for (const entry of readdirSync(dependencyRoot, { withFileTypes: true })) {
+    const path = join(dependencyRoot, entry.name);
+    if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".rpm")) {
+      fail(`DNF dependency download created an unexpected entry: ${path}`);
+    }
+    regularFile(path, "Downloaded RPM dependency");
+    packages.push(path);
+  }
+  const applicationCopy = join(dependencyRoot, basename(packagePath));
+  const sourceMetadata = regularFile(packagePath, "RPM under test");
+  const copyMetadata = regularFile(applicationCopy, "Downloaded RPM under test");
+  if (
+    sourceMetadata.size !== copyMetadata.size ||
+    sha256File(packagePath) !== sha256File(applicationCopy)
+  ) {
+    fail("DNF dependency download changed the RPM under test.");
+  }
+  unlinkSync(applicationCopy);
+  const applicationIndex = packages.indexOf(applicationCopy);
+  if (applicationIndex < 0) fail("DNF dependency download omitted the RPM under test.");
+  packages.splice(applicationIndex, 1);
+  return packages.sort();
+}
+
+function rpmDependencySignatureVerification(packages, dependencyRoot, environment) {
+  return {
+    command: "/usr/bin/rpm",
+    args: ["--checksig", ...packages],
+    cwd: dependencyRoot,
+    env: { ...environment, LC_ALL: "C" },
+  };
+}
+
+function requireRpmDependencySignatures(result, expectedCount) {
+  requireStatus(result, [0], "rpm dependency signature verification");
+  const confirmations = String(result.stdout)
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (
+    confirmations.length !== expectedCount ||
+    confirmations.some((line) => !/:\s+digests signatures OK$/u.test(line))
+  ) {
+    fail(
+      `RPM did not confirm signatures for every downloaded dependency: expected ${expectedCount}, received ${confirmations.length}.`,
+    );
+  }
+}
+
+function rpmDependencyInstallation(packages, dependencyRoot, environment) {
+  return {
+    command: "/usr/bin/rpm",
+    args: ["--install", ...packages],
+    cwd: dependencyRoot,
+    env: environment,
+  };
+}
+
+function rpmOfflinePackageInstallation(packagePath, temporaryRoot, environment) {
+  return {
+    command: "/usr/bin/dnf",
+    args: ["--quiet", "--disablerepo=*", "install", "--assumeyes", packagePath],
+    cwd: temporaryRoot,
+    env: environment,
+  };
 }
 
 function scanExtractedTree(root) {
@@ -345,7 +500,7 @@ function hostArchitecture(value) {
   fail(`Unsupported Linux smoke-test host architecture: ${value}`);
 }
 
-function launchEnvironment(temporaryRoot, baseEnvironment, appImageExtractAndRun) {
+function launchEnvironment(temporaryRoot, baseEnvironment, appImageExtractAndRun, displayBackend) {
   const directories = {
     XDG_DATA_HOME: join(temporaryRoot, "xdg", "data"),
     XDG_CONFIG_HOME: join(temporaryRoot, "xdg", "config"),
@@ -367,15 +522,72 @@ function launchEnvironment(temporaryRoot, baseEnvironment, appImageExtractAndRun
   }
   const result = {
     ...environment,
-    GDK_BACKEND: "x11",
+    GDK_BACKEND: displayBackend,
     WEBKIT_DISABLE_COMPOSITING_MODE: "1",
   };
   if (appImageExtractAndRun) result.APPIMAGE_EXTRACT_AND_RUN = "1";
   return result;
 }
 
+function launchArguments(displayBackend, launchTimeoutMs, launchExecutable) {
+  const timeoutArguments = ["--signal=TERM", "--kill-after=3s", `${launchTimeoutMs / 1_000}s`];
+  if (displayBackend === "x11") {
+    return [
+      ...timeoutArguments,
+      "/usr/bin/xvfb-run",
+      "-a",
+      "-s",
+      "-screen 0 1280x800x24",
+      launchExecutable,
+    ];
+  }
+  return [
+    ...timeoutArguments,
+    "/bin/bash",
+    "-c",
+    `set -euo pipefail
+socket="wayland-torben-smoke"
+weston_log="$XDG_RUNTIME_DIR/weston.log"
+weston_pid=""
+app_pid=""
+cleanup() {
+  if [[ -n "$app_pid" ]]; then kill "$app_pid" 2>/dev/null || true; fi
+  if [[ -n "$weston_pid" ]]; then kill "$weston_pid" 2>/dev/null || true; fi
+  if [[ -n "$app_pid" ]]; then wait "$app_pid" 2>/dev/null || true; fi
+  if [[ -n "$weston_pid" ]]; then wait "$weston_pid" 2>/dev/null || true; fi
+}
+on_signal() {
+  cleanup
+  exit 143
+}
+trap cleanup EXIT
+trap on_signal TERM INT
+/usr/bin/weston --backend=headless-backend.so --renderer=pixman --socket="$socket" --idle-time=0 --no-config >"$weston_log" 2>&1 &
+weston_pid=$!
+for ((attempt = 0; attempt < 100; attempt += 1)); do
+  if [[ -S "$XDG_RUNTIME_DIR/$socket" ]]; then break; fi
+  if ! kill -0 "$weston_pid" 2>/dev/null; then
+    cat "$weston_log" >&2
+    exit 1
+  fi
+  /usr/bin/sleep 0.05
+done
+if [[ ! -S "$XDG_RUNTIME_DIR/$socket" ]]; then
+  cat "$weston_log" >&2
+  exit 1
+fi
+export WAYLAND_DISPLAY="$socket"
+"$1" &
+app_pid=$!
+wait "$app_pid"`,
+    "torben-wayland-launch",
+    launchExecutable,
+  ];
+}
+
 export async function runLinuxPackageSmoke({
   artifacts,
+  displayBackend = "x11",
   format,
   launchTimeoutMs = defaultLaunchTimeoutMs,
   repositoryRoot,
@@ -390,6 +602,9 @@ export async function runLinuxPackageSmoke({
 }) {
   if (platform !== "linux") fail("Linux package smoke tests require a Linux host.");
   if (!Object.hasOwn(packageSuffixes, format)) fail(`Unsupported Linux package format: ${format}`);
+  if (!displayBackends.has(displayBackend)) {
+    fail("Linux package smoke-test display backend must be x11 or wayland.");
+  }
   if (!new Set(["extract", "install"]).has(mode)) {
     fail("Linux package smoke-test mode must be extract or install.");
   }
@@ -429,11 +644,47 @@ export async function runLinuxPackageSmoke({
     let systemInstalled = false;
     if (mode === "install" && format !== "appimage") {
       const installation = installationCommand(format, packagePath, temporaryRoot, environment);
-      const installationResult = execute({
+      let installationResult = execute({
         ...installation,
         stage: `install-${format}`,
         timeoutMs: 180_000,
       });
+      if (format === "rpm" && rpmPackageCacheFailure(installationResult)) {
+        const cleanupResult = execute({
+          ...rpmPackageCacheCleanup(temporaryRoot, environment),
+          stage: "clean-rpm-packages",
+          timeoutMs: 60_000,
+        });
+        requireStatus(cleanupResult, [0], "rpm package cache cleanup");
+        const dependencyRoot = join(temporaryRoot, "dnf-dependency-rpms");
+        mkdirSync(dependencyRoot, { mode: 0o700 });
+        const downloadResult = execute({
+          ...rpmDependencyDownload(packagePath, temporaryRoot, dependencyRoot, environment),
+          stage: "download-rpm-dependencies",
+          timeoutMs: 300_000,
+        });
+        requireStatus(downloadResult, [0], "rpm dependency download");
+        const dependencyPackages = rpmDependencyPackages(dependencyRoot, packagePath);
+        if (dependencyPackages.length > 0) {
+          const signatureResult = execute({
+            ...rpmDependencySignatureVerification(dependencyPackages, dependencyRoot, environment),
+            stage: "verify-rpm-dependency-signatures",
+            timeoutMs: 120_000,
+          });
+          requireRpmDependencySignatures(signatureResult, dependencyPackages.length);
+          const dependencyResult = execute({
+            ...rpmDependencyInstallation(dependencyPackages, dependencyRoot, environment),
+            stage: "install-rpm-dependencies",
+            timeoutMs: 300_000,
+          });
+          requireStatus(dependencyResult, [0], "rpm dependency transaction");
+        }
+        installationResult = execute({
+          ...rpmOfflinePackageInstallation(packagePath, temporaryRoot, environment),
+          stage: `install-${format}`,
+          timeoutMs: 180_000,
+        });
+      }
       requireStatus(installationResult, [0], `${format} system installation`);
       const resolvedSystemRoot = resolve(systemRoot);
       if (!existsSync(resolvedSystemRoot) || !lstatSync(resolvedSystemRoot).isDirectory()) {
@@ -453,22 +704,14 @@ export async function runLinuxPackageSmoke({
         ? extraction.packageExecutable
         : inspected.mainExecutable;
     const launchResult = execute({
-      command: "timeout",
-      args: [
-        "--signal=TERM",
-        "--kill-after=3s",
-        `${launchTimeoutMs / 1_000}s`,
-        "xvfb-run",
-        "-a",
-        "-s",
-        "-screen 0 1280x800x24",
-        launchExecutable,
-      ],
+      command: "/usr/bin/timeout",
+      args: launchArguments(displayBackend, launchTimeoutMs, launchExecutable),
       cwd: dirname(launchExecutable),
       env: launchEnvironment(
         temporaryRoot,
         environment,
         mode === "install" && format === "appimage",
+        displayBackend,
       ),
       timeoutMs: launchTimeoutMs + 5_000,
       stage: "launch",
@@ -495,6 +738,7 @@ export async function runLinuxPackageSmoke({
         systemInstalled ? path : safeCanonicalRelative(extraction.resultRoot, path, "Sidecar"),
       ),
       launch: {
+        displayBackend,
         executable: systemInstalled ? launchExecutable : basename(launchExecutable),
         timeoutMs: launchTimeoutMs,
         observedStatus: 124,
@@ -523,7 +767,7 @@ function parseArguments(values) {
   }
   if (!options.artifacts || !options.format) {
     fail(
-      "Usage: linux-package-smoke.mjs --artifacts <directory> --format <appimage|deb|rpm> [--mode <extract|install>]",
+      "Usage: linux-package-smoke.mjs --artifacts <directory> --format <appimage|deb|rpm> [--display-backend <x11|wayland>] [--mode <extract|install>]",
     );
   }
   if (options.launchTimeoutMs !== undefined) {

@@ -35,9 +35,15 @@ receives only an allowlisted environment so CI credentials are not forwarded to 
 The runner deliberately does not treat extraction as proof that deb/rpm package-manager scripts or
 system installation work. `.github/workflows/linux-package-acceptance.yml` installs and launches
 the packages inside disposable root containers. Its matrix covers x86_64 and ARM64 on Ubuntu
-24.04 for AppImage, Debian 13 for deb, Fedora 44 for rpm, and Rocky Linux 9.8 for rpm. Required
-probe tools are `timeout` and `xvfb-run`, plus `dpkg-deb` for deb or `bash`, `rpm2cpio`, and `cpio`
-for rpm. AppImage extraction uses `--appimage-extract` and does not require FUSE.
+24.04 for AppImage, Debian 13 for deb, Fedora 44 for rpm, and Rocky Linux 10.2 for rpm. Rocky's
+base repositories do not ship the WebKitGTK 4.1 ABI required by Tauri 2, so the Rocky acceptance
+bootstrap enables the distribution's CRB repository and the community-approved EPEL repository
+before installing the RPM. Ubuntu, Debian, and Fedora run the probe through Xvfb; Rocky 10 uses
+EPEL's Weston with its headless backend and Pixman software renderer because Xvfb is not available
+there. Both paths require the GUI process to remain alive for the bounded probe window. Required
+probe tools are `timeout`, plus `xvfb-run` or `weston`, and `dpkg-deb` for deb or `bash`,
+`rpm2cpio`, and `cpio` for rpm. AppImage extraction uses `--appimage-extract` and does not require
+FUSE.
 
 The default `--mode extract` never invokes a package manager. The reusable acceptance workflow is
 called by both development and official releases and uses the explicit `--mode install`: AppImage
@@ -47,7 +53,16 @@ require root and are intended only for a disposable container. After the package
 the runner maps every previously inspected package path into the live container root, rechecks the
 desktop identity and ELF target there, and launches the installed executable. A package-manager
 failure, missing installed file, architecture mismatch, early GUI exit, or non-root invocation is
-fatal.
+fatal. The RPM probe keeps GPG verification enabled, retains downloaded packages through the
+transaction, and serializes package downloads. Only when DNF reports both unreadable cached
+packages and a failed GPG check does it run one bounded recovery sequence: clear downloaded package
+files, resolve missing dependencies with `dnf download` into an isolated directory, verify and
+remove the byte-identical downloaded copy of the application RPM, require RPM to confirm
+`signatures OK` for every remaining dependency, install that closed dependency set in one native RPM
+transaction without repository access, then install the already-inspected local Torben App RPM
+offline. Cleanup, download, application-copy comparison, dependency signature verification or
+transaction, final package installation, and every other package-manager error fail closed. The
+recovery never uses `--nogpgcheck`.
 
 `eng/desktop-package-smoke.mjs` provides the equivalent post-install inspection and sustained launch
 probe for Windows and macOS. It re-verifies release metadata, requires the runner architecture to
