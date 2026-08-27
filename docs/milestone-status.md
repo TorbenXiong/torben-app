@@ -86,27 +86,48 @@ The authoritative test-to-requirement mapping is maintained in
   [run 32909764190](https://github.com/TorbenXiong/torben-app/actions/runs/32909764190)
   passed the same Windows, macOS, and Ubuntu matrix for the exact merge commit. The scheduled
   official-catalog job was intentionally skipped because this run was triggered by a push.
+- Pull request [#9](https://github.com/TorbenXiong/torben-app/pull/9) merged the cross-platform
+  native-package acceptance fixes into `main` as commit
+  `6a00b212e2404df13b2155b996a752e07b20e3e6` on 2026-08-27.
+- The final pull-request CI
+  [run 33070388415](https://github.com/TorbenXiong/torben-app/actions/runs/33070388415)
+  passed on Windows, macOS, and Ubuntu for exact feature revision
+  `69b792efa61935e1eec3bbd3d1d684d44e454c02` before merge.
+- The feature-revision development release
+  [run 33070415451](https://github.com/TorbenXiong/torben-app/actions/runs/33070415451)
+  successfully built all six native targets, passed all fourteen native package installation and
+  sustained-launch jobs, and verified the complete six-target release set. This included Rocky
+  Linux 10.2 RPM installation on both x86_64 and ARM64. Its outputs are explicitly unsigned
+  development artifacts.
+- The post-merge `main` CI
+  [run 33072700894](https://github.com/TorbenXiong/torben-app/actions/runs/33072700894)
+  passed the Windows, macOS, and Ubuntu matrix for exact merge commit
+  `6a00b212e2404df13b2155b996a752e07b20e3e6`.
+- The post-merge `main` development release
+  [run 33072736312](https://github.com/TorbenXiong/torben-app/actions/runs/33072736312)
+  independently rebuilt all six native targets from that merge commit, passed all fourteen native
+  package installation and sustained-launch jobs, including Rocky Linux 10.2 x86_64 and ARM64,
+  and passed the complete six-target release-set verifier. Its outputs are also unsigned
+  development artifacts, not an official release.
 
 ## Evidence still requiring external state
 
 The following items are not proven by local source or simulated fixtures and must not be described
 as complete until their authoritative remote evidence exists:
 
-1. Run the manual development release and retain the six-target build plus fourteen native package
-   acceptance results, including ARM64 hosted runners and Linux distribution containers.
-2. Configure the protected `official-release` environment with reviewed Windows, Apple, and Tauri
+1. Configure the protected `official-release` environment with reviewed Windows, Apple, and Tauri
    updater credentials. Only a successful exact-version tag run can prove Authenticode signing,
    Developer ID signing, notarization, updater signatures, and immutable GitHub Release publication.
-3. Configure the protected `official-plugin-registry` environment with the offline root,
+2. Configure the protected `official-plugin-registry` environment with the offline root,
    publisher keys, and reviewed public trust root. Generate and review an artifact from committed
    production registry inputs.
-4. Provision an immutable HTTPS origin for the reviewed registry tree, then configure release builds
+3. Provision an immutable HTTPS origin for the reviewed registry tree, then configure release builds
    with its exact `registry.json` URL and trust root. Refresh and install every published plugin on
    each supported platform. Public hosting is not currently live.
-5. Record successful scheduled read-only checks against every official provider catalog. Local
+4. Record successful scheduled read-only checks against every official provider catalog. Local
    fixtures remain the default test authority for deterministic behavior, not proof of current
    upstream availability.
-6. Complete project-name, domain, trademark, and package-registry registration checks before a
+5. Complete project-name, domain, trademark, and package-registry registration checks before a
    public release. The repository's initial name collision search is not legal clearance.
 
 Until these steps are complete, locally built packages are development artifacts. Missing signing
