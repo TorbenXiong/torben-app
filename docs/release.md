@@ -54,11 +54,12 @@ the runner maps every previously inspected package path into the live container 
 desktop identity and ELF target there, and launches the installed executable. A package-manager
 failure, missing installed file, architecture mismatch, early GUI exit, or non-root invocation is
 fatal. The RPM probe keeps GPG verification enabled, retains downloaded packages through the
-transaction, and serializes package downloads so DNF's verification pass consumes a deterministic
-cache in constrained containers. Only when DNF reports both unreadable cached packages and a failed
-GPG check does it clear downloaded package files, refresh repository metadata into an isolated
-cache, and retry once with the same safety settings. Cache cleanup failure, a second installation
-failure, and every other DNF error fail closed.
+transaction, and serializes package downloads. Only when DNF reports both unreadable cached
+packages and a failed GPG check does it run one bounded recovery sequence: clear downloaded package
+files, download the resolved dependencies into an isolated directory, install that closed local set
+with `localpkg_gpgcheck=True` and every repository disabled, then install the already-inspected
+local Torben App RPM offline. Cleanup, download, dependency signature or installation, final package
+installation, and every other DNF error fail closed. The recovery never uses `--nogpgcheck`.
 
 `eng/desktop-package-smoke.mjs` provides the equivalent post-install inspection and sustained launch
 probe for Windows and macOS. It re-verifies release metadata, requires the runner architecture to

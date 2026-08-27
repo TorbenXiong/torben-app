@@ -208,18 +208,58 @@ function rpmPackageCacheCleanup(temporaryRoot, environment) {
   };
 }
 
-function rpmPackageCacheRetry(packagePath, temporaryRoot, environment) {
+function rpmDependencyDownload(packagePath, temporaryRoot, dependencyRoot, environment) {
   return {
     command: "/usr/bin/dnf",
     args: [
       "--quiet",
       "--refresh",
-      `--setopt=cachedir=${join(temporaryRoot, "dnf-retry-cache")}`,
+      `--setopt=cachedir=${join(temporaryRoot, "dnf-recovery-cache")}`,
       ...rpmDownloadSafetyOptions,
       "install",
       "--assumeyes",
+      "--downloadonly",
+      `--downloaddir=${dependencyRoot}`,
       packagePath,
     ],
+    cwd: dependencyRoot,
+    env: environment,
+  };
+}
+
+function rpmDependencyPackages(dependencyRoot) {
+  const packages = [];
+  for (const entry of readdirSync(dependencyRoot, { withFileTypes: true })) {
+    const path = join(dependencyRoot, entry.name);
+    if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".rpm")) {
+      fail(`DNF dependency download created an unexpected entry: ${path}`);
+    }
+    regularFile(path, "Downloaded RPM dependency");
+    packages.push(path);
+  }
+  return packages.sort();
+}
+
+function rpmDependencyInstallation(packages, dependencyRoot, environment) {
+  return {
+    command: "/usr/bin/dnf",
+    args: [
+      "--quiet",
+      "--disablerepo=*",
+      "--setopt=localpkg_gpgcheck=True",
+      "install",
+      "--assumeyes",
+      ...packages,
+    ],
+    cwd: dependencyRoot,
+    env: environment,
+  };
+}
+
+function rpmOfflinePackageInstallation(packagePath, temporaryRoot, environment) {
+  return {
+    command: "/usr/bin/dnf",
+    args: ["--quiet", "--disablerepo=*", "install", "--assumeyes", packagePath],
     cwd: temporaryRoot,
     env: environment,
   };
@@ -565,8 +605,25 @@ export async function runLinuxPackageSmoke({
           timeoutMs: 60_000,
         });
         requireStatus(cleanupResult, [0], "rpm package cache cleanup");
+        const dependencyRoot = join(temporaryRoot, "dnf-dependency-rpms");
+        mkdirSync(dependencyRoot, { mode: 0o700 });
+        const downloadResult = execute({
+          ...rpmDependencyDownload(packagePath, temporaryRoot, dependencyRoot, environment),
+          stage: "download-rpm-dependencies",
+          timeoutMs: 300_000,
+        });
+        requireStatus(downloadResult, [0], "rpm dependency download");
+        const dependencyPackages = rpmDependencyPackages(dependencyRoot);
+        if (dependencyPackages.length > 0) {
+          const dependencyResult = execute({
+            ...rpmDependencyInstallation(dependencyPackages, dependencyRoot, environment),
+            stage: "install-rpm-dependencies",
+            timeoutMs: 300_000,
+          });
+          requireStatus(dependencyResult, [0], "rpm signed dependency installation");
+        }
         installationResult = execute({
-          ...rpmPackageCacheRetry(packagePath, temporaryRoot, environment),
+          ...rpmOfflinePackageInstallation(packagePath, temporaryRoot, environment),
           stage: `install-${format}`,
           timeoutMs: 180_000,
         });

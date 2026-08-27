@@ -102,6 +102,14 @@ function fixtureExecutor(calls, options = {}) {
     if (stage === "clean-rpm-packages") {
       return options.cleanResult ?? { status: 0, stdout: "", stderr: "" };
     }
+    if (stage === "download-rpm-dependencies") {
+      const result = options.downloadResult ?? { status: 0, stdout: "", stderr: "" };
+      if (result.status === 0) writeFileSync(join(cwd, "dependency-fixture.rpm"), "signed-rpm");
+      return result;
+    }
+    if (stage === "install-rpm-dependencies") {
+      return options.dependencyInstallResult ?? { status: 0, stdout: "", stderr: "" };
+    }
     if (stage === "launch") {
       return options.launchResult ?? { status: 124, stdout: "", stderr: "" };
     }
@@ -419,20 +427,37 @@ test("cleans unreadable RPM cache entries once without disabling GPG verificatio
     assert.equal(result.systemInstalled, true);
     assert.deepEqual(
       calls.map((call) => call.stage),
-      ["extract-rpm", "install-rpm", "clean-rpm-packages", "install-rpm", "launch"],
+      [
+        "extract-rpm",
+        "install-rpm",
+        "clean-rpm-packages",
+        "download-rpm-dependencies",
+        "install-rpm-dependencies",
+        "install-rpm",
+        "launch",
+      ],
     );
     const cleanup = calls[2];
     assert.equal(cleanup.command, "/usr/bin/dnf");
     assert.deepEqual(cleanup.args, ["--quiet", "clean", "packages"]);
-    const retry = calls[3];
-    assert.equal(retry.command, "/usr/bin/dnf");
-    assert.equal(retry.args.includes("--refresh"), true);
-    assert.equal(retry.args.includes("--setopt=keepcache=True"), true);
-    assert.equal(retry.args.includes("--setopt=max_parallel_downloads=1"), true);
+    const download = calls[3];
+    assert.equal(download.command, "/usr/bin/dnf");
+    assert.equal(download.args.includes("--refresh"), true);
+    assert.equal(download.args.includes("--downloadonly"), true);
+    assert.equal(download.args.includes(`--downloaddir=${download.cwd}`), true);
+    assert.equal(download.args.includes("--setopt=keepcache=True"), true);
+    assert.equal(download.args.includes("--setopt=max_parallel_downloads=1"), true);
     assert.equal(
-      retry.args.includes(`--setopt=cachedir=${join(retry.cwd, "dnf-retry-cache")}`),
+      download.args.some((argument) => argument.includes("dnf-recovery-cache")),
       true,
     );
+    const dependencyInstall = calls[4];
+    assert.equal(dependencyInstall.args.includes("--disablerepo=*"), true);
+    assert.equal(dependencyInstall.args.includes("--setopt=localpkg_gpgcheck=True"), true);
+    assert.equal(dependencyInstall.args.at(-1).endsWith("dependency-fixture.rpm"), true);
+    const packageInstall = calls[5];
+    assert.equal(packageInstall.args.includes("--disablerepo=*"), true);
+    assert.equal(packageInstall.args.includes("--setopt=localpkg_gpgcheck=True"), false);
     for (const call of calls.filter((call) => call.stage.includes("rpm"))) {
       assert.equal(call.args.includes("--nogpgcheck"), false);
     }
@@ -441,7 +466,7 @@ test("cleans unreadable RPM cache entries once without disabling GPG verificatio
   }
 });
 
-test("RPM cache recovery fails closed when cleanup or the single retry fails", async (t) => {
+test("RPM cache recovery fails closed at every package-manager stage", async (t) => {
   const cacheFailure = {
     status: 1,
     stdout: "Problem opening package fixture.rpm",
@@ -481,7 +506,74 @@ test("RPM cache recovery fails closed when cleanup or the single retry fails", a
     }
   });
 
-  await t.test("retry failure", async () => {
+  await t.test("dependency download failure", async () => {
+    const root = fixtureRoot();
+    try {
+      const artifacts = await artifactFixture(root, "rpm");
+      const systemRoot = join(root, "system-root");
+      const calls = [];
+      await assert.rejects(
+        runLinuxPackageSmoke({
+          artifacts,
+          format: "rpm",
+          mode: "install",
+          repositoryRoot,
+          execute: fixtureExecutor(calls, {
+            systemRoot,
+            installResults: [cacheFailure],
+            downloadResult: { status: 1, stdout: "", stderr: "dependency download failed" },
+          }),
+          platform: "linux",
+          architecture: "x64",
+          effectiveUserId: 0,
+          systemRoot,
+        }),
+        /rpm dependency download failed with status 1: dependency download failed/,
+      );
+      assert.deepEqual(
+        calls.map((call) => call.stage),
+        ["extract-rpm", "install-rpm", "clean-rpm-packages", "download-rpm-dependencies"],
+      );
+    } finally {
+      removeFixture(root);
+    }
+  });
+
+  await t.test("dependency signature or installation failure", async () => {
+    const root = fixtureRoot();
+    try {
+      const artifacts = await artifactFixture(root, "rpm");
+      const systemRoot = join(root, "system-root");
+      const calls = [];
+      await assert.rejects(
+        runLinuxPackageSmoke({
+          artifacts,
+          format: "rpm",
+          mode: "install",
+          repositoryRoot,
+          execute: fixtureExecutor(calls, {
+            systemRoot,
+            installResults: [cacheFailure],
+            dependencyInstallResult: {
+              status: 1,
+              stdout: "",
+              stderr: "dependency signature failed",
+            },
+          }),
+          platform: "linux",
+          architecture: "x64",
+          effectiveUserId: 0,
+          systemRoot,
+        }),
+        /rpm signed dependency installation failed with status 1: dependency signature failed/,
+      );
+      assert.deepEqual(calls.at(-1).stage, "install-rpm-dependencies");
+    } finally {
+      removeFixture(root);
+    }
+  });
+
+  await t.test("offline package installation failure", async () => {
     const root = fixtureRoot();
     try {
       const artifacts = await artifactFixture(root, "rpm");
@@ -509,7 +601,14 @@ test("RPM cache recovery fails closed when cleanup or the single retry fails", a
       );
       assert.deepEqual(
         calls.map((call) => call.stage),
-        ["extract-rpm", "install-rpm", "clean-rpm-packages", "install-rpm"],
+        [
+          "extract-rpm",
+          "install-rpm",
+          "clean-rpm-packages",
+          "download-rpm-dependencies",
+          "install-rpm-dependencies",
+          "install-rpm",
+        ],
       );
     } finally {
       removeFixture(root);
