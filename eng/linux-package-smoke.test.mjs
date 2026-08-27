@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -104,7 +105,16 @@ function fixtureExecutor(calls, options = {}) {
     }
     if (stage === "download-rpm-dependencies") {
       const result = options.downloadResult ?? { status: 0, stdout: "", stderr: "" };
-      if (result.status === 0) writeFileSync(join(cwd, "dependency-fixture.rpm"), "signed-rpm");
+      if (result.status === 0) {
+        writeFileSync(join(cwd, "dependency-fixture.rpm"), "signed-rpm");
+        if (!options.omitDownloadedApplication) {
+          if (options.changedDownloadedApplication) {
+            writeFileSync(join(cwd, args.at(-1).split(/[\\/]/u).at(-1)), "changed-rpm");
+          } else {
+            copyFileSync(args.at(-1), join(cwd, args.at(-1).split(/[\\/]/u).at(-1)));
+          }
+        }
+      }
       return result;
     }
     if (stage === "install-rpm-dependencies") {
@@ -443,8 +453,9 @@ test("cleans unreadable RPM cache entries once without disabling GPG verificatio
     const download = calls[3];
     assert.equal(download.command, "/usr/bin/dnf");
     assert.equal(download.args.includes("--refresh"), true);
-    assert.equal(download.args.includes("--downloadonly"), true);
-    assert.equal(download.args.includes(`--downloaddir=${download.cwd}`), true);
+    assert.equal(download.args.includes("download"), true);
+    assert.equal(download.args.includes("--resolve"), true);
+    assert.equal(download.args.includes(`--destdir=${download.cwd}`), true);
     assert.equal(download.args.includes("--setopt=keepcache=True"), true);
     assert.equal(download.args.includes("--setopt=max_parallel_downloads=1"), true);
     assert.equal(
@@ -572,6 +583,45 @@ test("RPM cache recovery fails closed at every package-manager stage", async (t)
       removeFixture(root);
     }
   });
+
+  for (const [name, option, message] of [
+    [
+      "missing application copy",
+      "omitDownloadedApplication",
+      /Downloaded RPM under test is missing/,
+    ],
+    ["changed application copy", "changedDownloadedApplication", /changed the RPM under test/],
+  ]) {
+    await t.test(name, async () => {
+      const root = fixtureRoot();
+      try {
+        const artifacts = await artifactFixture(root, "rpm");
+        const systemRoot = join(root, "system-root");
+        const calls = [];
+        await assert.rejects(
+          runLinuxPackageSmoke({
+            artifacts,
+            format: "rpm",
+            mode: "install",
+            repositoryRoot,
+            execute: fixtureExecutor(calls, {
+              systemRoot,
+              installResults: [cacheFailure],
+              [option]: true,
+            }),
+            platform: "linux",
+            architecture: "x64",
+            effectiveUserId: 0,
+            systemRoot,
+          }),
+          message,
+        );
+        assert.equal(calls.at(-1).stage, "download-rpm-dependencies");
+      } finally {
+        removeFixture(root);
+      }
+    });
+  }
 
   await t.test("offline package installation failure", async () => {
     const root = fixtureRoot();

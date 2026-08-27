@@ -1,15 +1,20 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   realpathSync,
   rmSync,
+  unlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -64,6 +69,22 @@ function regularFile(path, description) {
     fail(`${description} must be a regular non-link file: ${path}`);
   }
   return metadata;
+}
+
+function sha256File(path) {
+  const digest = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const handle = openSync(path, "r");
+  try {
+    for (;;) {
+      const bytesRead = readSync(handle, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      digest.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    closeSync(handle);
+  }
+  return digest.digest("hex");
 }
 
 function onePackage(artifactRoot, metadata, format) {
@@ -216,10 +237,9 @@ function rpmDependencyDownload(packagePath, temporaryRoot, dependencyRoot, envir
       "--refresh",
       `--setopt=cachedir=${join(temporaryRoot, "dnf-recovery-cache")}`,
       ...rpmDownloadSafetyOptions,
-      "install",
-      "--assumeyes",
-      "--downloadonly",
-      `--downloaddir=${dependencyRoot}`,
+      "download",
+      "--resolve",
+      `--destdir=${dependencyRoot}`,
       packagePath,
     ],
     cwd: dependencyRoot,
@@ -227,7 +247,7 @@ function rpmDependencyDownload(packagePath, temporaryRoot, dependencyRoot, envir
   };
 }
 
-function rpmDependencyPackages(dependencyRoot) {
+function rpmDependencyPackages(dependencyRoot, packagePath) {
   const packages = [];
   for (const entry of readdirSync(dependencyRoot, { withFileTypes: true })) {
     const path = join(dependencyRoot, entry.name);
@@ -237,6 +257,19 @@ function rpmDependencyPackages(dependencyRoot) {
     regularFile(path, "Downloaded RPM dependency");
     packages.push(path);
   }
+  const applicationCopy = join(dependencyRoot, basename(packagePath));
+  const sourceMetadata = regularFile(packagePath, "RPM under test");
+  const copyMetadata = regularFile(applicationCopy, "Downloaded RPM under test");
+  if (
+    sourceMetadata.size !== copyMetadata.size ||
+    sha256File(packagePath) !== sha256File(applicationCopy)
+  ) {
+    fail("DNF dependency download changed the RPM under test.");
+  }
+  unlinkSync(applicationCopy);
+  const applicationIndex = packages.indexOf(applicationCopy);
+  if (applicationIndex < 0) fail("DNF dependency download omitted the RPM under test.");
+  packages.splice(applicationIndex, 1);
   return packages.sort();
 }
 
@@ -613,7 +646,7 @@ export async function runLinuxPackageSmoke({
           timeoutMs: 300_000,
         });
         requireStatus(downloadResult, [0], "rpm dependency download");
-        const dependencyPackages = rpmDependencyPackages(dependencyRoot);
+        const dependencyPackages = rpmDependencyPackages(dependencyRoot, packagePath);
         if (dependencyPackages.length > 0) {
           const dependencyResult = execute({
             ...rpmDependencyInstallation(dependencyPackages, dependencyRoot, environment),
