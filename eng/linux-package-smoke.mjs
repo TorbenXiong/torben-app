@@ -204,6 +204,22 @@ function rpmPackageCacheCleanup(temporaryRoot, environment) {
   };
 }
 
+function rpmPackageCacheRetry(packagePath, temporaryRoot, environment) {
+  return {
+    command: "/usr/bin/dnf",
+    args: [
+      "--quiet",
+      "--refresh",
+      `--setopt=cachedir=${join(temporaryRoot, "dnf-retry-cache")}`,
+      "install",
+      "--assumeyes",
+      packagePath,
+    ],
+    cwd: temporaryRoot,
+    env: environment,
+  };
+}
+
 function scanExtractedTree(root) {
   if (!existsSync(root) || !lstatSync(root).isDirectory()) {
     fail(`Package extraction did not create a directory: ${root}`);
@@ -545,7 +561,7 @@ export async function runLinuxPackageSmoke({
         });
         requireStatus(cleanupResult, [0], "rpm package cache cleanup");
         installationResult = execute({
-          ...installation,
+          ...rpmPackageCacheRetry(packagePath, temporaryRoot, environment),
           stage: `install-${format}`,
           timeoutMs: 180_000,
         });

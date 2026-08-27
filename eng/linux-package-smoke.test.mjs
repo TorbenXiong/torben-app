@@ -420,6 +420,13 @@ test("cleans unreadable RPM cache entries once without disabling GPG verificatio
     const cleanup = calls[2];
     assert.equal(cleanup.command, "/usr/bin/dnf");
     assert.deepEqual(cleanup.args, ["--quiet", "clean", "packages"]);
+    const retry = calls[3];
+    assert.equal(retry.command, "/usr/bin/dnf");
+    assert.equal(retry.args.includes("--refresh"), true);
+    assert.equal(
+      retry.args.includes(`--setopt=cachedir=${join(retry.cwd, "dnf-retry-cache")}`),
+      true,
+    );
     for (const call of calls.filter((call) => call.stage.includes("rpm"))) {
       assert.equal(call.args.includes("--nogpgcheck"), false);
     }
