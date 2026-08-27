@@ -94,9 +94,13 @@ function fixtureExecutor(calls, options = {}) {
       return { status: 0, stdout: "", stderr: "" };
     }
     if (stage === "install-deb" || stage === "install-rpm") {
-      if (options.installResult) return options.installResult;
+      const installResult = options.installResults?.shift() ?? options.installResult;
+      if (installResult) return installResult;
       writeExtractedBundle(options.systemRoot, options);
       return { status: 0, stdout: "", stderr: "" };
+    }
+    if (stage === "clean-rpm-packages") {
+      return options.cleanResult ?? { status: 0, stdout: "", stderr: "" };
     }
     if (stage === "launch") {
       return options.launchResult ?? { status: 124, stdout: "", stderr: "" };
@@ -374,6 +378,125 @@ test("system installation fails closed for non-root and package-manager errors",
       assert.deepEqual(
         calls.map((call) => call.stage),
         ["extract-deb", "install-deb"],
+      );
+    } finally {
+      removeFixture(root);
+    }
+  });
+});
+
+test("cleans unreadable RPM cache entries once without disabling GPG verification", async () => {
+  const root = fixtureRoot();
+  try {
+    const artifacts = await artifactFixture(root, "rpm");
+    const systemRoot = join(root, "system-root");
+    const calls = [];
+    const result = await runLinuxPackageSmoke({
+      artifacts,
+      format: "rpm",
+      mode: "install",
+      repositoryRoot,
+      execute: fixtureExecutor(calls, {
+        systemRoot,
+        installResults: [
+          {
+            status: 1,
+            stdout: "",
+            stderr: "Problem opening package fixture.rpm\nError: GPG check FAILED",
+          },
+        ],
+      }),
+      platform: "linux",
+      architecture: "x64",
+      effectiveUserId: 0,
+      systemRoot,
+    });
+
+    assert.equal(result.systemInstalled, true);
+    assert.deepEqual(
+      calls.map((call) => call.stage),
+      ["extract-rpm", "install-rpm", "clean-rpm-packages", "install-rpm", "launch"],
+    );
+    const cleanup = calls[2];
+    assert.equal(cleanup.command, "/usr/bin/dnf");
+    assert.deepEqual(cleanup.args, ["--quiet", "clean", "packages"]);
+    for (const call of calls.filter((call) => call.stage.includes("rpm"))) {
+      assert.equal(call.args.includes("--nogpgcheck"), false);
+    }
+  } finally {
+    removeFixture(root);
+  }
+});
+
+test("RPM cache recovery fails closed when cleanup or the single retry fails", async (t) => {
+  const cacheFailure = {
+    status: 1,
+    stdout: "Problem opening package fixture.rpm",
+    stderr: "Error: GPG check FAILED",
+  };
+
+  await t.test("cleanup failure", async () => {
+    const root = fixtureRoot();
+    try {
+      const artifacts = await artifactFixture(root, "rpm");
+      const systemRoot = join(root, "system-root");
+      const calls = [];
+      await assert.rejects(
+        runLinuxPackageSmoke({
+          artifacts,
+          format: "rpm",
+          mode: "install",
+          repositoryRoot,
+          execute: fixtureExecutor(calls, {
+            systemRoot,
+            installResults: [cacheFailure],
+            cleanResult: { status: 1, stdout: "", stderr: "cache cleanup failed" },
+          }),
+          platform: "linux",
+          architecture: "x64",
+          effectiveUserId: 0,
+          systemRoot,
+        }),
+        /rpm package cache cleanup failed with status 1: cache cleanup failed/,
+      );
+      assert.deepEqual(
+        calls.map((call) => call.stage),
+        ["extract-rpm", "install-rpm", "clean-rpm-packages"],
+      );
+    } finally {
+      removeFixture(root);
+    }
+  });
+
+  await t.test("retry failure", async () => {
+    const root = fixtureRoot();
+    try {
+      const artifacts = await artifactFixture(root, "rpm");
+      const systemRoot = join(root, "system-root");
+      const calls = [];
+      await assert.rejects(
+        runLinuxPackageSmoke({
+          artifacts,
+          format: "rpm",
+          mode: "install",
+          repositoryRoot,
+          execute: fixtureExecutor(calls, {
+            systemRoot,
+            installResults: [
+              cacheFailure,
+              { status: 1, stdout: "", stderr: "GPG check still failed" },
+            ],
+          }),
+          platform: "linux",
+          architecture: "x64",
+          effectiveUserId: 0,
+          systemRoot,
+        }),
+        /rpm system installation failed with status 1: GPG check still failed/,
+      );
+      assert.deepEqual(
+        calls.map((call) => call.stage),
+        ["extract-rpm", "install-rpm", "clean-rpm-packages", "install-rpm"],
       );
     } finally {
       removeFixture(root);

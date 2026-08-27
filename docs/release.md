@@ -53,7 +53,9 @@ require root and are intended only for a disposable container. After the package
 the runner maps every previously inspected package path into the live container root, rechecks the
 desktop identity and ELF target there, and launches the installed executable. A package-manager
 failure, missing installed file, architecture mismatch, early GUI exit, or non-root invocation is
-fatal.
+fatal. The RPM probe keeps GPG verification enabled; only when DNF reports both unreadable cached
+packages and a failed GPG check does it clear downloaded package files and retry once. Cache cleanup
+failure, a second installation failure, and every other DNF error fail closed.
 
 `eng/desktop-package-smoke.mjs` provides the equivalent post-install inspection and sustained launch
 probe for Windows and macOS. It re-verifies release metadata, requires the runner architecture to

@@ -189,6 +189,21 @@ function installationCommand(format, packagePath, temporaryRoot, environment) {
   fail(`System installation is not defined for ${format}.`);
 }
 
+function rpmPackageCacheFailure(result) {
+  if (result.error || result.status === 0) return false;
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  return output.includes("Problem opening package ") && output.includes("GPG check FAILED");
+}
+
+function rpmPackageCacheCleanup(temporaryRoot, environment) {
+  return {
+    command: "/usr/bin/dnf",
+    args: ["--quiet", "clean", "packages"],
+    cwd: temporaryRoot,
+    env: environment,
+  };
+}
+
 function scanExtractedTree(root) {
   if (!existsSync(root) || !lstatSync(root).isDirectory()) {
     fail(`Package extraction did not create a directory: ${root}`);
@@ -517,11 +532,24 @@ export async function runLinuxPackageSmoke({
     let systemInstalled = false;
     if (mode === "install" && format !== "appimage") {
       const installation = installationCommand(format, packagePath, temporaryRoot, environment);
-      const installationResult = execute({
+      let installationResult = execute({
         ...installation,
         stage: `install-${format}`,
         timeoutMs: 180_000,
       });
+      if (format === "rpm" && rpmPackageCacheFailure(installationResult)) {
+        const cleanupResult = execute({
+          ...rpmPackageCacheCleanup(temporaryRoot, environment),
+          stage: "clean-rpm-packages",
+          timeoutMs: 60_000,
+        });
+        requireStatus(cleanupResult, [0], "rpm package cache cleanup");
+        installationResult = execute({
+          ...installation,
+          stage: `install-${format}`,
+          timeoutMs: 180_000,
+        });
+      }
       requireStatus(installationResult, [0], `${format} system installation`);
       const resolvedSystemRoot = resolve(systemRoot);
       if (!existsSync(resolvedSystemRoot) || !lstatSync(resolvedSystemRoot).isDirectory()) {
