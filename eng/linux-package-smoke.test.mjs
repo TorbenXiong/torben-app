@@ -256,6 +256,10 @@ test("installs deb and rpm packages only through their native manager before lau
         assert.equal(installation.command, format === "deb" ? "/usr/bin/apt-get" : "/usr/bin/dnf");
         assert.equal(installation.args.at(-1).endsWith(`.${format}`), true);
         assert.equal(installation.args[0], format === "deb" ? "--quiet=2" : "--quiet");
+        if (format === "rpm") {
+          assert.equal(installation.args.includes("--setopt=keepcache=True"), true);
+          assert.equal(installation.args.includes("--setopt=max_parallel_downloads=1"), true);
+        }
         assert.ok(calls[2].args.at(-1).startsWith(realpathSync(systemRoot)));
       } finally {
         removeFixture(root);
@@ -423,6 +427,8 @@ test("cleans unreadable RPM cache entries once without disabling GPG verificatio
     const retry = calls[3];
     assert.equal(retry.command, "/usr/bin/dnf");
     assert.equal(retry.args.includes("--refresh"), true);
+    assert.equal(retry.args.includes("--setopt=keepcache=True"), true);
+    assert.equal(retry.args.includes("--setopt=max_parallel_downloads=1"), true);
     assert.equal(
       retry.args.includes(`--setopt=cachedir=${join(retry.cwd, "dnf-retry-cache")}`),
       true,

@@ -36,6 +36,10 @@ const maximumExtractedEntries = 20_000;
 const maximumCommandOutput = 4 * 1024 * 1024;
 const defaultLaunchTimeoutMs = 8_000;
 const displayBackends = new Set(["x11", "wayland"]);
+const rpmDownloadSafetyOptions = Object.freeze([
+  "--setopt=keepcache=True",
+  "--setopt=max_parallel_downloads=1",
+]);
 
 function fail(message) {
   throw new Error(message);
@@ -181,7 +185,7 @@ function installationCommand(format, packagePath, temporaryRoot, environment) {
   if (format === "rpm") {
     return {
       command: "/usr/bin/dnf",
-      args: ["--quiet", "install", "--assumeyes", packagePath],
+      args: ["--quiet", ...rpmDownloadSafetyOptions, "install", "--assumeyes", packagePath],
       cwd: temporaryRoot,
       env: environment,
     };
@@ -211,6 +215,7 @@ function rpmPackageCacheRetry(packagePath, temporaryRoot, environment) {
       "--quiet",
       "--refresh",
       `--setopt=cachedir=${join(temporaryRoot, "dnf-retry-cache")}`,
+      ...rpmDownloadSafetyOptions,
       "install",
       "--assumeyes",
       packagePath,
