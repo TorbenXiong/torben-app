@@ -231,12 +231,19 @@ test("development workflow pins approved Actions and cannot publish an official 
   assert.match(acceptanceWorkflow, /shell: \/bin\/sh -e \{0\}/);
   const rockyBootstrap = acceptanceWorkflow.match(/ {12}rocky\)\r?\n([\s\S]*?) {14};;/)?.[1];
   assert.ok(rockyBootstrap, "Rocky Linux acceptance bootstrap is missing");
-  const rockyPackages = rockyBootstrap.match(/microdnf install --assumeyes \\\r?\n([\s\S]*)/)?.[1];
+  const rockyPackages = rockyBootstrap.match(
+    /microdnf install --assumeyes \\\r?\n([\s\S]*?) {14}dnf config-manager/,
+  )?.[1];
   assert.ok(rockyPackages, "Rocky Linux microdnf package list is missing");
   assert.doesNotMatch(rockyPackages, /(?:^|\s)coreutils(?:\s|\\|$)/m);
   assert.match(rockyPackages, /(?:^|\s)dnf-plugins-core(?:\s|\\|$)/m);
   assert.match(rockyPackages, /(?:^|\s)epel-release(?:\s|\\|$)/m);
+  assert.doesNotMatch(rockyPackages, /(?:^|\s)xorg-x11-server-Xvfb(?:\s|\\|$)/m);
   assert.match(rockyBootstrap, /dnf config-manager --set-enabled crb/);
+  assert.match(
+    rockyBootstrap,
+    /dnf config-manager --set-enabled crb\r?\n {14}dnf install --assumeyes xorg-x11-server-Xvfb/,
+  );
   assert.doesNotMatch(acceptanceWorkflow, /continue-on-error|secrets\./);
   const acceptanceImages = [...acceptanceWorkflow.matchAll(/^\s+image: (\S+)$/gm)]
     .map((match) => match[1])

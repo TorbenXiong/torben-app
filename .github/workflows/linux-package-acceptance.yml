@@ -73,9 +73,9 @@ jobs:
               # the RPM under test is installed. Tauri 2 requires WebKitGTK 4.1,
               # which Rocky Linux 10 provides through EPEL with CRB enabled.
               microdnf install --assumeyes \
-                bash ca-certificates cpio dnf dnf-plugins-core epel-release findutils git rpm tar which xz \
-                xorg-x11-server-Xvfb
+                bash ca-certificates cpio dnf dnf-plugins-core epel-release findutils git rpm tar which xz
               dnf config-manager --set-enabled crb
+              dnf install --assumeyes xorg-x11-server-Xvfb
               ;;
             *)
               echo "Unsupported acceptance bootstrap: ${{ matrix.distribution.bootstrap }}" >&2
