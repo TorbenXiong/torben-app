@@ -171,6 +171,11 @@ test("verifies package contents and a sustained isolated launch for every Linux 
           assert.equal(calls[0].command, "/bin/bash");
           assert.match(calls[0].args[1], /\/usr\/bin\/rpm2cpio/);
           assert.match(calls[0].args[1], /\/usr\/bin\/cpio/);
+          assert.doesNotMatch(calls[0].args[1], /rpm2cpio[^\n]+\|[^\n]+cpio/);
+          assert.match(calls[0].args[1], /"\$rpm_status" -ne 0 && "\$rpm_status" -ne 1/);
+          assert.match(calls[0].args[1], /\[\[ ! -s "\$archive" \]\]/);
+          assert.match(calls[0].args[1], /"\$cpio_status" -ne 0/);
+          assert.ok(calls[0].args.at(-1).endsWith("payload.cpio"));
         }
         const launch = calls[1];
         assert.equal(launch.command, "/usr/bin/timeout");
@@ -374,6 +379,38 @@ test("system installation fails closed for non-root and package-manager errors",
       removeFixture(root);
     }
   });
+});
+
+test("rejects every non-zero RPM extraction command result", async () => {
+  const root = fixtureRoot();
+  try {
+    const artifacts = await artifactFixture(root, "rpm");
+    const calls = [];
+    await assert.rejects(
+      runLinuxPackageSmoke({
+        artifacts,
+        format: "rpm",
+        repositoryRoot,
+        execute: (options) => {
+          calls.push(options);
+          return {
+            status: 1,
+            stdout: "",
+            stderr: "cpio failed with status 1",
+          };
+        },
+        platform: "linux",
+        architecture: "x64",
+      }),
+      /rpm extraction failed with status 1: cpio failed with status 1/,
+    );
+    assert.deepEqual(
+      calls.map((call) => call.stage),
+      ["extract-rpm"],
+    );
+  } finally {
+    removeFixture(root);
+  }
 });
 
 test("fails before extraction when the native host architecture does not match", async () => {

@@ -133,9 +133,36 @@ function extractionCommand(format, packagePath, temporaryRoot, extractedRoot) {
     command: "/bin/bash",
     args: [
       "-c",
-      'set -o pipefail; /usr/bin/rpm2cpio "$1" | /usr/bin/cpio -idm --quiet --no-absolute-filenames',
+      `set -euo pipefail
+archive="$2"
+cleanup() {
+  /usr/bin/rm -f -- "$archive"
+}
+trap cleanup EXIT
+umask 077
+set +e
+/usr/bin/rpm2cpio "$1" >"$archive"
+rpm_status=$?
+set -e
+if [[ "$rpm_status" -ne 0 && "$rpm_status" -ne 1 ]]; then
+  echo "rpm2cpio failed with status $rpm_status" >&2
+  exit "$rpm_status"
+fi
+if [[ ! -s "$archive" ]]; then
+  echo "rpm2cpio produced an empty archive with status $rpm_status" >&2
+  exit 90
+fi
+set +e
+/usr/bin/cpio -idm --quiet --no-absolute-filenames <"$archive"
+cpio_status=$?
+set -e
+if [[ "$cpio_status" -ne 0 ]]; then
+  echo "cpio failed with status $cpio_status" >&2
+  exit "$cpio_status"
+fi`,
       "torben-rpm-extract",
       packagePath,
+      join(temporaryRoot, "payload.cpio"),
     ],
     cwd: extractedRoot,
     resultRoot: extractedRoot,
