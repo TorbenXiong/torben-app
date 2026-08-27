@@ -35,6 +35,7 @@ const sidecarNames = Object.freeze([
 const maximumExtractedEntries = 20_000;
 const maximumCommandOutput = 4 * 1024 * 1024;
 const defaultLaunchTimeoutMs = 8_000;
+const displayBackends = new Set(["x11", "wayland"]);
 
 function fail(message) {
   throw new Error(message);
@@ -345,7 +346,7 @@ function hostArchitecture(value) {
   fail(`Unsupported Linux smoke-test host architecture: ${value}`);
 }
 
-function launchEnvironment(temporaryRoot, baseEnvironment, appImageExtractAndRun) {
+function launchEnvironment(temporaryRoot, baseEnvironment, appImageExtractAndRun, displayBackend) {
   const directories = {
     XDG_DATA_HOME: join(temporaryRoot, "xdg", "data"),
     XDG_CONFIG_HOME: join(temporaryRoot, "xdg", "config"),
@@ -367,15 +368,72 @@ function launchEnvironment(temporaryRoot, baseEnvironment, appImageExtractAndRun
   }
   const result = {
     ...environment,
-    GDK_BACKEND: "x11",
+    GDK_BACKEND: displayBackend,
     WEBKIT_DISABLE_COMPOSITING_MODE: "1",
   };
   if (appImageExtractAndRun) result.APPIMAGE_EXTRACT_AND_RUN = "1";
   return result;
 }
 
+function launchArguments(displayBackend, launchTimeoutMs, launchExecutable) {
+  const timeoutArguments = ["--signal=TERM", "--kill-after=3s", `${launchTimeoutMs / 1_000}s`];
+  if (displayBackend === "x11") {
+    return [
+      ...timeoutArguments,
+      "/usr/bin/xvfb-run",
+      "-a",
+      "-s",
+      "-screen 0 1280x800x24",
+      launchExecutable,
+    ];
+  }
+  return [
+    ...timeoutArguments,
+    "/bin/bash",
+    "-c",
+    `set -euo pipefail
+socket="wayland-torben-smoke"
+weston_log="$XDG_RUNTIME_DIR/weston.log"
+weston_pid=""
+app_pid=""
+cleanup() {
+  if [[ -n "$app_pid" ]]; then kill "$app_pid" 2>/dev/null || true; fi
+  if [[ -n "$weston_pid" ]]; then kill "$weston_pid" 2>/dev/null || true; fi
+  if [[ -n "$app_pid" ]]; then wait "$app_pid" 2>/dev/null || true; fi
+  if [[ -n "$weston_pid" ]]; then wait "$weston_pid" 2>/dev/null || true; fi
+}
+on_signal() {
+  cleanup
+  exit 143
+}
+trap cleanup EXIT
+trap on_signal TERM INT
+/usr/bin/weston --backend=headless-backend.so --renderer=pixman --socket="$socket" --idle-time=0 --no-config >"$weston_log" 2>&1 &
+weston_pid=$!
+for ((attempt = 0; attempt < 100; attempt += 1)); do
+  if [[ -S "$XDG_RUNTIME_DIR/$socket" ]]; then break; fi
+  if ! kill -0 "$weston_pid" 2>/dev/null; then
+    cat "$weston_log" >&2
+    exit 1
+  fi
+  /usr/bin/sleep 0.05
+done
+if [[ ! -S "$XDG_RUNTIME_DIR/$socket" ]]; then
+  cat "$weston_log" >&2
+  exit 1
+fi
+export WAYLAND_DISPLAY="$socket"
+"$1" &
+app_pid=$!
+wait "$app_pid"`,
+    "torben-wayland-launch",
+    launchExecutable,
+  ];
+}
+
 export async function runLinuxPackageSmoke({
   artifacts,
+  displayBackend = "x11",
   format,
   launchTimeoutMs = defaultLaunchTimeoutMs,
   repositoryRoot,
@@ -390,6 +448,9 @@ export async function runLinuxPackageSmoke({
 }) {
   if (platform !== "linux") fail("Linux package smoke tests require a Linux host.");
   if (!Object.hasOwn(packageSuffixes, format)) fail(`Unsupported Linux package format: ${format}`);
+  if (!displayBackends.has(displayBackend)) {
+    fail("Linux package smoke-test display backend must be x11 or wayland.");
+  }
   if (!new Set(["extract", "install"]).has(mode)) {
     fail("Linux package smoke-test mode must be extract or install.");
   }
@@ -454,21 +515,13 @@ export async function runLinuxPackageSmoke({
         : inspected.mainExecutable;
     const launchResult = execute({
       command: "/usr/bin/timeout",
-      args: [
-        "--signal=TERM",
-        "--kill-after=3s",
-        `${launchTimeoutMs / 1_000}s`,
-        "/usr/bin/xvfb-run",
-        "-a",
-        "-s",
-        "-screen 0 1280x800x24",
-        launchExecutable,
-      ],
+      args: launchArguments(displayBackend, launchTimeoutMs, launchExecutable),
       cwd: dirname(launchExecutable),
       env: launchEnvironment(
         temporaryRoot,
         environment,
         mode === "install" && format === "appimage",
+        displayBackend,
       ),
       timeoutMs: launchTimeoutMs + 5_000,
       stage: "launch",
@@ -495,6 +548,7 @@ export async function runLinuxPackageSmoke({
         systemInstalled ? path : safeCanonicalRelative(extraction.resultRoot, path, "Sidecar"),
       ),
       launch: {
+        displayBackend,
         executable: systemInstalled ? launchExecutable : basename(launchExecutable),
         timeoutMs: launchTimeoutMs,
         observedStatus: 124,
@@ -523,7 +577,7 @@ function parseArguments(values) {
   }
   if (!options.artifacts || !options.format) {
     fail(
-      "Usage: linux-package-smoke.mjs --artifacts <directory> --format <appimage|deb|rpm> [--mode <extract|install>]",
+      "Usage: linux-package-smoke.mjs --artifacts <directory> --format <appimage|deb|rpm> [--display-backend <x11|wayland>] [--mode <extract|install>]",
     );
   }
   if (options.launchTimeoutMs !== undefined) {

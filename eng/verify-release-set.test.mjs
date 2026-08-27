@@ -238,11 +238,15 @@ test("development workflow pins approved Actions and cannot publish an official 
   assert.doesNotMatch(rockyPackages, /(?:^|\s)coreutils(?:\s|\\|$)/m);
   assert.match(rockyPackages, /(?:^|\s)dnf-plugins-core(?:\s|\\|$)/m);
   assert.match(rockyPackages, /(?:^|\s)epel-release(?:\s|\\|$)/m);
-  assert.doesNotMatch(rockyPackages, /(?:^|\s)xorg-x11-server-Xvfb(?:\s|\\|$)/m);
+  assert.doesNotMatch(rockyPackages, /(?:^|\s)(?:weston|xorg-x11-server-Xvfb)(?:\s|\\|$)/m);
   assert.match(rockyBootstrap, /dnf config-manager --set-enabled crb/);
   assert.match(
     rockyBootstrap,
-    /dnf config-manager --set-enabled crb\r?\n {14}dnf install --assumeyes xorg-x11-server-Xvfb/,
+    /dnf config-manager --set-enabled crb\r?\n {14}dnf install --assumeyes weston/,
+  );
+  assert.match(
+    acceptanceWorkflow,
+    /--display-backend \$\{\{ matrix\.distribution\.display_backend \}\}/,
   );
   assert.doesNotMatch(acceptanceWorkflow, /continue-on-error|secrets\./);
   const acceptanceImages = [...acceptanceWorkflow.matchAll(/^\s+image: (\S+)$/gm)]

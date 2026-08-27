@@ -161,6 +161,7 @@ test("verifies package contents and a sustained isolated launch for every Linux 
         assert.equal(result.target, "x86_64-unknown-linux-gnu");
         assert.equal(result.sidecars.length, 7);
         assert.equal(result.launch.observedStatus, 124);
+        assert.equal(result.launch.displayBackend, "x11");
         assert.deepEqual(
           calls.map((call) => call.stage),
           [`extract-${format}`, "launch"],
@@ -183,6 +184,35 @@ test("verifies package contents and a sustained isolated launch for every Linux 
         removeFixture(root);
       }
     });
+  }
+});
+
+test("launches through a bounded headless Weston session when Wayland is selected", async () => {
+  const root = fixtureRoot();
+  try {
+    const artifacts = await artifactFixture(root, "rpm");
+    const calls = [];
+    const result = await runLinuxPackageSmoke({
+      artifacts,
+      displayBackend: "wayland",
+      format: "rpm",
+      repositoryRoot,
+      execute: fixtureExecutor(calls),
+      platform: "linux",
+      architecture: "x64",
+    });
+
+    const launch = calls[1];
+    assert.equal(result.launch.displayBackend, "wayland");
+    assert.equal(launch.command, "/usr/bin/timeout");
+    assert.ok(launch.args.includes("/bin/bash"));
+    assert.match(launch.args.at(-3), /\/usr\/bin\/weston/);
+    assert.match(launch.args.at(-3), /--backend=headless-backend\.so/);
+    assert.match(launch.args.at(-3), /--renderer=pixman/);
+    assert.equal(launch.args.at(-1).endsWith("torben-desktop"), true);
+    assert.equal(launch.env.GDK_BACKEND, "wayland");
+  } finally {
+    removeFixture(root);
   }
 });
 
@@ -368,6 +398,25 @@ test("fails before extraction when the native host architecture does not match",
   } finally {
     removeFixture(root);
   }
+});
+
+test("rejects an unsupported display backend before reading artifacts", async () => {
+  let executed = false;
+  await assert.rejects(
+    runLinuxPackageSmoke({
+      artifacts: "unused",
+      displayBackend: "virtual",
+      format: "rpm",
+      repositoryRoot,
+      execute: () => {
+        executed = true;
+      },
+      platform: "linux",
+      architecture: "x64",
+    }),
+    /display backend must be x11 or wayland/,
+  );
+  assert.equal(executed, false);
 });
 
 test("rejects missing sidecars and an application that exits before the launch window", async (t) => {

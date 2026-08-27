@@ -38,9 +38,12 @@ the packages inside disposable root containers. Its matrix covers x86_64 and ARM
 24.04 for AppImage, Debian 13 for deb, Fedora 44 for rpm, and Rocky Linux 10.2 for rpm. Rocky's
 base repositories do not ship the WebKitGTK 4.1 ABI required by Tauri 2, so the Rocky acceptance
 bootstrap enables the distribution's CRB repository and the community-approved EPEL repository
-before installing the RPM. Required probe tools are `timeout` and `xvfb-run`, plus `dpkg-deb` for
-deb or `bash`, `rpm2cpio`, and `cpio` for rpm. AppImage extraction uses `--appimage-extract` and
-does not require FUSE.
+before installing the RPM. Ubuntu, Debian, and Fedora run the probe through Xvfb; Rocky 10 uses
+EPEL's Weston with its headless backend and Pixman software renderer because Xvfb is not available
+there. Both paths require the GUI process to remain alive for the bounded probe window. Required
+probe tools are `timeout`, plus `xvfb-run` or `weston`, and `dpkg-deb` for deb or `bash`,
+`rpm2cpio`, and `cpio` for rpm. AppImage extraction uses `--appimage-extract` and does not require
+FUSE.
 
 The default `--mode extract` never invokes a package manager. The reusable acceptance workflow is
 called by both development and official releases and uses the explicit `--mode install`: AppImage
