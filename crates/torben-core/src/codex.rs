@@ -1269,13 +1269,16 @@ fn io_error(error: std::io::Error) -> TorbenError {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{HashMap, VecDeque},
+        collections::HashMap,
         io::{Read as _, Write as _},
         net::TcpListener,
         sync::Arc,
         thread,
         time::{Duration, Instant},
     };
+
+    #[cfg(windows)]
+    use std::collections::VecDeque;
 
     #[cfg(windows)]
     use sha2::{Digest, Sha256};
@@ -1663,6 +1666,7 @@ mod tests {
         )
     }
 
+    #[cfg(windows)]
     fn spawn_fixture_server(
         listener: TcpListener,
         routes: Vec<(String, Vec<u8>)>,
