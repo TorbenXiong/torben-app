@@ -273,17 +273,35 @@ function rpmDependencyPackages(dependencyRoot, packagePath) {
   return packages.sort();
 }
 
+function rpmDependencySignatureVerification(packages, dependencyRoot, environment) {
+  return {
+    command: "/usr/bin/rpm",
+    args: ["--checksig", ...packages],
+    cwd: dependencyRoot,
+    env: { ...environment, LC_ALL: "C" },
+  };
+}
+
+function requireRpmDependencySignatures(result, expectedCount) {
+  requireStatus(result, [0], "rpm dependency signature verification");
+  const confirmations = String(result.stdout)
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (
+    confirmations.length !== expectedCount ||
+    confirmations.some((line) => !/:\s+digests signatures OK$/u.test(line))
+  ) {
+    fail(
+      `RPM did not confirm signatures for every downloaded dependency: expected ${expectedCount}, received ${confirmations.length}.`,
+    );
+  }
+}
+
 function rpmDependencyInstallation(packages, dependencyRoot, environment) {
   return {
-    command: "/usr/bin/dnf",
-    args: [
-      "--quiet",
-      "--disablerepo=*",
-      "--setopt=localpkg_gpgcheck=True",
-      "install",
-      "--assumeyes",
-      ...packages,
-    ],
+    command: "/usr/bin/rpm",
+    args: ["--install", ...packages],
     cwd: dependencyRoot,
     env: environment,
   };
@@ -648,12 +666,18 @@ export async function runLinuxPackageSmoke({
         requireStatus(downloadResult, [0], "rpm dependency download");
         const dependencyPackages = rpmDependencyPackages(dependencyRoot, packagePath);
         if (dependencyPackages.length > 0) {
+          const signatureResult = execute({
+            ...rpmDependencySignatureVerification(dependencyPackages, dependencyRoot, environment),
+            stage: "verify-rpm-dependency-signatures",
+            timeoutMs: 120_000,
+          });
+          requireRpmDependencySignatures(signatureResult, dependencyPackages.length);
           const dependencyResult = execute({
             ...rpmDependencyInstallation(dependencyPackages, dependencyRoot, environment),
             stage: "install-rpm-dependencies",
             timeoutMs: 300_000,
           });
-          requireStatus(dependencyResult, [0], "rpm signed dependency installation");
+          requireStatus(dependencyResult, [0], "rpm dependency transaction");
         }
         installationResult = execute({
           ...rpmOfflinePackageInstallation(packagePath, temporaryRoot, environment),

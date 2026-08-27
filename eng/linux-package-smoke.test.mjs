@@ -117,6 +117,18 @@ function fixtureExecutor(calls, options = {}) {
       }
       return result;
     }
+    if (stage === "verify-rpm-dependency-signatures") {
+      return (
+        options.dependencySignatureResult ?? {
+          status: 0,
+          stdout: `${args
+            .slice(1)
+            .map((path) => `${path}: digests signatures OK`)
+            .join("\n")}\n`,
+          stderr: "",
+        }
+      );
+    }
     if (stage === "install-rpm-dependencies") {
       return options.dependencyInstallResult ?? { status: 0, stdout: "", stderr: "" };
     }
@@ -442,6 +454,7 @@ test("cleans unreadable RPM cache entries once without disabling GPG verificatio
         "install-rpm",
         "clean-rpm-packages",
         "download-rpm-dependencies",
+        "verify-rpm-dependency-signatures",
         "install-rpm-dependencies",
         "install-rpm",
         "launch",
@@ -462,11 +475,15 @@ test("cleans unreadable RPM cache entries once without disabling GPG verificatio
       download.args.some((argument) => argument.includes("dnf-recovery-cache")),
       true,
     );
-    const dependencyInstall = calls[4];
-    assert.equal(dependencyInstall.args.includes("--disablerepo=*"), true);
-    assert.equal(dependencyInstall.args.includes("--setopt=localpkg_gpgcheck=True"), true);
+    const signatureVerification = calls[4];
+    assert.equal(signatureVerification.command, "/usr/bin/rpm");
+    assert.equal(signatureVerification.args[0], "--checksig");
+    assert.equal(signatureVerification.env.LC_ALL, "C");
+    const dependencyInstall = calls[5];
+    assert.equal(dependencyInstall.command, "/usr/bin/rpm");
+    assert.equal(dependencyInstall.args[0], "--install");
     assert.equal(dependencyInstall.args.at(-1).endsWith("dependency-fixture.rpm"), true);
-    const packageInstall = calls[5];
+    const packageInstall = calls[6];
     assert.equal(packageInstall.args.includes("--disablerepo=*"), true);
     assert.equal(packageInstall.args.includes("--setopt=localpkg_gpgcheck=True"), false);
     for (const call of calls.filter((call) => call.stage.includes("rpm"))) {
@@ -550,7 +567,75 @@ test("RPM cache recovery fails closed at every package-manager stage", async (t)
     }
   });
 
-  await t.test("dependency signature or installation failure", async () => {
+  await t.test("dependency signature command failure", async () => {
+    const root = fixtureRoot();
+    try {
+      const artifacts = await artifactFixture(root, "rpm");
+      const systemRoot = join(root, "system-root");
+      const calls = [];
+      await assert.rejects(
+        runLinuxPackageSmoke({
+          artifacts,
+          format: "rpm",
+          mode: "install",
+          repositoryRoot,
+          execute: fixtureExecutor(calls, {
+            systemRoot,
+            installResults: [cacheFailure],
+            dependencySignatureResult: {
+              status: 1,
+              stdout: "",
+              stderr: "dependency signature failed",
+            },
+          }),
+          platform: "linux",
+          architecture: "x64",
+          effectiveUserId: 0,
+          systemRoot,
+        }),
+        /rpm dependency signature verification failed with status 1: dependency signature failed/,
+      );
+      assert.deepEqual(calls.at(-1).stage, "verify-rpm-dependency-signatures");
+    } finally {
+      removeFixture(root);
+    }
+  });
+
+  await t.test("dependency signature output is incomplete", async () => {
+    const root = fixtureRoot();
+    try {
+      const artifacts = await artifactFixture(root, "rpm");
+      const systemRoot = join(root, "system-root");
+      const calls = [];
+      await assert.rejects(
+        runLinuxPackageSmoke({
+          artifacts,
+          format: "rpm",
+          mode: "install",
+          repositoryRoot,
+          execute: fixtureExecutor(calls, {
+            systemRoot,
+            installResults: [cacheFailure],
+            dependencySignatureResult: {
+              status: 0,
+              stdout: "dependency-fixture.rpm: digests OK\n",
+              stderr: "",
+            },
+          }),
+          platform: "linux",
+          architecture: "x64",
+          effectiveUserId: 0,
+          systemRoot,
+        }),
+        /RPM did not confirm signatures for every downloaded dependency/,
+      );
+      assert.deepEqual(calls.at(-1).stage, "verify-rpm-dependency-signatures");
+    } finally {
+      removeFixture(root);
+    }
+  });
+
+  await t.test("dependency transaction failure", async () => {
     const root = fixtureRoot();
     try {
       const artifacts = await artifactFixture(root, "rpm");
@@ -568,7 +653,7 @@ test("RPM cache recovery fails closed at every package-manager stage", async (t)
             dependencyInstallResult: {
               status: 1,
               stdout: "",
-              stderr: "dependency signature failed",
+              stderr: "dependency transaction failed",
             },
           }),
           platform: "linux",
@@ -576,7 +661,7 @@ test("RPM cache recovery fails closed at every package-manager stage", async (t)
           effectiveUserId: 0,
           systemRoot,
         }),
-        /rpm signed dependency installation failed with status 1: dependency signature failed/,
+        /rpm dependency transaction failed with status 1: dependency transaction failed/,
       );
       assert.deepEqual(calls.at(-1).stage, "install-rpm-dependencies");
     } finally {
@@ -656,6 +741,7 @@ test("RPM cache recovery fails closed at every package-manager stage", async (t)
           "install-rpm",
           "clean-rpm-packages",
           "download-rpm-dependencies",
+          "verify-rpm-dependency-signatures",
           "install-rpm-dependencies",
           "install-rpm",
         ],
