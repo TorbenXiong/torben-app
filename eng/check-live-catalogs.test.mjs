@@ -125,11 +125,11 @@ test("rejects empty, duplicate, and unrecommended catalog data", () => {
   }
 });
 
-test("scheduled CI builds and verifies every official provider through the real CLI", () => {
+test("scheduled CI and its manual preflight verify every official provider through the real CLI", () => {
   const workflow = readFileSync(join(repositoryRoot, ".github", "workflows", "ci.yml"), "utf8");
   assert.match(
     workflow,
-    /^ {2}live-official-catalogs:\r?\n {4}if: github\.event_name == 'schedule'$/m,
+    /^ {2}live-official-catalogs:\r?\n {4}if: github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'$/m,
   );
   assert.match(
     workflow,

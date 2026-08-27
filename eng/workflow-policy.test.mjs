@@ -51,6 +51,21 @@ test("ordinary CI runs locked lint and test gates", () => {
   assert.match(ci, /cargo test --workspace --locked/u);
 });
 
+test("official catalog checks allow scheduled evidence and an equivalent manual preflight", () => {
+  const ci = readFileSync(join(workflowDirectory, "ci.yml"), "utf8");
+
+  assert.match(ci, /^\s{2}workflow_dispatch:$/mu);
+  assert.match(ci, /^\s{2}schedule:$/mu);
+  assert.match(
+    ci,
+    /if: github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/u,
+  );
+  assert.match(ci, /name: Verify all official provider catalogs/u);
+  assert.match(ci, /node eng\/check-live-catalogs\.mjs/u);
+  assert.match(ci, /name: live-official-catalogs/u);
+  assert.match(ci, /^permissions:\n\s{2}contents: read$/mu);
+});
+
 test("release workflows preserve Cargo arguments and native package prerequisites", () => {
   for (const name of ["release.yml", "official-release.yml"]) {
     const release = readFileSync(join(workflowDirectory, name), "utf8");

@@ -104,9 +104,11 @@ runs with protected signing credentials can provide positive trust evidence.
 ## Live and official-only evidence
 
 The weekly `live-official-catalogs` job is the only ordinary workflow allowed to query public
-provider catalogs. It builds the real CLI and all six bundled provider plugins, validates their
-stable JSON results, and atomically uploads one complete snapshot artifact. It performs no install,
-selection, package-manager, or system mutation.
+provider catalogs. An explicit `workflow_dispatch` runs the same job as a preflight without adding
+a separate network-capable path. The job builds the real CLI and all six bundled provider plugins,
+validates their stable JSON results, and atomically uploads one complete snapshot artifact. It
+performs no install, selection, package-manager, or system mutation. A successful manual preflight
+does not satisfy the milestone's scheduled-run evidence requirement.
 
 An official release additionally requires the protected `official-release` environment, Windows
 Authenticode credentials, Apple Developer ID/notarization credentials, and the matching Tauri
