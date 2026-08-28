@@ -202,6 +202,14 @@ artifacts, runs the fourteen-job combined package acceptance matrix, downloads e
 name, runs the aggregate verification, and uploads one 14-day six-target development artifact.
 GitHub-owned Actions are pinned to complete reviewed commit SHAs rather than mutable tags.
 
+`.github/workflows/windows-preview.yml` is the smaller Windows-first feedback path. It is also
+manual and read-only, but builds only `x86_64-pc-windows-msvc`. The candidate contains NSIS, MSI,
+the archived CLI, an explicit `UNSIGNED-PREVIEW.txt` warning, and deterministic unsigned development
+metadata. A reusable two-job acceptance matrix installs, launches, and uninstalls both Windows
+packages before a 14-day `torben-app-<version>-windows-x64-unsigned-preview` artifact is exposed.
+The workflow does not enter a protected Environment, read signing credentials, create a tag or
+GitHub Release, or claim that the preview is an official release.
+
 Formal publishing is defined but remains operationally unavailable until Windows signing, macOS
 Developer ID/notarization, the Tauri updater signing path, and protected-environment review are
 configured. The development workflow must not be renamed or treated as an official release.

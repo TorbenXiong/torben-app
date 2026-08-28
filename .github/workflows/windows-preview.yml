@@ -1,0 +1,175 @@
+name: Windows x64 unsigned preview
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: torben-windows-preview-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build unsigned Windows x64 candidate
+    runs-on: windows-latest
+    steps:
+      - name: Check out exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+
+      - name: Install pnpm
+        run: npm install --global pnpm@11.19.0
+
+      - name: Install pinned Rust toolchain
+        run: >-
+          rustup toolchain install 1.98.0 --profile minimal
+          --component clippy,rustfmt --target x86_64-pc-windows-msvc
+
+      - name: Select pinned Rust toolchain
+        run: rustup default 1.98.0
+
+      - name: Install locked frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release tooling
+        run: pnpm run test:release
+
+      - name: Build locked CLI
+        run: cargo build -p torben-cli --release --locked
+
+      - name: Prepare native sidecars
+        run: pnpm --filter @torben-app/desktop run prepare:bundled-tools:release
+
+      - name: Build locked desktop packages
+        working-directory: apps/desktop
+        run: >-
+          node node_modules/@tauri-apps/cli/tauri.js build
+          --ci --target x86_64-pc-windows-msvc
+          --config src-tauri/tauri.bundle.conf.json
+          -- --locked
+
+      - name: Verify CLI version
+        shell: node {0}
+        env:
+          TORBEN_CLI: target/release/torben.exe
+        run: |
+          const { readFileSync } = require("node:fs");
+          const { join } = require("node:path");
+          const { spawnSync } = require("node:child_process");
+          const { version } = JSON.parse(
+            readFileSync(join(process.env.GITHUB_WORKSPACE, "package.json"), "utf8"),
+          );
+          const result = spawnSync(process.env.TORBEN_CLI, ["--version"], {
+            encoding: "utf8",
+            timeout: 10_000,
+          });
+          if (result.status !== 0 || result.stdout.trim() !== `torben ${version}`) {
+            console.error(result.stderr || result.stdout || "CLI version check failed.");
+            process.exit(1);
+          }
+
+      - name: Collect complete Windows package set
+        run: >-
+          node eng/collect-release-artifacts.mjs
+          --bundle-root target/x86_64-pc-windows-msvc/release/bundle
+          --cli-binary target/release/torben.exe
+          --output artifacts/x86_64-pc-windows-msvc
+          --target x86_64-pc-windows-msvc
+
+      - name: Archive Windows CLI
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $destination = "artifacts/x86_64-pc-windows-msvc/torben-$version-x86_64-pc-windows-msvc.zip"
+          Compress-Archive -LiteralPath target/release/torben.exe -DestinationPath $destination
+
+      - name: Mark artifact as an unsigned preview
+        shell: node {0}
+        run: |
+          const { writeFileSync } = require("node:fs");
+          writeFileSync(
+            "artifacts/x86_64-pc-windows-msvc/UNSIGNED-PREVIEW.txt",
+            [
+              "Torben App Windows x64 preview build.",
+              "This is an unsigned development artifact, not an official release.",
+              "Windows may display Unknown publisher or Microsoft Defender SmartScreen warnings.",
+              "",
+            ].join("\n"),
+          );
+
+      - name: Generate unsigned development metadata
+        run: >-
+          node eng/release-metadata.mjs create
+          --artifacts artifacts/x86_64-pc-windows-msvc
+          --target x86_64-pc-windows-msvc
+          --revision ${{ github.sha }}
+          --source-ref ${{ github.ref }}
+          --release-kind development
+          --signing-status unsigned
+
+      - name: Verify target artifact metadata
+        run: >-
+          node eng/release-metadata.mjs verify
+          --artifacts artifacts/x86_64-pc-windows-msvc
+
+      - name: Upload Windows x64 candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-preview-candidate-x86_64-pc-windows-msvc
+          path: artifacts/x86_64-pc-windows-msvc
+          if-no-files-found: error
+          retention-days: 1
+
+  desktop-package-acceptance:
+    name: Install and launch Windows x64 packages
+    needs: build
+    uses: ./.github/workflows/desktop-package-acceptance.yml
+    with:
+      artifact-prefix: windows-preview-candidate-
+      acceptance_matrix: >-
+        {"include":[{"name":"Windows x64 NSIS preview","runner":"windows-latest","target":"x86_64-pc-windows-msvc","format":"nsis"},{"name":"Windows x64 MSI preview","runner":"windows-latest","target":"x86_64-pc-windows-msvc","format":"msi"}]}
+
+  publish-preview-artifact:
+    name: Publish verified Windows x64 preview artifact
+    needs: desktop-package-acceptance
+    runs-on: windows-latest
+    steps:
+      - name: Check out exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+
+      - name: Download accepted Windows x64 candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-preview-candidate-x86_64-pc-windows-msvc
+          path: artifacts/x86_64-pc-windows-msvc
+
+      - name: Re-verify accepted artifact metadata
+        run: >-
+          node eng/release-metadata.mjs verify
+          --artifacts artifacts/x86_64-pc-windows-msvc
+
+      - name: Read workspace version
+        id: version
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload verified Windows x64 preview
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: torben-app-${{ steps.version.outputs.version }}-windows-x64-unsigned-preview
+          path: artifacts/x86_64-pc-windows-msvc
+          if-no-files-found: error
+          retention-days: 14
