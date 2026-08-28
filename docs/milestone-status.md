@@ -21,6 +21,9 @@ repository is committed and its protected GitHub environments are configured.
 - Core owns SQLite migrations, platform-standard paths, the managed application library,
   cross-process locking, durable journals, cancellation markers, diagnostic logs, settings, and
   startup recovery. Frontend and plugin processes do not access SQLite directly.
+- Full Core startup transactionally synchronizes the ordered six-application directory, all six
+  official sources, and the winget, Homebrew, apt, and DNF source descriptors into SQLite. App list,
+  search, and detail queries read that persisted Core-owned snapshot.
 - The desktop exposes Overview, Catalog, application detail, Installed, Tasks, Plugins,
   Diagnostics, and Settings routes. Theme, English/Simplified Chinese localization, keyboard
   navigation, reduced-motion behavior, and responsive minimum-window layouts are covered by

@@ -99,9 +99,13 @@ or managed Shell ownership exists, missing, outdated, partial, or conflicting in
 an unhealthy actionable check.
 
 SQLite is private to Core. The first migration creates installations, selections, sources, plugins,
-operations, settings, and schema migration tables. Every journal update is projected into the
-operations table with its kind, latest state, complete event JSON, and update time; the desktop task
-center reads this Core-owned projection rather than opening the database or journal files directly.
+operations, settings, and schema migration tables. The fourth migration adds the ordered
+application catalog. On full Core startup, the six bundled application descriptors and their
+official sources plus winget, Homebrew, apt, and DNF are synchronized in one SQLite transaction;
+application list, search, and detail queries then read the persisted snapshot. Every journal update
+is projected into the operations table with its kind, latest state, complete event JSON, and update
+time; the desktop task center reads this Core-owned projection rather than opening the database or
+journal files directly.
 Every embedded migration records its exact version, including migrations whose structural change
 was already present in a newly created database. Core checks the migration ledger before creating
 or changing application tables and refuses a database containing a version newer than the running
