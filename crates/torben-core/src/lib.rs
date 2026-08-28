@@ -278,6 +278,9 @@ impl TorbenCore {
         } else {
             paths.ensure_layout()?;
         }
+        let applications = catalog::applications()?;
+        let sources = catalog::sources(&applications)?;
+        store.sync_catalog(&applications, &sources)?;
         let shell_integration = shell_integration::platform_backend(&paths);
         {
             let _lock = WorkspaceLock::acquire(paths.workspace_lock())?;
@@ -371,7 +374,7 @@ impl TorbenCore {
     }
 
     pub fn applications(&self) -> TorbenResult<Vec<ApplicationDescriptor>> {
-        catalog::applications()
+        self.store.list_applications()
     }
 
     pub fn search_applications(&self, query: &str) -> TorbenResult<Vec<ApplicationDescriptor>> {

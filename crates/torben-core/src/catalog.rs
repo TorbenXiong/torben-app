@@ -89,6 +89,26 @@ pub fn applications() -> TorbenResult<Vec<ApplicationDescriptor>> {
     ])
 }
 
+pub fn sources(applications: &[ApplicationDescriptor]) -> TorbenResult<Vec<InstallSource>> {
+    let mut sources = applications
+        .iter()
+        .flat_map(|application| application.sources.iter().cloned())
+        .collect::<Vec<_>>();
+    for (id, display_name) in [
+        ("source.winget", "winget"),
+        ("source.homebrew", "Homebrew"),
+        ("source.apt", "apt"),
+        ("source.dnf", "DNF"),
+    ] {
+        sources.push(InstallSource {
+            id: SourceId::new(id)?,
+            display_name: display_name.to_owned(),
+            managed: false,
+        });
+    }
+    Ok(sources)
+}
+
 fn app(
     id: &str,
     name: &str,

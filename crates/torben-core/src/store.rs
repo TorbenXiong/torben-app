@@ -2,15 +2,15 @@ use std::{path::PathBuf, str::FromStr, sync::Mutex};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use torben_contracts::{
-    AppId, ExactVersion, InstallRecord, InstallScope, OperationId, OperationKind, OperationState,
-    PackageCoordinate, PackageInstallationRecord, PluginId, SelectionRecord, SourceAdapterKind,
-    SourceId, SourcePackageKind, SourcePackageVersion, TorbenError, TorbenResult, UserSettings,
-    plugin::PluginOrigin,
+    AppId, ApplicationDescriptor, ExactVersion, InstallRecord, InstallScope, InstallSource,
+    OperationId, OperationKind, OperationState, PackageCoordinate, PackageInstallationRecord,
+    PluginId, SelectionRecord, SourceAdapterKind, SourceId, SourcePackageKind,
+    SourcePackageVersion, TorbenError, TorbenResult, UserSettings, plugin::PluginOrigin,
 };
 
 const USER_SETTINGS_KEY: &str = "user_preferences";
 const MANAGED_LIBRARY_KEY: &str = "managed_library_path";
-const CURRENT_SCHEMA_VERSION: i64 = 3;
+const CURRENT_SCHEMA_VERSION: i64 = 4;
 
 pub struct StateStore {
     connection: Mutex<Connection>,
@@ -156,9 +156,132 @@ impl StateStore {
             )
             .map_err(database_error)?;
         apply_package_installation_migration(&connection)?;
+        apply_application_catalog_migration(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
+    }
+
+    pub fn sync_catalog(
+        &self,
+        applications: &[ApplicationDescriptor],
+        sources: &[InstallSource],
+    ) -> TorbenResult<()> {
+        let serialized = applications
+            .iter()
+            .map(|application| {
+                serde_json::to_string(application).map_err(|error| {
+                    TorbenError::new(
+                        "application_catalog_serialize_failed",
+                        "Could not serialize an application catalog entry.",
+                    )
+                    .with_detail("appId", application.id.to_string())
+                    .with_detail("reason", error.to_string())
+                })
+            })
+            .collect::<TorbenResult<Vec<_>>>()?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction().map_err(database_error)?;
+        transaction
+            .execute("DELETE FROM applications", [])
+            .map_err(database_error)?;
+        for (position, (application, descriptor_json)) in
+            applications.iter().zip(serialized).enumerate()
+        {
+            transaction
+                .execute(
+                    "INSERT INTO applications(id, position, descriptor_json)
+                     VALUES (?1, ?2, ?3)",
+                    params![
+                        application.id.as_str(),
+                        i64::try_from(position).map_err(|error| {
+                            TorbenError::new(
+                                "application_catalog_too_large",
+                                "The application catalog contains too many entries.",
+                            )
+                            .with_detail("reason", error.to_string())
+                        })?,
+                        descriptor_json
+                    ],
+                )
+                .map_err(database_error)?;
+        }
+        for source in sources {
+            transaction
+                .execute(
+                    "INSERT INTO sources(id, display_name, managed)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(id) DO UPDATE SET
+                       display_name=excluded.display_name,
+                       managed=excluded.managed",
+                    params![
+                        source.id.as_str(),
+                        source.display_name,
+                        i32::from(source.managed)
+                    ],
+                )
+                .map_err(database_error)?;
+        }
+        transaction.commit().map_err(database_error)
+    }
+
+    pub fn list_applications(&self) -> TorbenResult<Vec<ApplicationDescriptor>> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare("SELECT id, descriptor_json FROM applications ORDER BY position")
+            .map_err(database_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(database_error)?;
+        rows.map(|row| {
+            let (id, descriptor_json) = row.map_err(database_error)?;
+            let descriptor = serde_json::from_str::<ApplicationDescriptor>(&descriptor_json)
+                .map_err(|error| {
+                    TorbenError::new(
+                        "application_catalog_state_invalid",
+                        "A persisted application catalog entry is invalid.",
+                    )
+                    .with_detail("appId", &id)
+                    .with_detail("reason", error.to_string())
+                })?;
+            if descriptor.id.as_str() != id {
+                return Err(TorbenError::new(
+                    "application_catalog_state_invalid",
+                    "A persisted application catalog identity does not match its row.",
+                )
+                .with_detail("rowAppId", id)
+                .with_detail("descriptorAppId", descriptor.id.to_string()));
+            }
+            Ok(descriptor)
+        })
+        .collect()
+    }
+
+    pub fn list_sources(&self) -> TorbenResult<Vec<InstallSource>> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare("SELECT id, display_name, managed FROM sources ORDER BY id")
+            .map_err(database_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, bool>(2)?,
+                ))
+            })
+            .map_err(database_error)?;
+        rows.map(|row| {
+            let (id, display_name, managed) = row.map_err(database_error)?;
+            Ok(InstallSource {
+                id: SourceId::new(id)?,
+                display_name,
+                managed,
+            })
+        })
+        .collect()
     }
 
     pub fn add_installation(&self, record: &InstallRecord) -> TorbenResult<()> {
@@ -1311,6 +1434,21 @@ fn apply_package_installation_migration(connection: &Connection) -> TorbenResult
     Ok(())
 }
 
+fn apply_application_catalog_migration(connection: &Connection) -> TorbenResult<()> {
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS applications (
+               id TEXT PRIMARY KEY,
+               position INTEGER NOT NULL UNIQUE CHECK(position >= 0),
+               descriptor_json TEXT NOT NULL
+             );
+             INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+               VALUES (4, datetime('now'));",
+        )
+        .map_err(database_error)?;
+    Ok(())
+}
+
 fn database_error(error: rusqlite::Error) -> TorbenError {
     TorbenError::new("database_error", "The state database operation failed.")
         .with_detail("reason", error.to_string())
@@ -1322,10 +1460,10 @@ mod tests {
 
     use tempfile::tempdir;
     use torben_contracts::{
-        AppId, ExactVersion, InstallRecord, InstallScope, LanguagePreference, PackageCoordinate,
-        PackageInstallationRecord, SourceAdapterKind, SourceId, SourcePackageKind,
-        SourcePackageVersion, ThemePreference, UpdatePreferences, UserSettings,
-        plugin::PluginOrigin,
+        AppId, ApplicationDescriptor, ExactVersion, InstallRecord, InstallScope, InstallSource,
+        LanguagePreference, PackageCoordinate, PackageInstallationRecord, SourceAdapterKind,
+        SourceId, SourcePackageKind, SourcePackageVersion, ThemePreference, UpdatePreferences,
+        UserSettings, plugin::PluginOrigin,
     };
 
     use super::{CURRENT_SCHEMA_VERSION, StateStore, USER_SETTINGS_KEY};
@@ -1345,7 +1483,7 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
 
-        assert_eq!(versions, [1, 2, CURRENT_SCHEMA_VERSION]);
+        assert_eq!(versions, [1, 2, 3, CURRENT_SCHEMA_VERSION]);
     }
 
     #[test]
@@ -1384,7 +1522,7 @@ mod tests {
                    applied_at TEXT NOT NULL
                  );
                  INSERT INTO schema_migrations(version, applied_at)
-                   VALUES (4, datetime('now'));",
+                   VALUES (5, datetime('now'));",
             )
             .unwrap();
         drop(connection);
@@ -1394,7 +1532,7 @@ mod tests {
         };
 
         assert_eq!(error.code, "database_schema_newer");
-        assert_eq!(error.details["databaseVersion"], "4");
+        assert_eq!(error.details["databaseVersion"], "5");
         assert_eq!(
             error.details["supportedVersion"],
             CURRENT_SCHEMA_VERSION.to_string()
@@ -1404,12 +1542,107 @@ mod tests {
         let application_tables = connection
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master
-                 WHERE type='table' AND name IN ('installations', 'plugins', 'operations')",
+                 WHERE type='table'
+                   AND name IN ('applications', 'installations', 'plugins', 'operations')",
                 [],
                 |row| row.get::<_, i64>(0),
             )
             .unwrap();
         assert_eq!(application_tables, 0);
+    }
+
+    #[test]
+    fn persists_the_ordered_application_and_complete_source_catalog() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("state.db");
+        let store = StateStore::open(path.clone()).unwrap();
+        let applications = crate::catalog::applications().unwrap();
+        let sources = crate::catalog::sources(&applications).unwrap();
+
+        store.sync_catalog(&applications, &sources).unwrap();
+        drop(store);
+
+        let reopened = StateStore::open(path).unwrap();
+        assert_eq!(reopened.list_applications().unwrap(), applications);
+        assert_eq!(reopened.list_sources().unwrap(), sources_sorted(sources));
+    }
+
+    #[test]
+    fn migration_four_adds_the_catalog_without_changing_existing_installations() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("state.db");
+        let store = StateStore::open(path.clone()).unwrap();
+        let installation = InstallRecord {
+            app_id: AppId::new("node").unwrap(),
+            version: ExactVersion::from_str("24.19.0").unwrap(),
+            source_id: SourceId::new("node.official").unwrap(),
+            scope: InstallScope::Managed,
+            install_path: "fixture/node".to_owned(),
+            installed_at: "fixture".to_owned(),
+            health: "healthy".to_owned(),
+        };
+        store.add_installation(&installation).unwrap();
+        drop(store);
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "DROP TABLE applications;
+                 DELETE FROM schema_migrations WHERE version=4;",
+            )
+            .unwrap();
+        drop(connection);
+
+        let migrated = StateStore::open(path).unwrap();
+
+        assert_eq!(
+            migrated
+                .get_installation(&installation.app_id, &installation.version)
+                .unwrap(),
+            Some(installation)
+        );
+        assert!(migrated.list_applications().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rejects_a_persisted_application_with_a_mismatched_row_identity() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("state.db");
+        let store = StateStore::open(path.clone()).unwrap();
+        let descriptor = application_fixture("node");
+        store
+            .sync_catalog(std::slice::from_ref(&descriptor), &descriptor.sources)
+            .unwrap();
+        drop(store);
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute("UPDATE applications SET id='python' WHERE id='node'", [])
+            .unwrap();
+
+        let reopened = StateStore::open(path).unwrap();
+        assert_eq!(
+            reopened.list_applications().unwrap_err().code,
+            "application_catalog_state_invalid"
+        );
+    }
+
+    fn application_fixture(id: &str) -> ApplicationDescriptor {
+        ApplicationDescriptor {
+            id: AppId::new(id).unwrap(),
+            display_name: "Fixture".to_owned(),
+            summary: "Fixture application".to_owned(),
+            categories: vec!["test".to_owned()],
+            capabilities: vec!["versions".to_owned()],
+            sources: vec![InstallSource {
+                id: SourceId::new(format!("{id}.official")).unwrap(),
+                display_name: "Official archive".to_owned(),
+                managed: true,
+            }],
+        }
+    }
+
+    fn sources_sorted(mut sources: Vec<InstallSource>) -> Vec<InstallSource> {
+        sources.sort_by(|left, right| left.id.cmp(&right.id));
+        sources
     }
 
     #[test]
