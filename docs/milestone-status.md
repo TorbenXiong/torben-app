@@ -109,6 +109,23 @@ The authoritative test-to-requirement mapping is maintained in
   package installation and sustained-launch jobs, including Rocky Linux 10.2 x86_64 and ARM64,
   and passed the complete six-target release-set verifier. Its outputs are also unsigned
   development artifacts, not an official release.
+- Pull request [#14](https://github.com/TorbenXiong/torben-app/pull/14) merged the Temurin legacy
+  signature-metadata compatibility fix into `main` as commit
+  `8081f3f7f0aa205151d7d011e01f5ff0caef94e9` on 2026-08-28. The fix excludes historical
+  Adoptium packages that cannot supply the detached signature required by Torben, rather than
+  weakening signature verification or failing the complete catalog.
+- The manually dispatched post-merge `main` CI
+  [run 33140148036](https://github.com/TorbenXiong/torben-app/actions/runs/33140148036)
+  passed Windows, macOS, Ubuntu, and the read-only official-catalog job for that exact merge
+  commit. The uploaded `live-official-catalogs` artifact contained the expected
+  `catalog-summary.json`, `node.json`, `temurin.json`, `python.json`, `git.json`, `vscode.json`,
+  and `codex.json` files. Independent artifact inspection found 863 Node.js, 79 Temurin, 5 Python,
+  5 Git, 5 Visual Studio Code, and 5 Codex versions; every non-empty catalog contained at least one
+  recommended version.
+- That successful `workflow_dispatch` run is a manual operational preflight, not evidence that the
+  scheduled trigger itself has executed successfully. With the current `17 3 * * 1` schedule, the
+  first eligible scheduled window after this evidence is 2026-08-31 03:17 UTC
+  (2026-08-31 11:17 China Standard Time).
 
 ## Evidence still requiring external state
 
@@ -124,9 +141,10 @@ as complete until their authoritative remote evidence exists:
 3. Provision an immutable HTTPS origin for the reviewed registry tree, then configure release builds
    with its exact `registry.json` URL and trust root. Refresh and install every published plugin on
    each supported platform. Public hosting is not currently live.
-4. Record successful scheduled read-only checks against every official provider catalog. Local
-   fixtures remain the default test authority for deterministic behavior, not proof of current
-   upstream availability.
+4. Record the first successful `schedule`-triggered read-only check against every official provider
+   catalog. Manual run 33140148036 proves current upstream availability and the same job path, but
+   it does not prove that GitHub invoked the weekly schedule. Local fixtures remain the default test
+   authority for deterministic behavior.
 5. Complete project-name, domain, trademark, and package-registry registration checks before a
    public release. The repository's initial name collision search is not legal clearance.
 
