@@ -308,36 +308,17 @@ impl CodexProvider {
     pub async fn list_versions(&self) -> TorbenResult<Vec<VersionDescriptor>> {
         let target = current_target_asset()?;
         let mut result = Vec::new();
-        for page in 1..=MAX_RELEASE_PAGES {
-            let mut url = self.releases_url.clone();
-            let path = url.path().trim_end_matches('/').to_owned();
-            url.set_path(&path);
-            url.query_pairs_mut()
-                .append_pair("per_page", &RELEASES_PER_PAGE.to_string())
-                .append_pair("page", &page.to_string());
-            let releases: Vec<GitHubRelease> = self.fetch_json(&url).await?;
-            let count = releases.len();
-            for release in releases {
-                let Ok(version) = validate_release(&release) else {
-                    continue;
-                };
-                match distribution_from(&release, &version, &target, self.fixture_mode) {
-                    Ok(_) => result.push(VersionDescriptor {
-                        version,
-                        lts_name: None,
-                        released_at: release.published_at,
-                        recommended: result.is_empty(),
-                    }),
-                    Err(error) if error.code == "codex_archive_missing" => continue,
-                    Err(error) => return Err(error),
-                }
-                if result.len() == MAX_VERSIONS {
-                    break;
-                }
-            }
-            if result.len() == MAX_VERSIONS || count < RELEASES_PER_PAGE {
+        let mut needs_more = true;
+        let (first_page, second_page) = tokio::join!(self.release_page(1), self.release_page(2));
+        for page in [first_page, second_page] {
+            needs_more = self.append_release_page(&mut result, page?, &target)?;
+            if !needs_more {
                 break;
             }
+        }
+        if needs_more {
+            let page = self.release_page(MAX_RELEASE_PAGES).await?;
+            let _ = self.append_release_page(&mut result, page, &target)?;
         }
         result.sort_by(|left, right| right.version.cmp(&left.version));
         result.dedup_by(|left, right| left.version == right.version);
@@ -351,6 +332,44 @@ impl CodexProvider {
             first.recommended = true;
         }
         Ok(result)
+    }
+
+    fn append_release_page(
+        &self,
+        result: &mut Vec<VersionDescriptor>,
+        releases: Vec<GitHubRelease>,
+        target: &TargetAsset,
+    ) -> TorbenResult<bool> {
+        let count = releases.len();
+        for release in releases {
+            let Ok(version) = validate_release(&release) else {
+                continue;
+            };
+            match distribution_from(&release, &version, target, self.fixture_mode) {
+                Ok(_) => result.push(VersionDescriptor {
+                    version,
+                    lts_name: None,
+                    released_at: release.published_at,
+                    recommended: result.is_empty(),
+                }),
+                Err(error) if error.code == "codex_archive_missing" => continue,
+                Err(error) => return Err(error),
+            }
+            if result.len() == MAX_VERSIONS {
+                break;
+            }
+        }
+        Ok(result.len() < MAX_VERSIONS && count == RELEASES_PER_PAGE)
+    }
+
+    async fn release_page(&self, page: usize) -> TorbenResult<Vec<GitHubRelease>> {
+        let mut url = self.releases_url.clone();
+        let path = url.path().trim_end_matches('/').to_owned();
+        url.set_path(&path);
+        url.query_pairs_mut()
+            .append_pair("per_page", &RELEASES_PER_PAGE.to_string())
+            .append_pair("page", &page.to_string());
+        self.fetch_json(&url).await
     }
 
     pub async fn resolve_version(&self, requested: &str) -> TorbenResult<ExactVersion> {
@@ -1250,12 +1269,16 @@ fn io_error(error: std::io::Error) -> TorbenError {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::VecDeque,
+        collections::HashMap,
         io::{Read as _, Write as _},
         net::TcpListener,
         sync::Arc,
         thread,
+        time::{Duration, Instant},
     };
+
+    #[cfg(windows)]
+    use std::collections::VecDeque;
 
     #[cfg(windows)]
     use sha2::{Digest, Sha256};
@@ -1428,11 +1451,17 @@ mod tests {
                 100,
             ));
         }
-        let routes = vec![(
-            "/releases?per_page=20&page=1".to_owned(),
-            serde_json::to_vec(&vec![release]).unwrap(),
-        )];
-        let server = spawn_fixture_server(listener, routes);
+        let routes = vec![
+            (
+                "/releases?per_page=20&page=1".to_owned(),
+                serde_json::to_vec(&vec![release]).unwrap(),
+            ),
+            (
+                "/releases?per_page=20&page=2".to_owned(),
+                serde_json::to_vec(&Vec::<GitHubRelease>::new()).unwrap(),
+            ),
+        ];
+        let server = spawn_concurrent_fixture_server(listener, routes);
         let provider = CodexProvider::with_fixture(
             base.join("releases/").unwrap(),
             Arc::new(AcceptingSigstoreVerifier),
@@ -1637,6 +1666,7 @@ mod tests {
         )
     }
 
+    #[cfg(windows)]
     fn spawn_fixture_server(
         listener: TcpListener,
         routes: Vec<(String, Vec<u8>)>,
@@ -1661,6 +1691,59 @@ mod tests {
                 )
                 .unwrap();
                 stream.write_all(&body).unwrap();
+            }
+        })
+    }
+
+    fn spawn_concurrent_fixture_server(
+        listener: TcpListener,
+        routes: Vec<(String, Vec<u8>)>,
+    ) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            let expected = routes.into_iter().collect::<HashMap<_, _>>();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut requests = Vec::new();
+            while requests.len() < expected.len() && Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .unwrap();
+                        let mut request = [0_u8; 4096];
+                        let read = stream.read(&mut request).unwrap();
+                        let request = String::from_utf8_lossy(&request[..read]);
+                        let path = request
+                            .lines()
+                            .next()
+                            .and_then(|line| line.split_whitespace().nth(1))
+                            .unwrap()
+                            .to_owned();
+                        requests.push((path, stream));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("fixture accept failed: {error}"),
+                }
+            }
+            assert_eq!(
+                requests.len(),
+                expected.len(),
+                "Codex catalog pages were not requested concurrently"
+            );
+            for (path, mut stream) in requests {
+                let body = expected
+                    .get(&path)
+                    .unwrap_or_else(|| panic!("unexpected path: {path}"));
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(body).unwrap();
             }
         })
     }

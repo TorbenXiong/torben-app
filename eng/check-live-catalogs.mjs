@@ -80,8 +80,28 @@ function parseEnvelope(app, result) {
     fail(`Official ${app} catalog process failed: ${boundedMessage(result.error.message)}`);
   }
   if (result.status !== 0) {
+    let diagnostic = boundedMessage(result.stderr);
+    try {
+      const envelope = JSON.parse(result.stdout);
+      if (
+        envelope !== null &&
+        typeof envelope === "object" &&
+        envelope.schemaVersion === 1 &&
+        envelope.ok === false &&
+        envelope.data === null &&
+        envelope.error !== null &&
+        typeof envelope.error === "object" &&
+        typeof envelope.error.code === "string" &&
+        typeof envelope.error.message === "string" &&
+        Array.isArray(envelope.warnings)
+      ) {
+        diagnostic = `error[${boundedMessage(envelope.error.code)}]: ${boundedMessage(envelope.error.message)}`;
+      }
+    } catch {
+      // Fall back to the bounded stderr diagnostic below.
+    }
     fail(
-      `Official ${app} catalog command exited with ${String(result.status)}: ${boundedMessage(result.stderr)}`,
+      `Official ${app} catalog command exited with ${String(result.status)}: ${diagnostic || "no diagnostic output"}`,
     );
   }
   let envelope;
@@ -90,16 +110,19 @@ function parseEnvelope(app, result) {
   } catch (error) {
     fail(`Official ${app} catalog returned invalid JSON: ${boundedMessage(error.message)}`);
   }
+  const envelopeKeys =
+    envelope !== null && typeof envelope === "object" ? Object.keys(envelope).sort() : [];
   if (
     envelope === null ||
     typeof envelope !== "object" ||
+    envelopeKeys.join(",") !== "data,error,ok,schemaVersion,warnings" ||
     envelope.schemaVersion !== 1 ||
     envelope.ok !== true ||
-    envelope.error !== undefined ||
+    envelope.error !== null ||
     !Array.isArray(envelope.data) ||
     envelope.data.length === 0 ||
     envelope.data.length > 10_000 ||
-    (envelope.warnings !== undefined && !Array.isArray(envelope.warnings))
+    !Array.isArray(envelope.warnings)
   ) {
     fail(`Official ${app} catalog returned an invalid Torben JSON envelope.`);
   }

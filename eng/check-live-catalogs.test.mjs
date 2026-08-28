@@ -35,6 +35,8 @@ function successEnvelope(app) {
         recommended: true,
       },
     ],
+    error: null,
+    warnings: [],
   });
 }
 
@@ -84,7 +86,13 @@ test("rejects an error envelope without publishing a partial artifact", () => {
             status: 0,
             stdout:
               app === "python"
-                ? JSON.stringify({ schemaVersion: 1, ok: false, error: { code: "fixture" } })
+                ? JSON.stringify({
+                    schemaVersion: 1,
+                    ok: false,
+                    data: null,
+                    error: { code: "fixture" },
+                    warnings: [],
+                  })
                 : successEnvelope(app),
             stderr: "",
           }),
@@ -94,6 +102,60 @@ test("rejects an error envelope without publishing a partial artifact", () => {
     assert.throws(() => readFileSync(current.output), /ENOENT/);
   } finally {
     removeFixture(current.root);
+  }
+});
+
+test("reports a bounded structured CLI error when a catalog command fails", () => {
+  const current = fixture();
+  try {
+    assert.throws(
+      () =>
+        checkLiveCatalogs({
+          cliPath: current.cli,
+          outputDirectory: current.output,
+          execute: () => ({
+            status: 1,
+            stdout: JSON.stringify({
+              schemaVersion: 1,
+              ok: false,
+              data: null,
+              error: { code: "plugin_timeout", message: "The plugin timed out." },
+              warnings: [],
+            }),
+            stderr: "",
+          }),
+        }),
+      /Official node catalog command exited with 1: error\[plugin_timeout\]: The plugin timed out\./,
+    );
+  } finally {
+    removeFixture(current.root);
+  }
+});
+
+test("requires the exact stable success-envelope fields", () => {
+  const valid = JSON.parse(successEnvelope("node"));
+  const variants = [
+    { ...valid, error: undefined },
+    { ...valid, error: {} },
+    { ...valid, warnings: undefined },
+    { ...valid, warnings: "warning" },
+    { ...valid, unexpected: true },
+  ];
+  for (const envelope of variants) {
+    const current = fixture();
+    try {
+      assert.throws(
+        () =>
+          checkLiveCatalogs({
+            cliPath: current.cli,
+            outputDirectory: current.output,
+            execute: () => ({ status: 0, stdout: JSON.stringify(envelope), stderr: "" }),
+          }),
+        /invalid Torben JSON envelope/,
+      );
+    } finally {
+      removeFixture(current.root);
+    }
   }
 });
 
@@ -114,7 +176,13 @@ test("rejects empty, duplicate, and unrecommended catalog data", () => {
           outputDirectory: current.output,
           execute: () => ({
             status: 0,
-            stdout: JSON.stringify({ schemaVersion: 1, ok: true, data }),
+            stdout: JSON.stringify({
+              schemaVersion: 1,
+              ok: true,
+              data,
+              error: null,
+              warnings: [],
+            }),
             stderr: "",
           }),
         }),
