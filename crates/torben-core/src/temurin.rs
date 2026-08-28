@@ -93,7 +93,7 @@ struct ReleasePackage {
     checksum: String,
     link: String,
     name: String,
-    signature_link: String,
+    signature_link: Option<String>,
     size: u64,
 }
 
@@ -506,8 +506,11 @@ impl TemurinProvider {
                         return Err(metadata_invalid("binary target"));
                     }
                     let package = binary.package;
+                    let Some(signature_link) = package.signature_link else {
+                        continue;
+                    };
                     let archive_url = Url::parse(&package.link).map_err(url_error)?;
-                    let signature_url = Url::parse(&package.signature_link).map_err(url_error)?;
+                    let signature_url = Url::parse(&signature_link).map_err(url_error)?;
                     validate_release_url(&self.api_base, &archive_url, feature, &package.name)?;
                     validate_release_url(
                         &self.api_base,
@@ -1177,7 +1180,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_metadata_resolves_exact_and_lts_versions() {
+    async fn local_metadata_ignores_unsigned_release_and_resolves_versions() {
         let (base_url, server) = metadata_fixture_server(6);
         let provider = TemurinProvider::with_base_url(base_url).unwrap();
 
@@ -1460,27 +1463,42 @@ mod tests {
             "OpenJDK21U-jdk_fixture.tar.gz"
         };
         let archive_url = format!("http://{address}/v3/releases/{archive_name}");
-        let releases = serde_json::json!([{
-            "binaries": [{
-                "architecture": if std::env::consts::ARCH == "x86_64" { "x64" } else { "aarch64" },
-                "heap_size": "normal",
-                "image_type": "jdk",
-                "jvm_impl": "hotspot",
-                "os": if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "mac" } else { "linux" },
-                "package": {
-                    "checksum": "00".repeat(32),
-                    "link": archive_url,
-                    "name": archive_name,
-                    "signature_link": format!("{archive_url}.sig"),
-                    "size": 42
-                },
-                "project": "jdk"
-            }],
-            "release_type": "ga",
-            "timestamp": "2026-01-20T00:00:00Z",
-            "vendor": "eclipse",
-            "version_data": { "semver": "21.0.2+13.0.LTS" }
-        }]);
+        let binary = serde_json::json!({
+            "architecture": if std::env::consts::ARCH == "x86_64" { "x64" } else { "aarch64" },
+            "heap_size": "normal",
+            "image_type": "jdk",
+            "jvm_impl": "hotspot",
+            "os": if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "mac" } else { "linux" },
+            "package": {
+                "checksum": "00".repeat(32),
+                "link": archive_url,
+                "name": archive_name,
+                "signature_link": format!("{archive_url}.sig"),
+                "size": 42
+            },
+            "project": "jdk"
+        });
+        let mut unsigned_binary = binary.clone();
+        unsigned_binary["package"]
+            .as_object_mut()
+            .unwrap()
+            .remove("signature_link");
+        let releases = serde_json::json!([
+            {
+                "binaries": [unsigned_binary],
+                "release_type": "ga",
+                "timestamp": "2026-01-19T00:00:00Z",
+                "vendor": "eclipse",
+                "version_data": { "semver": "21.0.1+12.0.LTS" }
+            },
+            {
+                "binaries": [binary],
+                "release_type": "ga",
+                "timestamp": "2026-01-20T00:00:00Z",
+                "vendor": "eclipse",
+                "version_data": { "semver": "21.0.2+13.0.LTS" }
+            }
+        ]);
         let routes = BTreeMap::from([
             (
                 "/v3/info/available_releases".to_owned(),
