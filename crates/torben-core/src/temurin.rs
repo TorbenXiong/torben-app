@@ -33,6 +33,8 @@ const MAX_PUBLIC_KEY_BYTES: u64 = 1024 * 1024;
 const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
 const RELEASE_PAGE_SIZE: usize = 50;
 const MAX_RELEASE_PAGES: usize = 20;
+const METADATA_ATTEMPTS: usize = 3;
+const METADATA_RETRY_DELAY: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone)]
 pub struct TemurinProvider {
@@ -669,16 +671,26 @@ impl TemurinProvider {
     }
 
     async fn fetch_json<T: for<'de> Deserialize<'de>>(&self, url: &Url) -> TorbenResult<T> {
-        let bytes = self
-            .fetch_limited(url, MAX_METADATA_BYTES, AssetKind::Metadata, None)
-            .await?;
-        serde_json::from_slice(&bytes).map_err(|error| {
-            TorbenError::new(
-                "temurin_metadata_invalid",
-                "The Adoptium metadata is not valid JSON.",
-            )
-            .with_detail("reason", error.to_string())
-        })
+        for attempt in 0..METADATA_ATTEMPTS {
+            match self
+                .fetch_limited(url, MAX_METADATA_BYTES, AssetKind::Metadata, None)
+                .await
+            {
+                Ok(bytes) => match serde_json::from_slice(&bytes) {
+                    Ok(value) => return Ok(value),
+                    Err(error) if attempt + 1 == METADATA_ATTEMPTS => {
+                        return Err(metadata_json_error(error));
+                    }
+                    Err(_) => {}
+                },
+                Err(error) if error.code != "network_error" || attempt + 1 == METADATA_ATTEMPTS => {
+                    return Err(error);
+                }
+                Err(_) => {}
+            }
+            tokio::time::sleep(METADATA_RETRY_DELAY).await;
+        }
+        unreachable!("the bounded metadata retry loop always returns")
     }
 
     async fn fetch_limited(
@@ -691,14 +703,12 @@ impl TemurinProvider {
         if let Some(cancellation) = cancellation {
             cancellation.check()?;
         }
+        let mut request = self.client.get(url.clone());
+        if matches!(kind, AssetKind::Metadata) {
+            request = request.header(reqwest::header::ACCEPT, "application/json");
+        }
         let response = await_with_cancellation(
-            async {
-                self.client
-                    .get(url.clone())
-                    .send()
-                    .await
-                    .map_err(network_error)
-            },
+            async { request.send().await.map_err(network_error) },
             cancellation,
         )
         .await?;
@@ -1041,6 +1051,14 @@ fn metadata_invalid(field: &str) -> TorbenError {
     .with_detail("field", field)
 }
 
+fn metadata_json_error(error: serde_json::Error) -> TorbenError {
+    TorbenError::new(
+        "temurin_metadata_invalid",
+        "The Adoptium metadata is not valid JSON.",
+    )
+    .with_detail("reason", error.to_string())
+}
+
 fn invalid_plan(field: &str) -> TorbenError {
     TorbenError::new(
         "plugin_install_plan_invalid",
@@ -1172,6 +1190,45 @@ mod tests {
         assert_eq!(versions[0].version.to_string(), "21.0.2+13.0.LTS");
         assert_eq!(lts, versions[0].version);
         assert_eq!(feature, versions[0].version);
+    }
+
+    #[tokio::test]
+    async fn metadata_request_retries_invalid_json_and_requests_json() {
+        let valid =
+            serde_json::to_vec(&serde_json::json!({ "available_lts_releases": [21] })).unwrap();
+        let (base_url, server) = metadata_sequence_server(vec![
+            (
+                "text/html".to_owned(),
+                b"<html>temporary response</html>".to_vec(),
+            ),
+            ("application/json".to_owned(), valid),
+        ]);
+        let provider = TemurinProvider::with_base_url(base_url.clone()).unwrap();
+
+        let metadata: AvailableReleases = provider
+            .fetch_json(&base_url.join("info/available_releases").unwrap())
+            .await
+            .unwrap();
+
+        server.join().unwrap();
+        assert_eq!(metadata.available_lts_releases, vec![21]);
+    }
+
+    #[tokio::test]
+    async fn metadata_request_fails_after_bounded_invalid_json_attempts() {
+        let responses = (0..METADATA_ATTEMPTS)
+            .map(|_| ("text/html".to_owned(), b"<html>invalid</html>".to_vec()))
+            .collect();
+        let (base_url, server) = metadata_sequence_server(responses);
+        let provider = TemurinProvider::with_base_url(base_url.clone()).unwrap();
+
+        let error = provider
+            .fetch_json::<AvailableReleases>(&base_url.join("info/available_releases").unwrap())
+            .await
+            .unwrap_err();
+
+        server.join().unwrap();
+        assert_eq!(error.code, "temurin_metadata_invalid");
     }
 
     #[tokio::test]
@@ -1455,6 +1512,53 @@ mod tests {
                 .unwrap();
                 stream.write_all(body).unwrap();
             }
+        });
+        (Url::parse(&base).unwrap(), server)
+    }
+
+    fn metadata_sequence_server(
+        responses: Vec<(String, Vec<u8>)>,
+    ) -> (Url, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let base = format!("http://{address}/v3/");
+        let server = thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut served = 0;
+            while served < responses.len() && std::time::Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .unwrap();
+                        let mut request = [0_u8; 4096];
+                        let read = stream.read(&mut request).unwrap();
+                        let request = String::from_utf8_lossy(&request[..read]);
+                        assert!(request.starts_with("GET /v3/info/available_releases HTTP/1.1"));
+                        assert!(
+                            request
+                                .to_ascii_lowercase()
+                                .contains("\r\naccept: application/json\r\n")
+                        );
+                        let (content_type, body) = &responses[served];
+                        write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .unwrap();
+                        stream.write_all(body).unwrap();
+                        served += 1;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("fixture accept failed: {error}"),
+                }
+            }
+            assert_eq!(served, responses.len(), "metadata retry count changed");
         });
         (Url::parse(&base).unwrap(), server)
     }
