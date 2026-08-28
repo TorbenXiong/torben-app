@@ -129,6 +129,14 @@ The authoritative test-to-requirement mapping is maintained in
   scheduled trigger itself has executed successfully. With the current `17 3 * * 1` schedule, the
   first eligible scheduled window after this evidence is 2026-08-31 03:17 UTC
   (2026-08-31 11:17 China Standard Time).
+- Pull request [#16](https://github.com/TorbenXiong/torben-app/pull/16) merged the persistent
+  application and source catalog into `main` as squash commit
+  `5c5408e75243f4c2dea307313fe8afe1047fe373` on 2026-08-28.
+- The pull-request CI and post-merge `main` CI
+  [run 33158835795](https://github.com/TorbenXiong/torben-app/actions/runs/33158835795) and
+  [run 33160929903](https://github.com/TorbenXiong/torben-app/actions/runs/33160929903) passed the
+  Windows, macOS, and Ubuntu matrix. These runs included the default-off CLI and desktop Node.js
+  lifecycle fixtures, which completed successfully in the locked CI dependency environment.
 
 ## Evidence still requiring external state
 
