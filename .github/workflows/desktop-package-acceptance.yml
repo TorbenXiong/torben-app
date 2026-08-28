@@ -8,6 +8,12 @@ on:
         required: false
         type: string
         default: ""
+      acceptance_matrix:
+        description: JSON matrix used to select the desktop packages under test
+        required: false
+        type: string
+        default: >-
+          {"include":[{"name":"Windows x64 NSIS","runner":"windows-latest","target":"x86_64-pc-windows-msvc","format":"nsis"},{"name":"Windows x64 MSI","runner":"windows-latest","target":"x86_64-pc-windows-msvc","format":"msi"},{"name":"Windows ARM64 NSIS","runner":"windows-11-arm","target":"aarch64-pc-windows-msvc","format":"nsis"},{"name":"Windows ARM64 MSI","runner":"windows-11-arm","target":"aarch64-pc-windows-msvc","format":"msi"},{"name":"macOS Intel DMG","runner":"macos-15-intel","target":"x86_64-apple-darwin","format":"dmg"},{"name":"macOS Apple Silicon DMG","runner":"macos-15","target":"aarch64-apple-darwin","format":"dmg"}]}
 
 permissions:
   contents: read
@@ -18,32 +24,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: Windows x64 NSIS
-            runner: windows-latest
-            target: x86_64-pc-windows-msvc
-            format: nsis
-          - name: Windows x64 MSI
-            runner: windows-latest
-            target: x86_64-pc-windows-msvc
-            format: msi
-          - name: Windows ARM64 NSIS
-            runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            format: nsis
-          - name: Windows ARM64 MSI
-            runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            format: msi
-          - name: macOS Intel DMG
-            runner: macos-15-intel
-            target: x86_64-apple-darwin
-            format: dmg
-          - name: macOS Apple Silicon DMG
-            runner: macos-15
-            target: aarch64-apple-darwin
-            format: dmg
+      matrix: ${{ fromJSON(inputs.acceptance_matrix) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out exact source revision

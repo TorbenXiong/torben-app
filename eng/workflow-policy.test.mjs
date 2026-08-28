@@ -83,6 +83,29 @@ test("release workflows preserve Cargo arguments and native package prerequisite
   }
 });
 
+test("Windows preview remains manual, unsigned, read-only, and Windows x64 scoped", () => {
+  const preview = readFileSync(join(workflowDirectory, "windows-preview.yml"), "utf8");
+
+  assert.match(preview, /^name: Windows x64 unsigned preview$/mu);
+  assert.match(preview, /^\s{2}workflow_dispatch:$/mu);
+  assert.doesNotMatch(preview, /^\s{2}(?:push|pull_request|schedule|release):/mu);
+  assert.match(preview, /^permissions:\n\s{2}contents: read$/mu);
+  assert.match(preview, /runs-on: windows-latest/u);
+  assert.match(preview, /--target x86_64-pc-windows-msvc/u);
+  assert.match(preview, /--release-kind development/u);
+  assert.match(preview, /--signing-status unsigned/u);
+  assert.match(preview, /UNSIGNED-PREVIEW\.txt/u);
+  assert.match(preview, /acceptance_matrix:/u);
+  assert.match(preview, /"format":"nsis"/u);
+  assert.match(preview, /"format":"msi"/u);
+  assert.doesNotMatch(preview, /(?:macos|ubuntu|aarch64)/u);
+  assert.doesNotMatch(preview, /(?:environment:|secrets\.|vars\.)/u);
+  assert.doesNotMatch(
+    preview,
+    /\b(?:gh release|npm publish|cargo publish|pages: write|contents: write|id-token: write)\b/u,
+  );
+});
+
 test("plugin registry artifacts require a protected manual main-branch release", () => {
   const release = readFileSync(join(workflowDirectory, "plugin-registry-release.yml"), "utf8");
 

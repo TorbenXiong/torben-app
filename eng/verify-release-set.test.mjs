@@ -283,9 +283,11 @@ test("development workflow pins approved Actions and cannot publish an official 
   assert.match(desktopAcceptanceWorkflow, /hdiutil attach -readonly -nobrowse/);
   assert.match(desktopAcceptanceWorkflow, /ditto "\$\{applications\[0\]\}" "\$installed_app"/);
   assert.doesNotMatch(desktopAcceptanceWorkflow, /continue-on-error|secrets\./);
-  const desktopNames = [
-    ...desktopAcceptanceWorkflow.matchAll(/^\s+- name: (.+ (?:NSIS|MSI|DMG))$/gm),
-  ].map((match) => match[1]);
+  const desktopMatrixJson = desktopAcceptanceWorkflow.match(
+    /acceptance_matrix:\r?\n[\s\S]*?default: >-\r?\n\s+(\{"include":\[.*\]\})/,
+  )?.[1];
+  assert.ok(desktopMatrixJson, "Desktop acceptance default matrix is missing");
+  const desktopNames = JSON.parse(desktopMatrixJson).include.map(({ name }) => name);
   assert.deepEqual(desktopNames, [
     "Windows x64 NSIS",
     "Windows x64 MSI",
@@ -294,6 +296,10 @@ test("development workflow pins approved Actions and cannot publish an official 
     "macOS Intel DMG",
     "macOS Apple Silicon DMG",
   ]);
+  assert.match(
+    desktopAcceptanceWorkflow,
+    /matrix: \$\{\{ fromJSON\(inputs\.acceptance_matrix\) \}\}/,
+  );
 
   const matrixBlock = workflow.match(/matrix:\r?\n([\s\S]*?) {4}runs-on:/)?.[1] ?? "";
   const targets = [...matrixBlock.matchAll(/^\s+target: (\S+)$/gm)].map((match) => match[1]);
