@@ -414,4 +414,28 @@ test("fails closed for host mismatch, missing sidecars, and early exit", async (
       removeFixture(root);
     }
   });
+
+  await t.test("cleanup failure after the launch window", async () => {
+    const root = fixtureRoot();
+    try {
+      const fixture = await windowsFixture(root, "msi");
+      await assert.rejects(
+        runDesktopPackageSmoke({
+          artifacts: fixture.artifacts,
+          format: "msi",
+          installedRoot: fixture.installed,
+          repositoryRoot,
+          platform: "win32",
+          architecture: "x64",
+          launch: async () => ({
+            sustained: true,
+            error: "Torben App did not terminate after the sustained launch probe.",
+          }),
+        }),
+        /survived the 8000ms launch window but cleanup failed: Torben App did not terminate/,
+      );
+    } finally {
+      removeFixture(root);
+    }
+  });
 });
