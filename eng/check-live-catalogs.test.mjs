@@ -201,7 +201,7 @@ test("scheduled CI and its manual preflight verify every official provider throu
   );
   assert.match(
     workflow,
-    /node eng\/check-live-catalogs\.mjs\s+--cli target\/debug\/torben\s+--output artifacts\/live-catalogs/,
+    /node eng\/check-live-catalogs\.mjs\s+--cli target\/debug\/torben\.exe\s+--output artifacts\/live-catalogs/,
   );
   for (const app of officialCatalogApps) {
     assert.match(workflow, new RegExp(`-p torben-plugin-${app}`));

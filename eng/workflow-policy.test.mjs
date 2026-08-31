@@ -47,6 +47,9 @@ test("workflow package installation and Cargo commands honor lock files", () => 
 test("ordinary CI runs locked lint and test gates", () => {
   const ci = readFileSync(join(workflowDirectory, "ci.yml"), "utf8");
 
+  assert.match(ci, /name: Test Windows x64[\s\S]*?runs-on: windows-latest/u);
+  assert.doesNotMatch(ci, /matrix:\s*\n\s+os:/u);
+  assert.doesNotMatch(ci, /(?:macos-latest|ubuntu-24\.04)/u);
   assert.match(ci, /cargo clippy --workspace --all-targets --locked -- -D warnings/u);
   assert.match(ci, /cargo test --workspace --locked/u);
 });
@@ -61,6 +64,8 @@ test("official catalog checks allow scheduled evidence and an equivalent manual 
     /if: github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/u,
   );
   assert.match(ci, /name: Verify all official provider catalogs/u);
+  assert.match(ci, /name: Verify all official provider catalogs[\s\S]*?runs-on: windows-latest/u);
+  assert.match(ci, /--cli target\/debug\/torben\.exe/u);
   assert.match(ci, /node eng\/check-live-catalogs\.mjs/u);
   assert.match(ci, /name: live-official-catalogs/u);
   assert.match(ci, /^permissions:\n\s{2}contents: read$/mu);
@@ -98,6 +103,21 @@ test("Windows preview remains manual, unsigned, read-only, and Windows x64 scope
   assert.match(preview, /acceptance_matrix:/u);
   assert.match(preview, /"format":"nsis"/u);
   assert.match(preview, /"format":"msi"/u);
+  assert.match(
+    preview,
+    /name: torben-app-\$\{\{ steps\.version\.outputs\.version \}\}-windows-x64-nsis-unsigned-preview/u,
+  );
+  assert.match(
+    preview,
+    /name: torben-app-\$\{\{ steps\.version\.outputs\.version \}\}-windows-x64-msi-unsigned-preview/u,
+  );
+  assert.match(
+    preview,
+    /name: torben-\$\{\{ steps\.version\.outputs\.version \}\}-windows-x64-cli-unsigned-preview/u,
+  );
+  assert.match(preview, /Split accepted Windows x64 downloads/u);
+  assert.match(preview, /node eng\/split-windows-preview\.mjs/u);
+  assert.doesNotMatch(preview, /windows-x64-unsigned-preview\s*$/mu);
   assert.doesNotMatch(preview, /(?:macos|ubuntu|aarch64)/u);
   assert.doesNotMatch(preview, /(?:environment:|secrets\.|vars\.)/u);
   assert.doesNotMatch(

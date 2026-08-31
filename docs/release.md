@@ -3,6 +3,8 @@
 Torben App distinguishes development artifacts from official releases. A successful package build
 is not enough to call an artifact official: every platform package, update artifact, and checksum
 must come from the same exact version and source revision, and the platform signing gates must pass.
+The current supported preview and required CI target is Windows x64. The broader matrix below is
+retained as future release-engineering design and is not a current support commitment.
 
 ## Native build matrix
 
@@ -202,17 +204,20 @@ artifacts, runs the fourteen-job combined package acceptance matrix, downloads e
 name, runs the aggregate verification, and uploads one 14-day six-target development artifact.
 GitHub-owned Actions are pinned to complete reviewed commit SHAs rather than mutable tags.
 
-`.github/workflows/windows-preview.yml` is the smaller Windows-first feedback path. It is also
-manual and read-only, but builds only `x86_64-pc-windows-msvc`. The candidate contains NSIS, MSI,
+`.github/workflows/windows-preview.yml` is the current supported release feedback path. It is manual
+and read-only, and builds only `x86_64-pc-windows-msvc`. The internal candidate contains NSIS, MSI,
 the archived CLI, an explicit `UNSIGNED-PREVIEW.txt` warning, and deterministic unsigned development
 metadata. A reusable two-job acceptance matrix installs, launches, and uninstalls both Windows
-packages before a 14-day `torben-app-<version>-windows-x64-unsigned-preview` artifact is exposed.
-The workflow does not enter a protected Environment, read signing credentials, create a tag or
-GitHub Release, or claim that the preview is an official release.
+packages before three separate 14-day downloads are exposed: an NSIS preview, an MSI preview, and a
+CLI preview. Each download contains only its selected distributable, the unsigned-build warning, and
+a SHA-256 checksum, so users do not need to download duplicate installer formats. The workflow does
+not enter a protected Environment, read signing credentials, create a tag or GitHub Release, or claim
+that the preview is an official release.
 
-Formal publishing is defined but remains operationally unavailable until Windows signing, macOS
-Developer ID/notarization, the Tauri updater signing path, and protected-environment review are
-configured. The development workflow must not be renamed or treated as an official release.
+Cross-platform formal publishing definitions are retained for future work and are not part of the
+current Windows-only support scope. A formal Windows release remains operationally unavailable until
+Windows signing, the Tauri updater signing path, and protected-environment review are configured.
+The preview workflow must not be renamed or treated as an official release.
 
 The application-side updater uses the fixed GitHub Release `latest.json` endpoint and accepts its
 Base64-encoded minisign verification key only through the compile-time
