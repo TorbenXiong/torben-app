@@ -9,7 +9,7 @@
     "check": "pnpm -r run check && biome check .",
     "format": "biome check --write .",
     "test": "pnpm -r run test && node --test eng/release-metadata.test.mjs eng/collect-release-artifacts.test.mjs eng/verify-release-set.test.mjs eng/updater-artifacts.test.mjs eng/linux-package-smoke.test.mjs eng/desktop-package-smoke.test.mjs eng/check-live-catalogs.test.mjs eng/workflow-policy.test.mjs eng/publish-plugin-registry.test.mjs eng/plugin-registry-release.test.mjs",
-    "test:release": "node --test eng/release-metadata.test.mjs eng/collect-release-artifacts.test.mjs eng/verify-release-set.test.mjs eng/updater-artifacts.test.mjs eng/linux-package-smoke.test.mjs eng/desktop-package-smoke.test.mjs eng/check-live-catalogs.test.mjs eng/workflow-policy.test.mjs eng/publish-plugin-registry.test.mjs eng/plugin-registry-release.test.mjs"
+    "test:release": "node --test eng/release-metadata.test.mjs eng/collect-release-artifacts.test.mjs eng/verify-release-set.test.mjs eng/updater-artifacts.test.mjs eng/linux-package-smoke.test.mjs eng/desktop-package-smoke.test.mjs eng/check-live-catalogs.test.mjs eng/workflow-policy.test.mjs eng/split-windows-preview.test.mjs eng/publish-plugin-registry.test.mjs eng/plugin-registry-release.test.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10"

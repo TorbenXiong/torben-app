@@ -7,8 +7,9 @@ notarization, and publication gates.
 
 ## Offline development gates
 
-Ordinary tests must not contact public services. `.github/workflows/ci.yml` runs the same locked
-workspace on Windows, macOS, and Ubuntu. Its required local gates are:
+Ordinary tests must not contact public services. `.github/workflows/ci.yml` currently validates the
+locked workspace on Windows x64 only. macOS and Linux implementations remain future targets and are
+not part of the required preview gate. The required local gates are:
 
 ```powershell
 cargo fmt --all --check

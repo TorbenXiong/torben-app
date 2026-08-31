@@ -1,12 +1,14 @@
 # Torben App
 
-Torben App is a local-first, cross-platform application and runtime manager for Windows, macOS, and Linux.
+Torben App is a local-first application and runtime manager. The current supported preview target is
+Windows x64; the cross-platform architecture remains in the repository for future milestones.
 
 The project is a greenfield rewrite. It does not share code, state, or compatibility guarantees with SoftPilot.
 
 ## Status
 
-The repository is under active bootstrap development. Node.js, Eclipse Temurin, Python, Git,
+The repository is under active bootstrap development and currently validates Windows x64 only.
+Node.js, Eclipse Temurin, Python, Git,
 Visual Studio Code, and Codex CLI now have local fixture-backed vertical management paths through
 the desktop app and the `torben` CLI. Package source adapters can discover winget, Homebrew, apt,
 and DNF, inspect installed package state, and produce exact operation plans. Mutations can run only
