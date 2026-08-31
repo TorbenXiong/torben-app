@@ -392,7 +392,7 @@ async function sustainedLaunch({ executable, cwd, env, timeoutMs, platform }) {
       resolveProbe(result);
     };
     child.once("error", (error) => finish({ sustained: false, error: error.message, output }));
-    child.once("close", (code, signal) =>
+    child.once("exit", (code, signal) =>
       finish({ sustained: launchWindowReached, code, signal, output }),
     );
     timer = setTimeout(() => {
@@ -411,7 +411,7 @@ async function sustainedLaunch({ executable, cwd, env, timeoutMs, platform }) {
       terminationTimer = setTimeout(
         () =>
           finish({
-            sustained: false,
+            sustained: true,
             processId,
             error: "Torben App did not terminate after the sustained launch probe.",
             output,
@@ -512,6 +512,12 @@ export async function runDesktopPackageSmoke({
         .slice(-4_000);
       fail(
         `Torben App exited before the ${launchTimeoutMs}ms launch window${probe?.code !== undefined ? ` with code ${String(probe.code)}` : ""}${diagnostic ? `: ${diagnostic}` : ""}`,
+      );
+    }
+    if (probe.error) {
+      const diagnostic = String(probe.error).trim().slice(-4_000);
+      fail(
+        `Torben App survived the ${launchTimeoutMs}ms launch window but cleanup failed${diagnostic ? `: ${diagnostic}` : ""}`,
       );
     }
     return {
