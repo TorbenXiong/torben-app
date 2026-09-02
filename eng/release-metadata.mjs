@@ -31,6 +31,10 @@ export const supportedTargets = Object.freeze({
   "aarch64-unknown-linux-gnu": { operatingSystem: "linux", architecture: "aarch64" },
 });
 
+// Keep deferred targets recognizable by metadata tooling, while making the current release
+// commitment explicit and independently changeable.
+export const officialReleaseTargets = Object.freeze(["x86_64-pc-windows-msvc"]);
+
 function fail(message) {
   throw new Error(message);
 }

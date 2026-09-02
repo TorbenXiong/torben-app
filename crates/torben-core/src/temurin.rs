@@ -3,7 +3,6 @@ use std::{
     ffi::OsString,
     future::Future,
     path::{Path, PathBuf},
-    process::Command,
     str::FromStr,
     time::{Duration, SystemTime},
 };
@@ -22,6 +21,7 @@ use crate::{
     TorbenPaths,
     node::{ArchiveKind, extract_archive, sha256_file_checked},
     operation::{CancellationProbe, OperationJournal},
+    process,
     temurin_signature::{ADOPTIUM_RELEASE_FINGERPRINT, verify_archive_signature},
 };
 
@@ -420,7 +420,7 @@ impl TemurinProvider {
             };
             let Ok(output) = tokio::time::timeout(
                 Duration::from_secs(3),
-                tokio::process::Command::new(&canonical)
+                process::async_command(&canonical)
                     .arg("-version")
                     .kill_on_drop(true)
                     .output(),
@@ -630,7 +630,7 @@ impl TemurinProvider {
         let path = managed_command_path(install_path)?;
         for command in ["java", "javac"] {
             let executable = self.command_path(install_path, command)?;
-            let output = Command::new(&executable)
+            let output = process::command(&executable)
                 .arg("-version")
                 .env("PATH", &path)
                 .output()
@@ -1148,6 +1148,7 @@ mod tests {
         collections::BTreeMap,
         io::{Read, Write},
         net::TcpListener,
+        process::Command,
         sync::Arc,
         thread,
     };

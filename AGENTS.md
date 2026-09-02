@@ -4,7 +4,16 @@ The global Codex rules remain in force. These rules apply specifically to this r
 
 ## Product boundaries
 
-- Torben App is a local-first application manager for Windows, macOS, and Linux.
+- Torben App is a local-first application manager. The current delivery and support target is
+  Windows x64.
+- Windows ARM64, macOS, and Linux are deferred. Existing implementations and release tooling may
+  remain for future milestones, but feature parity, packaging, and native acceptance on those
+  targets are not current merge or release gates.
+- New product work must complete and verify the Windows x64 path first. Do not expand deferred
+  platform scope unless the product milestone is explicitly changed.
+- Preserve shared contracts, Core boundaries, and existing platform abstractions so deferred
+  targets can resume without a rewrite; do not delete cross-platform code merely because it is not
+  in the current support scope.
 - Do not introduce accounts, cloud synchronization, telemetry, project-level version pinning, or a resident background service without an explicit product decision.
 - Do not import SoftPilot code or state formats. Security and transaction ideas may be independently reimplemented.
 - Native plugins are trusted code. Never describe process isolation as a security sandbox.

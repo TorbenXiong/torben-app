@@ -2,8 +2,8 @@
 
 Torben App separates deterministic fixture coverage, native package acceptance, and read-only live
 catalog monitoring. A configured workflow is not evidence that a particular remote run passed; the
-GitHub run and its artifacts remain the authoritative evidence for macOS, Linux, ARM64, signing,
-notarization, and publication gates.
+GitHub run and its artifacts remain the authoritative evidence for Windows x64 signing and
+publication gates. macOS, Linux, and ARM64 evidence is retained for future platform milestones.
 
 ## Offline development gates
 
@@ -23,6 +23,10 @@ cargo test --locked -p torben-desktop --features test-fixtures desktop_commands_
 pnpm run check
 pnpm run test
 ```
+
+`pnpm run test:cross-platform` runs the deferred Linux package-probe fixtures explicitly. It is not
+part of the ordinary Windows x64 gate. `pnpm run test:release` retains the complete release-tooling
+fixture suite for manual cross-platform workflow maintenance.
 
 `eng/workflow-policy.test.mjs` requires immutable Action revisions, frozen pnpm installation, and
 `--locked` for every direct Cargo build, lint, test, or run command in workflows. The repository
@@ -81,8 +85,9 @@ unexecuted acceptance scenario.
 
 ## Native package acceptance
 
-Development and official release workflows call two reusable acceptance workflows only after all
-native packages are built:
+Windows x64 NSIS and MSI installation plus sustained launch are the current required native package
+gates. The broader workflows below are retained for explicit future-platform validation and do not
+block the Windows-first milestone:
 
 - `.github/workflows/desktop-package-acceptance.yml` installs NSIS/MSI on Windows x64 and ARM64,
   copies the application from DMG on macOS Intel and Apple Silicon, validates the application and
@@ -92,10 +97,11 @@ native packages are built:
   on x86_64 and ARM64 across Ubuntu, Debian, Fedora, and Rocky Linux containers, then performs the
   same content and launch checks.
 
-The development aggregate and official publishing job depend on all fourteen jobs. Local fixture
-coverage for the probes lives in `eng/desktop-package-smoke.test.mjs` and
+The manual cross-platform development aggregate depends on all fourteen jobs. The official Windows
+x64 publishing job supplies a reduced acceptance matrix containing only the NSIS and MSI jobs.
+Local fixture coverage for the probes lives in `eng/desktop-package-smoke.test.mjs` and
 `eng/linux-package-smoke.test.mjs`; those tests validate fail-closed behavior but do not substitute
-for a native package workflow run.
+for the corresponding native package workflow run.
 
 Signed desktop fixtures additionally prove that verified metadata activates Authenticode checks
 for one package plus all eight installed executables, and activates `codesign`, stapler, and
@@ -112,8 +118,8 @@ validates their stable JSON results, and atomically uploads one complete snapsho
 performs no install, selection, package-manager, or system mutation. A successful manual preflight
 does not satisfy the milestone's scheduled-run evidence requirement.
 
-An official release additionally requires the protected `official-release` environment, Windows
-Authenticode credentials, Apple Developer ID/notarization credentials, and the matching Tauri
-updater signing key. Missing remote run evidence or credentials means the corresponding release
-criterion remains unverified; an unsigned development artifact must never be described as an
-official release.
+An official Windows x64 release additionally requires the protected `official-release` environment,
+Windows Authenticode credentials, and the matching Tauri updater signing key. Apple Developer ID and
+notarization credentials are deferred with the macOS milestone. Missing required Windows evidence or
+credentials means the release criterion remains unverified; an unsigned development artifact must
+never be described as an official release.

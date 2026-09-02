@@ -897,7 +897,7 @@ fn file_transaction_conflict(path: &Path) -> TorbenError {
 
 #[cfg(windows)]
 mod windows {
-    use std::{path::Path, process::Command};
+    use std::path::Path;
 
     use serde::{Deserialize, Serialize};
 
@@ -908,6 +908,7 @@ mod windows {
         TorbenResult, atomic_write, inspect_bounded_regular_file, path_text, prepend_windows_path,
         remove_first_windows_path, should_delete_windows_path, status, windows_path_contains,
     };
+    use crate::process;
 
     const TARGET: &str = "HKCU\\Environment\\Path";
     const OWNERSHIP_RECEIPT_MAX_BYTES: u64 = 16 * 1024;
@@ -1442,7 +1443,7 @@ mod windows {
     }
 
     fn read_user_path() -> TorbenResult<UserPathValue> {
-        let output = Command::new(powershell()?)
+        let output = process::command(powershell()?)
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -1480,7 +1481,7 @@ mod windows {
     }
 
     fn run_write_command(script: &str, environment: Option<(&str, &str)>) -> TorbenResult<()> {
-        let mut command = Command::new(powershell()?);
+        let mut command = process::command(powershell()?);
         command.args([
             "-NoLogo",
             "-NoProfile",

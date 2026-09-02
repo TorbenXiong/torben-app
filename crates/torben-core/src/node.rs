@@ -5,7 +5,6 @@ use std::{
     future::Future,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
-    process::Command,
     str::FromStr,
     time::{Duration, SystemTime},
 };
@@ -28,6 +27,7 @@ use zip::ZipArchive;
 use crate::{
     TorbenPaths,
     operation::{CancellationProbe, OperationJournal},
+    process,
 };
 
 const NODE_BASE_URL: &str = "https://nodejs.org/dist/";
@@ -443,7 +443,7 @@ impl NodeProvider {
             if canonical.starts_with(managed_root) || !seen.insert(canonical.clone()) {
                 continue;
             }
-            let Ok(child) = tokio::process::Command::new(&canonical)
+            let Ok(child) = process::async_command(&canonical)
                 .arg("--version")
                 .kill_on_drop(true)
                 .stdout(std::process::Stdio::piped())
@@ -702,7 +702,7 @@ fn managed_command_path(install_path: &Path) -> TorbenResult<OsString> {
 }
 
 fn run_health_command(command: &str, executable: &Path, path: &OsString) -> TorbenResult<String> {
-    let output = Command::new(executable)
+    let output = process::command(executable)
         .arg("--version")
         .env("PATH", path)
         .output()

@@ -20,6 +20,7 @@ use crate::{
     TorbenPaths,
     node::{ArchiveKind, extract_archive_contents, sha256_file_checked},
     operation::{CancellationProbe, OperationJournal},
+    process,
 };
 
 const GITHUB_RELEASES_URL: &str = "https://api.github.com/repos/microsoft/vscode/releases/";
@@ -338,7 +339,7 @@ impl VsCodeProvider {
             }
             let Ok(result) = tokio::time::timeout(
                 PROCESS_TIMEOUT,
-                tokio::process::Command::new(&canonical)
+                process::async_command(&canonical)
                     .args(["--version", "--disable-updates"])
                     .kill_on_drop(true)
                     .output(),
@@ -441,7 +442,7 @@ impl VsCodeProvider {
         let executable = self.command_path(install_path, "code")?;
         let result = tokio::time::timeout(
             PROCESS_TIMEOUT,
-            tokio::process::Command::new(&executable)
+            process::async_command(&executable)
                 .args(["--version", "--disable-updates"])
                 .kill_on_drop(true)
                 .output(),

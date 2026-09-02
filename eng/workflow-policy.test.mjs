@@ -82,10 +82,14 @@ test("release workflows preserve Cargo arguments and native package prerequisite
       name,
     );
     assert.doesNotMatch(release, /pnpm[^\n]*exec tauri build/u, name);
-    assert.match(release, /patchelf xdg-utils/u, name);
     assert.doesNotMatch(release, /require\("\.\/package\.json"\)/u, name);
     assert.match(release, /join\(process\.env\.GITHUB_WORKSPACE, "package\.json"\)/u, name);
   }
+  const crossPlatformRelease = readFileSync(join(workflowDirectory, "release.yml"), "utf8");
+  assert.match(crossPlatformRelease, /patchelf xdg-utils/u);
+  const officialRelease = readFileSync(join(workflowDirectory, "official-release.yml"), "utf8");
+  assert.doesNotMatch(officialRelease, /(?:macos|aarch64|patchelf)/u);
+  assert.match(officialRelease, /--target x86_64-pc-windows-msvc/u);
 });
 
 test("Windows preview remains manual, unsigned, read-only, and Windows x64 scoped", () => {
