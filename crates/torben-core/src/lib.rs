@@ -14,6 +14,7 @@ mod node_signature;
 mod operation;
 mod paths;
 mod plugin_registry;
+mod process;
 mod python;
 #[cfg(any(unix, test))]
 mod python_sigstore;

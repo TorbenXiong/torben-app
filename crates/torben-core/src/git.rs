@@ -26,6 +26,7 @@ use crate::{
     },
     node::{ArchiveKind, extract_archive, extract_archive_contents, sha256_file_checked},
     operation::{CancellationProbe, OperationJournal},
+    process,
 };
 
 const GIT_FOR_WINDOWS_API: &str =
@@ -481,7 +482,7 @@ impl GitProvider {
             }
             let Ok(result) = tokio::time::timeout(
                 Duration::from_secs(3),
-                tokio::process::Command::new(&canonical)
+                process::async_command(&canonical)
                     .arg("--version")
                     .kill_on_drop(true)
                     .output(),
@@ -650,7 +651,7 @@ impl GitProvider {
             )
             .with_detail("reason", error.to_string())
         })?;
-        let output = std::process::Command::new(&executable)
+        let output = process::command(&executable)
             .arg("--version")
             .env("PATH", path)
             .output()
@@ -1218,7 +1219,7 @@ async fn run_process(
 ) -> TorbenResult<()> {
     ensure_regular_file(executable)?;
     cancellation.check()?;
-    let mut command = tokio::process::Command::new(executable);
+    let mut command = process::async_command(executable);
     command
         .args(arguments)
         .stdin(Stdio::null())

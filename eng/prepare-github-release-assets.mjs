@@ -18,7 +18,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { supportedTargets, workspaceVersion } from "./release-metadata.mjs";
+import { officialReleaseTargets, workspaceVersion } from "./release-metadata.mjs";
 
 const internalFiles = new Set(["release-metadata.json", "SHA256SUMS", "updater-artifacts.json"]);
 const checksumsName = "SHA256SUMS";
@@ -82,7 +82,7 @@ function releaseAssetSources(root) {
   const { version } = workspaceVersion();
   const rawCliPattern = new RegExp(`^torben-${escapeRegularExpression(version)}-[^.]+(?:\\.exe)?$`);
   const sources = [join(root, "latest.json"), join(root, "release-index.json")];
-  for (const target of Object.keys(supportedTargets)) {
+  for (const target of officialReleaseTargets) {
     sources.push(
       ...flatRegularFiles(join(root, target), `Release target ${target}`).filter((path) => {
         const name = basename(path);

@@ -1,4 +1,4 @@
-name: Cross-platform development release
+name: Deferred cross-platform development validation
 
 on:
   workflow_dispatch:

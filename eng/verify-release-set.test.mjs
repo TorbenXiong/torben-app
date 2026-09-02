@@ -5,7 +5,11 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { createReleaseMetadata, supportedTargets } from "./release-metadata.mjs";
+import {
+  createReleaseMetadata,
+  officialReleaseTargets,
+  supportedTargets,
+} from "./release-metadata.mjs";
 import { createReleaseSet, verifyReleaseSet } from "./verify-release-set.mjs";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -210,7 +214,6 @@ test("development workflow pins approved Actions and cannot publish an official 
   assert.deepEqual(reusableCalls, [
     "uses: ./.github/workflows/linux-package-acceptance.yml",
     "uses: ./.github/workflows/desktop-package-acceptance.yml",
-    "uses: ./.github/workflows/linux-package-acceptance.yml",
     "uses: ./.github/workflows/desktop-package-acceptance.yml",
   ]);
   for (const line of usesLines) {
@@ -317,22 +320,19 @@ test("development workflow pins approved Actions and cannot publish an official 
   );
   assert.equal((officialWorkflow.match(/^ {4}environment: official-release$/gm) ?? []).length, 2);
   assert.equal((officialWorkflow.match(/contents: write/g) ?? []).length, 1);
+  assert.doesNotMatch(officialWorkflow, /^ {2}linux-package-acceptance:/m);
   assert.match(
     officialWorkflow,
-    /^ {2}linux-package-acceptance:\r?\n {4}name: Install and launch signed Linux packages\r?\n {4}needs: build\r?\n {4}uses: \.\/\.github\/workflows\/linux-package-acceptance\.yml\r?\n {4}with:\r?\n {6}artifact-prefix: official-$/m,
+    /^ {2}desktop-package-acceptance:\r?\n {4}name: Install and launch signed Windows x64 packages\r?\n {4}needs: build\r?\n {4}uses: \.\/\.github\/workflows\/desktop-package-acceptance\.yml\r?\n {4}with:\r?\n {6}artifact-prefix: official-[\s\S]*?acceptance_matrix:/m,
   );
   assert.match(
     officialWorkflow,
-    /^ {2}desktop-package-acceptance:\r?\n {4}name: Install and launch signed Windows and macOS packages\r?\n {4}needs: build\r?\n {4}uses: \.\/\.github\/workflows\/desktop-package-acceptance\.yml\r?\n {4}with:\r?\n {6}artifact-prefix: official-$/m,
-  );
-  assert.match(
-    officialWorkflow,
-    /^ {2}publish:\r?\n {4}name: Verify and publish official release\r?\n {4}needs: \[build, desktop-package-acceptance, linux-package-acceptance\]$/m,
+    /^ {2}publish:\r?\n {4}name: Verify and publish official release\r?\n {4}needs: \[build, desktop-package-acceptance\]$/m,
   );
   assert.match(officialWorkflow, /TAURI_SIGNING_PRIVATE_KEY/);
   assert.match(officialWorkflow, /TORBEN_UPDATER_PUBLIC_KEY/);
   assert.match(officialWorkflow, /Get-AuthenticodeSignature/);
-  assert.match(officialWorkflow, /xcrun stapler validate/);
+  assert.doesNotMatch(officialWorkflow, /xcrun stapler validate|APPLE_CERTIFICATE/);
   assert.match(officialWorkflow, /verify-updater/);
   assert.match(officialWorkflow, /verify-updater-artifacts\.mjs/);
   assert.doesNotMatch(
@@ -362,31 +362,16 @@ test("development workflow pins approved Actions and cannot publish an official 
   assert.match(officialWorkflow, /--release-kind official/);
   assert.match(officialWorkflow, /--signing-status signed/);
   assert.doesNotMatch(officialWorkflow, /--skip-stapling|--no-sign|continue-on-error/);
-  const officialMatrixBlock =
-    officialWorkflow.match(/matrix:\r?\n([\s\S]*?) {4}runs-on:/)?.[1] ?? "";
-  const officialTargets = [...officialMatrixBlock.matchAll(/^\s+target: (\S+)$/gm)].map(
-    (match) => match[1],
-  );
-  assert.deepEqual(officialTargets, Object.keys(supportedTargets));
-  assert.match(
-    officialWorkflow,
-    /for target in x86_64-pc-windows-msvc aarch64-pc-windows-msvc x86_64-apple-darwin aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do/,
-  );
-  assert.match(
-    officialWorkflow,
-    /mv "artifacts\/downloaded\/official-\$target" "artifacts\/release-set\/\$target"/,
-  );
-  assert.match(
-    officialWorkflow,
-    /test -z "\$\(find artifacts\/downloaded -mindepth 1 -print -quit\)"/,
-  );
+  assert.deepEqual(officialReleaseTargets, ["x86_64-pc-windows-msvc"]);
+  assert.match(officialWorkflow, /runs-on: windows-latest/);
+  assert.doesNotMatch(officialWorkflow, /^ {4}strategy:|^ {6}matrix:/m);
+  assert.doesNotMatch(officialWorkflow, /(?:aarch64|apple-darwin|unknown-linux)/);
 
   const publicationGates = [
-    "Download all signed targets",
-    "Normalize exact target directories",
-    "Re-verify every downloaded target and updater signature",
+    "Download signed Windows x64 target",
+    "Re-verify downloaded Windows x64 target and updater signatures",
     "Generate signed static updater manifest",
-    "Create and re-verify official six-target release set",
+    "Create and re-verify official Windows x64 release set",
     "Prepare unique flat GitHub Release assets",
     "Re-verify flat GitHub Release assets",
     "Create immutable GitHub Release",

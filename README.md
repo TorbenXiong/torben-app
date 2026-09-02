@@ -1,7 +1,8 @@
 # Torben App
 
-Torben App is a local-first application and runtime manager. The current supported preview target is
-Windows x64; the cross-platform architecture remains in the repository for future milestones.
+Torben App is a local-first application and runtime manager. Windows x64 is the current delivery,
+validation, and support target. Windows ARM64, macOS, and Linux are deferred; their existing
+implementations and cross-platform architecture remain in the repository for future milestones.
 
 The project is a greenfield rewrite. It does not share code, state, or compatibility guarantees with SoftPilot.
 
@@ -10,8 +11,8 @@ The project is a greenfield rewrite. It does not share code, state, or compatibi
 The repository is under active bootstrap development and currently validates Windows x64 only.
 Node.js, Eclipse Temurin, Python, Git,
 Visual Studio Code, and Codex CLI now have local fixture-backed vertical management paths through
-the desktop app and the `torben` CLI. Package source adapters can discover winget, Homebrew, apt,
-and DNF, inspect installed package state, and produce exact operation plans. Mutations can run only
+the desktop app and the `torben` CLI. Windows uses the winget package-source adapter. Homebrew, apt,
+and DNF implementations remain for deferred macOS/Linux milestones. Source mutations can run only
 after explicit confirmation; DNF additionally resolves and locks one complete repository NEVRA.
 
 Ordinary tests remain network-independent and use local fixtures. The weekly scheduled CI, or its
@@ -25,7 +26,7 @@ scheduled-run evidence. The distinction between local coverage, configured nativ
 authoritative remote acceptance evidence is documented in
 [test and acceptance evidence](docs/testing.md). The complete original-plan mapping and the
 remaining credential- or hosting-dependent gates are tracked in
-[greenfield milestone status](docs/milestone-status.md).
+[Windows-first milestone status](docs/milestone-status.md).
 
 ## Repository layout
 
@@ -49,6 +50,17 @@ remaining credential- or hosting-dependent gates are tracked in
 - Node.js `24.19.0` LTS.
 - pnpm `11.19.0`.
 - Platform prerequisites required by [Tauri 2](https://v2.tauri.app/start/prerequisites/).
+
+## Platform scope
+
+- Required for changes and releases: Windows x64.
+- Deferred: Windows ARM64, macOS Intel/Apple Silicon, and Linux x86_64/ARM64.
+- Preserved for future work: platform abstractions, native package probes, source adapters, provider
+  distribution strategies, and the manual six-target development workflow.
+
+Deferred implementations are not current support claims and do not need feature parity with
+Windows x64. Shared contracts and Core APIs should remain portable unless an explicit product
+decision changes that boundary.
 
 ## Common commands
 
@@ -530,18 +542,17 @@ torben plugin action app.example.plugin settings general apply --value channel=l
 torben plugin action app.example.plugin settings danger reset --confirm --json
 ```
 
-Cross-platform packaging, signing gates, and deterministic SHA-256 metadata are documented in
+Windows x64 packaging, signing gates, and deterministic SHA-256 metadata are documented in
 [release engineering](docs/release.md). Unsigned packages are development artifacts and cannot be
-promoted to an official release. Windows NSIS/MSI and macOS DMG artifacts must install or copy and
-sustain a GUI launch on native x64/ARM64 runners. Linux AppImage, deb, and rpm artifacts must do the
-same in disposable Ubuntu, Debian, Fedora, and Rocky Linux containers on both architectures. The
-development workflow is manual, read-only, and produces 14-day artifacts only; it never creates a
-GitHub Release.
+promoted to an official release. The current release gate installs, launches, and uninstalls both
+Windows x64 NSIS and MSI packages. The retained cross-platform development workflow can still build
+and inspect Windows ARM64, macOS, and Linux artifacts manually, but those results are future-platform
+engineering evidence and do not block the current Windows x64 milestone.
 
-Formal tag publishing is isolated in a protected `official-release` GitHub environment. It requires
-Windows Authenticode, macOS Developer ID/notarization, and matching minisign updater credentials;
-the release job re-verifies all signatures after artifact transfer before creating `latest.json` or
-the immutable GitHub Release.
+Formal tag publishing is isolated in a protected `official-release` GitHub environment. The current
+path requires Windows Authenticode and matching minisign updater credentials; the release job
+re-verifies the Windows x64 packages, CLI, sidecars, and updater signatures after artifact transfer
+before creating `latest.json` or the immutable GitHub Release.
 
 ## License
 

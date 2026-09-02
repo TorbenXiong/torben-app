@@ -656,6 +656,8 @@ impl PluginClient {
         call_timeout: Duration,
         capabilities: Option<Vec<PluginCapability>>,
     ) -> TorbenResult<Self> {
+        #[cfg(windows)]
+        command.creation_flags(0x0800_0000);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

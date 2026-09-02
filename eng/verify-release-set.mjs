@@ -16,14 +16,18 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { verifyUpdaterManifest } from "./generate-updater-manifest.mjs";
-import { supportedTargets, verifyReleaseMetadata } from "./release-metadata.mjs";
+import {
+  officialReleaseTargets,
+  supportedTargets,
+  verifyReleaseMetadata,
+} from "./release-metadata.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const defaultRepositoryRoot = dirname(scriptDirectory);
 const indexName = "release-index.json";
 const checksumsName = "SHA256SUMS";
 const updaterManifestName = "latest.json";
-const targetOrder = Object.keys(supportedTargets);
+const developmentTargetOrder = Object.keys(supportedTargets);
 const comparePaths = (left, right) => left.localeCompare(right, "en");
 
 function fail(message) {
@@ -159,7 +163,7 @@ function parseChecksums(path) {
   return records;
 }
 
-function assertCompleteTargets(records) {
+function assertCompleteTargets(records, targetOrder) {
   const actual = records.map((record) => record.metadata.target).sort(comparePaths);
   const expected = [...targetOrder].sort(comparePaths);
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -204,9 +208,11 @@ async function verifiedTargets(root, allowMetadataFiles, repositoryRoot) {
       }),
     });
   }
-  assertCompleteTargets(records);
   const identity = assertSharedIdentity(records);
-  return { records, identity };
+  const targetOrder =
+    identity.releaseKind === "official" ? officialReleaseTargets : developmentTargetOrder;
+  assertCompleteTargets(records, targetOrder);
+  return { records, identity, targetOrder };
 }
 
 function verifyUpdaterPolicy(root, identity) {
@@ -224,7 +230,7 @@ export async function createReleaseSet({ releases, repositoryRoot = defaultRepos
   const indexPath = join(root, indexName);
   const checksumsPath = join(root, checksumsName);
   requireNewMetadataPaths([indexPath, checksumsPath]);
-  const { records, identity } = await verifiedTargets(root, true, repositoryRoot);
+  const { records, identity, targetOrder } = await verifiedTargets(root, true, repositoryRoot);
   verifyUpdaterPolicy(root, identity);
   const targetRecords = [];
   for (const target of targetOrder) {
@@ -299,7 +305,7 @@ export async function verifyReleaseSet({ releases, repositoryRoot = defaultRepos
   ) {
     fail("Release index schema or product identity is invalid.");
   }
-  const { records, identity } = await verifiedTargets(root, true, repositoryRoot);
+  const { records, identity, targetOrder } = await verifiedTargets(root, true, repositoryRoot);
   verifyUpdaterPolicy(root, identity);
   if (
     index.version !== identity.version ||
@@ -363,7 +369,7 @@ async function main() {
       ? await createReleaseSet(options)
       : await verifyReleaseSet(options);
   console.log(
-    `${options.command === "create" ? "Created" : "Verified"} Torben App ${result.version} ${result.releaseKind} six-target release set.`,
+    `${options.command === "create" ? "Created" : "Verified"} Torben App ${result.version} ${result.releaseKind} ${result.targets.length}-target release set.`,
   );
 }
 

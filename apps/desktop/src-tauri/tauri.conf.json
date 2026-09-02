@@ -40,6 +40,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows/nsis-hooks.nsh",
+        "installMode": "currentUser"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -49,6 +55,6 @@
     ],
     "category": "DeveloperTool",
     "shortDescription": "Local-first application and runtime manager",
-    "longDescription": "Torben App manages trusted application sources, exact versions, and terminal selections across Windows, macOS, and Linux."
+    "longDescription": "Torben App manages trusted application sources, exact versions, and terminal selections on Windows."
   }
 }

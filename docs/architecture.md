@@ -2,6 +2,11 @@
 
 ## Boundaries
 
+Windows x64 is the current delivery and verification target. Windows ARM64, macOS, and Linux are
+deferred, but their existing implementations remain behind the same platform boundaries so future
+work does not require a protocol or persistence redesign. New platform-specific behavior belongs in
+`torben-core`; shared contracts must not acquire Windows-only wire semantics.
+
 Torben App has two user-facing entry points: the Tauri desktop app and the `torben` CLI. Both call `torben-core`; neither owns installation or persistence behavior. Shared serialized models live in `torben-contracts`.
 
 ```text
@@ -18,6 +23,12 @@ exercise the same parsing and mutation path; the React API keeps the correspondi
 camel-case payloads in one typed module.
 
 Plugins are native trusted processes that communicate through versioned JSON-RPC over stdio. A plugin describes applications, resolves aliases to exact versions, and produces application-specific plans. Core remains responsible for locking, durable operation state, download verification, staging, health checks, atomic commit, rollback, and SQLite state.
+
+On Windows, Core starts provider plugins, package-source tools, health checks, and other managed
+background commands with `CREATE_NO_WINDOW`. The plugin host applies the same flag at its process
+boundary. Standard input, output, and error remain piped where required, but these background
+processes do not create user-visible console windows during desktop startup or operations. Other
+platforms keep their native process behavior through the shared command helpers.
 
 Every plugin request has a host-enforced timeout and a matching JSON-RPC request identifier. A
 timeout, early process exit, malformed JSON, mismatched response, or plugin-reported structured

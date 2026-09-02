@@ -19,7 +19,7 @@ import {
   prepareGithubReleaseAssets,
   verifyGithubReleaseAssets,
 } from "./prepare-github-release-assets.mjs";
-import { createReleaseMetadata, supportedTargets } from "./release-metadata.mjs";
+import { createReleaseMetadata, officialReleaseTargets } from "./release-metadata.mjs";
 import { createReleaseSet, verifyReleaseSet } from "./verify-release-set.mjs";
 import { verifyUpdaterArtifacts } from "./verify-updater-artifacts.mjs";
 
@@ -78,7 +78,7 @@ async function createOfficialReleaseFixture(root) {
   const releases = join(root, "release-set");
   mkdirSync(releases);
   const mappings = new Map();
-  for (const target of Object.keys(supportedTargets)) {
+  for (const target of officialReleaseTargets) {
     const output = join(releases, target);
     mkdirSync(output);
     writeFileSync(join(output, `payload-${target}`), target);
@@ -116,19 +116,15 @@ test("collects every updater package/signature pair and creates latest.json", as
   const root = fixtureRoot();
   try {
     const { releases, mappings } = await createOfficialReleaseFixture(root);
-    for (const target of Object.keys(supportedTargets)) {
+    for (const target of officialReleaseTargets) {
       assert.equal(mappings.get(target).artifacts.length, requirements[target].length);
     }
-    assert.notEqual(
-      mappings.get("x86_64-apple-darwin").artifacts[0].artifact,
-      mappings.get("aarch64-apple-darwin").artifacts[0].artifact,
-    );
     const manifest = generateUpdaterManifest({
       releases,
       publishedAt: "2026-08-24T13:00:00Z",
       notes: "Official updater fixture",
     });
-    assert.equal(Object.keys(manifest.platforms).length, 12);
+    assert.equal(Object.keys(manifest.platforms).length, 2);
     assert.equal(manifest.version, "0.1.0");
     assert.match(manifest.platforms["windows-x86_64-nsis"].url, /v0\.1\.0/);
     assert.equal(
@@ -240,39 +236,44 @@ test("validates a signed mapping before invoking the Rust verifier", async () =>
   }
 });
 
-test("rejects updater artifact basenames that would share one GitHub URL", async () => {
+test("does not require deferred platform updater directories", async () => {
   const root = fixtureRoot();
   try {
-    const { releases, mappings } = await createOfficialReleaseFixture(root);
-    const firstTarget = "x86_64-apple-darwin";
-    const secondTarget = "aarch64-apple-darwin";
-    const sharedArtifact = mappings.get(firstTarget).artifacts[0].artifact;
-    const sharedSignature = `${sharedArtifact}.sig`;
-    const secondMapping = structuredClone(mappings.get(secondTarget));
-    const secondDirectory = join(releases, secondTarget);
-    copyFileSync(
-      join(secondDirectory, secondMapping.artifacts[0].artifact),
-      join(secondDirectory, sharedArtifact),
-    );
-    copyFileSync(
-      join(secondDirectory, secondMapping.artifacts[0].signature),
-      join(secondDirectory, sharedSignature),
-    );
-    secondMapping.artifacts[0].artifact = sharedArtifact;
-    secondMapping.artifacts[0].signature = sharedSignature;
-    writeMapping(releases, secondTarget, secondMapping);
-    const metadataPath = join(secondDirectory, "release-metadata.json");
-    const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-    metadata.artifacts.push({ path: sharedArtifact });
-    metadata.artifacts.push({ path: sharedSignature });
-    writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
-    assert.throws(
-      () =>
-        generateUpdaterManifest({
-          releases,
-          publishedAt: "2026-08-24T13:00:00Z",
-        }),
-      /ambiguous URL/,
+    const { releases } = await createOfficialReleaseFixture(root);
+    const manifest = generateUpdaterManifest({
+      releases,
+      publishedAt: "2026-08-24T13:00:00Z",
+    });
+    assert.deepEqual(Object.keys(manifest.platforms), [
+      "windows-x86_64-msi",
+      "windows-x86_64-nsis",
+    ]);
+  } finally {
+    removeFixture(root);
+  }
+});
+
+test("official release sets reject deferred platform targets", async () => {
+  const root = fixtureRoot();
+  try {
+    const { releases } = await createOfficialReleaseFixture(root);
+    generateUpdaterManifest({ releases, publishedAt: "2026-08-24T13:00:00Z" });
+    const deferredTarget = "aarch64-pc-windows-msvc";
+    const deferredDirectory = join(releases, deferredTarget);
+    mkdirSync(deferredDirectory);
+    writeFileSync(join(deferredDirectory, "deferred.fixture"), deferredTarget);
+    await createReleaseMetadata({
+      artifacts: deferredDirectory,
+      target: deferredTarget,
+      revision: "e".repeat(40),
+      sourceRef: "refs/tags/v0.1.0",
+      releaseKind: "official",
+      signingStatus: "signed",
+      repositoryRoot,
+    });
+    await assert.rejects(
+      createReleaseSet({ releases, repositoryRoot }),
+      /targets are incomplete or duplicated/,
     );
   } finally {
     removeFixture(root);
@@ -344,22 +345,17 @@ test("preflights every updater pair before copying any signature", () => {
   }
 });
 
-test("removes a partial flattened asset directory after a duplicate-name failure", async () => {
+test("rejects flattened publication when the current release target is missing", async () => {
   const root = fixtureRoot();
   try {
     const releases = join(root, "release-set");
     mkdirSync(releases);
     writeFileSync(join(releases, "latest.json"), "{}\n");
     writeFileSync(join(releases, "release-index.json"), "{}\n");
-    for (const target of Object.keys(supportedTargets)) {
-      const directory = join(releases, target);
-      mkdirSync(directory);
-      writeFileSync(join(directory, "collision.bin"), target);
-    }
     const output = join(root, "publishing");
     await assert.rejects(
       prepareGithubReleaseAssets({ releases, output }),
-      /asset name is duplicated/,
+      /Release target x86_64-pc-windows-msvc is missing/,
     );
     assert.equal(existsSync(output), false);
     assert.equal(existsSync(`${output}.next`), false);

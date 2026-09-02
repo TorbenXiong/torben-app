@@ -16,6 +16,8 @@ use torben_contracts::{
     SourcePackageVersion, TorbenError, TorbenResult,
 };
 
+use crate::process;
+
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 const MAX_EXPORT_BYTES: u64 = 8 * 1024 * 1024;
@@ -1158,7 +1160,7 @@ async fn run_system_command(
     arguments: Vec<String>,
     environment: BTreeMap<String, String>,
 ) -> TorbenResult<CommandOutput> {
-    let mut command = tokio::process::Command::new(&executable);
+    let mut command = process::async_command(&executable);
     command
         .args(arguments)
         .envs(environment)

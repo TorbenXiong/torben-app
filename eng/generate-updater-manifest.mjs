@@ -12,7 +12,7 @@ import {
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { updaterTargetRequirements } from "./collect-updater-artifacts.mjs";
-import { supportedTargets, workspaceVersion } from "./release-metadata.mjs";
+import { officialReleaseTargets, supportedTargets, workspaceVersion } from "./release-metadata.mjs";
 
 const repository = "TorbenXiong/torben-app";
 
@@ -120,7 +120,7 @@ export function validateUpdaterTargetDirectory({ directory, target, version }) {
 function updaterPlatforms(root, version) {
   const platforms = {};
   const artifactNames = new Set();
-  for (const target of Object.keys(supportedTargets)) {
+  for (const target of officialReleaseTargets) {
     const directory = join(root, target);
     const records = validateUpdaterTargetDirectory({ directory, target, version });
     for (const record of records) {
@@ -135,8 +135,8 @@ function updaterPlatforms(root, version) {
       };
     }
   }
-  const expectedPlatformCount = Object.values(updaterTargetRequirements).reduce(
-    (count, requirements) => count + requirements.length,
+  const expectedPlatformCount = officialReleaseTargets.reduce(
+    (count, target) => count + updaterTargetRequirements[target].length,
     0,
   );
   if (Object.keys(platforms).length !== expectedPlatformCount) {

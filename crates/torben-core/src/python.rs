@@ -23,6 +23,7 @@ use crate::{
     TorbenPaths,
     node::{ArchiveKind, extract_archive, sha256_file_checked},
     operation::{CancellationProbe, OperationJournal},
+    process,
 };
 
 const PYTHON_API_BASE: &str = "https://www.python.org/api/v2/downloads/";
@@ -390,7 +391,7 @@ impl PythonProvider {
             }
             let output = tokio::time::timeout(
                 Duration::from_secs(3),
-                tokio::process::Command::new(&canonical)
+                process::async_command(&canonical)
                     .args([
                         "-c",
                         "import platform,sys;print(sys.implementation.name);print(platform.python_version())",
@@ -582,7 +583,7 @@ impl PythonProvider {
         version: &ExactVersion,
     ) -> TorbenResult<()> {
         let python = self.command_path(install_path, "python")?;
-        let output = tokio::process::Command::new(&python)
+        let output = process::async_command(&python)
             .args([
                 "-c",
                 "import platform,sys;print(sys.implementation.name);print(platform.python_version())",
@@ -611,7 +612,7 @@ impl PythonProvider {
             .with_detail("actual", lines.join(";")));
         }
         let pip = self.command_path(install_path, "pip")?;
-        let output = tokio::process::Command::new(&pip)
+        let output = process::async_command(&pip)
             .arg("--version")
             .kill_on_drop(true)
             .output()
@@ -1021,7 +1022,7 @@ async fn run_process(
 ) -> TorbenResult<()> {
     ensure_regular_file(executable)?;
     cancellation.check()?;
-    let mut command = tokio::process::Command::new(executable);
+    let mut command = process::async_command(executable);
     command
         .args(arguments)
         .stdin(Stdio::null())

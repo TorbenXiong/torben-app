@@ -1,11 +1,18 @@
-# Greenfield milestone status
+# Windows-first milestone status
 
-This document maps the original Torben App greenfield plan to repository evidence. It distinguishes
-implemented, locally verified behavior from operational evidence that can exist only after the
-repository is committed and its protected GitHub environments are configured.
+This document maps the original Torben App greenfield plan to repository evidence and the current
+Windows-first delivery milestone. It distinguishes implemented behavior from the smaller set of
+Windows x64 gates required for the next supported release.
 
 ## Approved plan changes
 
+- The current delivery, CI, preview, and official release target is Windows x64. Windows ARM64,
+  macOS, and Linux are deferred and do not block feature completion or release. Existing platform
+  implementations, fixtures, and manual cross-platform workflows remain as future engineering
+  assets, without a current support or parity commitment.
+- New feature work completes the shared Core and Windows x64 path first. Deferred-platform work is
+  resumed only by an explicit milestone change; shared contracts and platform abstractions remain
+  portable in the meantime.
 - The initial plan included Developer Certificate of Origin enforcement. That requirement was
   explicitly cancelled before the first commit. The DCO workflow, checker, tests, and sign-off
   documentation have been removed; Apache-2.0 remains the project license.
@@ -59,10 +66,11 @@ repository is committed and its protected GitHub environments are configured.
 
 ### Release and plugin ecosystem
 
-- Development and official workflows define the six native targets, Linux AppImage/deb/rpm,
-  Windows MSI/NSIS, macOS DMG, matching CLI archives, architecture checks, deterministic metadata,
-  SHA-256 inventories, updater artifacts, install-and-launch acceptance, signing, notarization, and
-  immutable GitHub Release publication.
+- The required CI and preview workflows validate Windows x64. The official tag workflow signs and
+  publishes only Windows x64 NSIS/MSI packages and the matching CLI, with deterministic metadata,
+  updater signatures, install-and-launch acceptance, and immutable GitHub Release publication.
+- A separate manual development workflow retains the original six-target packaging and native
+  acceptance design. It is future-platform evidence and is not a current release gate.
 - Torben App and managed-application updates default to notification. Managed automatic updates are
   opt-in per application and run only in a foreground desktop session.
 - The official plugin registry has a two-level Ed25519 trust chain, publisher and package
@@ -143,15 +151,16 @@ The authoritative test-to-requirement mapping is maintained in
 The following items are not proven by local source or simulated fixtures and must not be described
 as complete until their authoritative remote evidence exists:
 
-1. Configure the protected `official-release` environment with reviewed Windows, Apple, and Tauri
-   updater credentials. Only a successful exact-version tag run can prove Authenticode signing,
-   Developer ID signing, notarization, updater signatures, and immutable GitHub Release publication.
+1. Configure the protected `official-release` environment with reviewed Windows Authenticode and
+   Tauri updater credentials. Only a successful exact-version tag run can prove Windows package,
+   CLI and sidecar signing, updater signatures, and immutable GitHub Release publication.
 2. Configure the protected `official-plugin-registry` environment with the offline root,
    publisher keys, and reviewed public trust root. Generate and review an artifact from committed
    production registry inputs.
 3. Provision an immutable HTTPS origin for the reviewed registry tree, then configure release builds
    with its exact `registry.json` URL and trust root. Refresh and install every published plugin on
-   each supported platform. Public hosting is not currently live.
+   Windows x64. Public hosting is not currently live; deferred-platform acceptance will be added
+   when those milestones resume.
 4. Record the first successful `schedule`-triggered read-only check against every official provider
    catalog. Manual run 33140148036 proves current upstream availability and the same job path, but
    it does not prove that GitHub invoked the weekly schedule. Local fixtures remain the default test

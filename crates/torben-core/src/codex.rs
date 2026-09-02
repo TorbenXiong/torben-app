@@ -28,6 +28,7 @@ use crate::{
     TorbenPaths,
     node::{ArchiveKind, extract_archive_contents, sha256_file_checked},
     operation::{CancellationProbe, OperationJournal},
+    process,
 };
 
 const RELEASES_URL: &str = "https://api.github.com/repos/openai/codex/releases/";
@@ -1083,7 +1084,7 @@ async fn isolated_version(executable: &Path) -> TorbenResult<ExactVersion> {
     std::fs::create_dir_all(&isolated_home).map_err(io_error)?;
     let result = tokio::time::timeout(
         PROCESS_TIMEOUT,
-        tokio::process::Command::new(executable)
+        process::async_command(executable)
             .arg("--version")
             .env("CODEX_HOME", &isolated_home)
             .kill_on_drop(true)
