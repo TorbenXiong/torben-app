@@ -14,11 +14,11 @@ pub fn applications() -> TorbenResult<Vec<ApplicationDescriptor>> {
                 "uninstall",
                 "external-detection",
             ],
-            true,
+            false,
         )?,
         app(
             "temurin",
-            "Eclipse Temurin",
+            "Java",
             "OpenJDK builds from Adoptium.",
             &["runtime", "development"],
             &[
@@ -42,7 +42,7 @@ pub fn applications() -> TorbenResult<Vec<ApplicationDescriptor>> {
                 "uninstall",
                 "external-detection",
             ],
-            true,
+            false,
         )?,
         app(
             "git",
@@ -56,7 +56,7 @@ pub fn applications() -> TorbenResult<Vec<ApplicationDescriptor>> {
                 "uninstall",
                 "external-detection",
             ],
-            true,
+            false,
         )?,
         app(
             "vscode",
@@ -70,7 +70,7 @@ pub fn applications() -> TorbenResult<Vec<ApplicationDescriptor>> {
                 "uninstall",
                 "external-detection",
             ],
-            true,
+            false,
         )?,
         app(
             "codex",
@@ -84,7 +84,7 @@ pub fn applications() -> TorbenResult<Vec<ApplicationDescriptor>> {
                 "uninstall",
                 "external-detection",
             ],
-            true,
+            false,
         )?,
     ])
 }
@@ -122,7 +122,11 @@ fn app(
         display_name: name.to_owned(),
         summary: summary.to_owned(),
         categories: categories.iter().map(ToString::to_string).collect(),
-        capabilities: capabilities.iter().map(ToString::to_string).collect(),
+        capabilities: if available {
+            capabilities.iter().map(ToString::to_string).collect()
+        } else {
+            Vec::new()
+        },
         sources: if available {
             vec![InstallSource {
                 id: SourceId::new(format!("{id}.official"))?,
@@ -133,4 +137,42 @@ fn app(
             Vec::new()
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_temurin_is_available_until_other_data_paths_are_constrained() {
+        let applications = super::applications().unwrap();
+
+        assert_eq!(applications.len(), 6);
+        let temurin = applications
+            .iter()
+            .find(|application| application.id.as_str() == "temurin")
+            .unwrap();
+        assert!(!temurin.capabilities.is_empty());
+        assert!(!temurin.sources.is_empty());
+        assert!(
+            applications
+                .iter()
+                .filter(|application| application.id.as_str() != "temurin")
+                .all(|application| {
+                    application.capabilities.is_empty() && application.sources.is_empty()
+                })
+        );
+    }
+
+    #[test]
+    fn unavailable_applications_do_not_publish_managed_sources() {
+        let applications = super::applications().unwrap();
+        let sources = super::sources(&applications).unwrap();
+
+        assert_eq!(sources.len(), 5);
+        assert_eq!(sources.iter().filter(|source| source.managed).count(), 1);
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.id.as_str() == "temurin.official")
+        );
+    }
 }

@@ -64,10 +64,11 @@ pub(crate) struct SourceAdapterService {
     commands: BTreeMap<SourceAdapterKind, AdapterCommands>,
     runner: Arc<dyn SourceCommandRunner>,
     allow_unsupported_platform: bool,
+    temporary_directory: PathBuf,
 }
 
 impl SourceAdapterService {
-    pub(crate) fn discover() -> Self {
+    pub(crate) fn discover(paths: &crate::TorbenPaths) -> Self {
         let mut commands = BTreeMap::new();
         if cfg!(windows)
             && let Some(primary) = find_command(&["winget.exe"])
@@ -119,6 +120,7 @@ impl SourceAdapterService {
             commands,
             runner: Arc::new(SystemCommandRunner),
             allow_unsupported_platform: false,
+            temporary_directory: paths.cache_dir().join("temporary"),
         }
     }
 
@@ -144,6 +146,7 @@ impl SourceAdapterService {
             commands,
             runner,
             allow_unsupported_platform: true,
+            temporary_directory: std::env::temp_dir(),
         }
     }
 
@@ -209,6 +212,7 @@ impl SourceAdapterService {
                 inspect_winget(
                     self.runner.as_ref(),
                     &commands.primary,
+                    &self.temporary_directory,
                     coordinate,
                     package_kind,
                 )
@@ -462,10 +466,12 @@ impl SourceAdapterService {
 async fn inspect_winget(
     runner: &dyn SourceCommandRunner,
     executable: &Path,
+    temporary_directory: &Path,
     coordinate: PackageCoordinate,
     package_kind: SourcePackageKind,
 ) -> TorbenResult<SourcePackageState> {
-    let export_path = std::env::temp_dir().join(format!(
+    std::fs::create_dir_all(temporary_directory).map_err(io_error)?;
+    let export_path = temporary_directory.join(format!(
         "torben-winget-export-{}-{}.json",
         std::process::id(),
         timestamp_nanos()
@@ -1357,6 +1363,62 @@ mod tests {
     #[derive(Clone)]
     struct StaticRunner {
         output: CommandOutput,
+    }
+
+    struct ExportRunner {
+        directory: PathBuf,
+    }
+
+    impl SourceCommandRunner for ExportRunner {
+        fn run(
+            &self,
+            _executable: PathBuf,
+            arguments: Vec<String>,
+            _environment: BTreeMap<String, String>,
+        ) -> CommandFuture {
+            let directory = self.directory.clone();
+            Box::pin(async move {
+                let output_index = arguments
+                    .iter()
+                    .position(|value| value == "--output")
+                    .unwrap();
+                let output = PathBuf::from(&arguments[output_index + 1]);
+                assert_eq!(output.parent(), Some(directory.as_path()));
+                std::fs::write(
+                    output,
+                    br#"{"Sources":[{"Packages":[{"PackageIdentifier":"Microsoft.VisualStudioCode","Version":"1.134.0"}]}]}"#,
+                ).unwrap();
+                Ok(CommandOutput {
+                    success: true,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn winget_export_uses_the_owned_temporary_directory_and_cleans_up() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("cache/temporary");
+        let mut service = SourceAdapterService::for_test(
+            SourceAdapterKind::Winget,
+            PathBuf::from("fixture-winget"),
+            None,
+            Arc::new(ExportRunner {
+                directory: directory.clone(),
+            }),
+        );
+        service.temporary_directory.clone_from(&directory);
+        let state = service
+            .inspect(
+                SourceAdapterKind::Winget,
+                PackageCoordinate::new("Microsoft.VisualStudioCode").unwrap(),
+                SourcePackageKind::Native,
+            )
+            .await;
+        assert!(state.is_ok(), "{state:?}");
+        assert_eq!(std::fs::read_dir(directory).unwrap().count(), 0);
     }
 
     impl SourceCommandRunner for StaticRunner {

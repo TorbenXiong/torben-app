@@ -1,5 +1,7 @@
 #![allow(clippy::needless_pass_by_value)]
 
+mod scheduled_tasks;
+
 use std::{collections::BTreeMap, path::PathBuf, str::FromStr, sync::Arc};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -18,11 +20,28 @@ use torben_contracts::{
     VersionDescriptor,
     plugin::{PluginRegistryStatus, PluginSummary, SchemaActionResult, SchemaPage},
 };
+#[cfg(all(windows, not(debug_assertions)))]
+use torben_core::WINDOWS_DATA_ROOT_POINTER_FILE;
 use torben_core::{DoctorCheck, TorbenCore};
 
 const UPDATER_ENDPOINT: &str =
     "https://github.com/TorbenXiong/torben-app/releases/latest/download/latest.json";
 const UPDATER_PUBLIC_KEY: Option<&str> = option_env!("TORBEN_UPDATER_PUBLIC_KEY");
+
+#[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_TEMURIN_PLUGIN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../target/release/torben-plugin-temurin.exe"
+));
+#[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_TORBEN_SHIM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../target/release/torben-shim.exe"
+));
+#[cfg(any(not(windows), debug_assertions))]
+const EMBEDDED_TEMURIN_PLUGIN: &[u8] = &[];
+#[cfg(any(not(windows), debug_assertions))]
+const EMBEDDED_TORBEN_SHIM: &[u8] = &[];
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -108,6 +127,12 @@ async fn collect_external_installations(
 ) -> (Vec<InstallRecord>, Vec<DashboardWarning>) {
     let discoveries = applications
         .iter()
+        .filter(|application| {
+            application
+                .capabilities
+                .iter()
+                .any(|capability| capability == "external-detection")
+        })
         .map(|application| {
             let app_id = application.id.clone();
             let core = Arc::clone(core);
@@ -208,7 +233,11 @@ async fn list_versions_for_core(
     core: &TorbenCore,
     app_id: String,
 ) -> Result<Vec<VersionDescriptor>, TorbenError> {
-    core.versions(&AppId::new(app_id)?).await
+    let app_id = AppId::new(app_id)?;
+    if app_id.as_str() == "temurin" {
+        return Ok(core.cached_versions(&app_id)?.unwrap_or_default());
+    }
+    core.versions(&app_id).await
 }
 
 #[tauri::command]
@@ -440,6 +469,42 @@ async fn install_plugin(
 }
 
 #[tauri::command]
+async fn install_bundled_temurin_plugin(
+    core: State<'_, Arc<TorbenCore>>,
+    app: tauri::AppHandle,
+) -> Result<PluginSummary, TorbenError> {
+    let core = Arc::clone(core.inner());
+    let install_core = Arc::clone(&core);
+    let summary = tauri::async_runtime::spawn_blocking(move || {
+        install_core.install_bundled_temurin(EMBEDDED_TEMURIN_PLUGIN, EMBEDDED_TORBEN_SHIM)
+    })
+    .await
+    .map_err(|error| {
+        TorbenError::internal(
+            "The bundled Temurin plugin installation task could not be completed.",
+        )
+        .with_detail("reason", error.to_string())
+    })??;
+    scheduled_tasks::refresh_after_user_action(core, app, AppId::new("temurin")?);
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn uninstall_bundled_temurin_plugin(
+    core: State<'_, Arc<TorbenCore>>,
+) -> Result<(), TorbenError> {
+    let core = Arc::clone(core.inner());
+    tauri::async_runtime::spawn_blocking(move || core.uninstall_bundled_temurin())
+        .await
+        .map_err(|error| {
+            TorbenError::internal(
+                "The bundled Temurin plugin uninstall task could not be completed.",
+            )
+            .with_detail("reason", error.to_string())
+        })?
+}
+
+#[tauri::command]
 async fn install_official_plugin(
     core: State<'_, Arc<TorbenCore>>,
     registry_path: PathBuf,
@@ -557,8 +622,12 @@ async fn migrate_managed_library(
 ///
 /// Panics if Tauri cannot initialize or run its platform event loop.
 pub fn run() {
-    let core = match TorbenCore::open_default() {
-        Ok(core) => Arc::new(core),
+    #[cfg(all(windows, not(debug_assertions)))]
+    schedule_relocated_source_cleanup();
+
+    let core = match startup_core() {
+        Ok(Some(core)) => Arc::new(core),
+        Ok(None) => return,
         Err(error) => {
             eprintln!(
                 "Torben App startup failed [{}]: {}",
@@ -582,8 +651,31 @@ pub fn run() {
         updater = updater.pubkey(public_key);
     }
 
+    let mut context = tauri::generate_context!();
+    let windows = take_startup_windows(context.config_mut());
+    let webview_data = core.paths().data_dir().join("webview");
+    let scheduled_core = Arc::clone(&core);
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_log::Builder::new().build())
+        .setup(move |app| {
+            for window in &windows {
+                tauri::WebviewWindowBuilder::from_config(app, window)?
+                    .data_directory(webview_data.clone())
+                    .build()?;
+            }
+            scheduled_tasks::start(Arc::clone(&scheduled_core), app.handle().clone());
+            Ok(())
+        })
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
+                        path: core.paths().log_dir().to_path_buf(),
+                        file_name: Some("desktop".to_owned()),
+                    }),
+                ])
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -591,14 +683,532 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(updater.build());
     configure_core_commands(builder, core)
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("Torben App runtime failed");
 }
 
-fn configure_core_commands<R: tauri::Runtime>(
-    builder: tauri::Builder<R>,
+fn startup_core() -> Result<Option<TorbenCore>, TorbenError> {
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        remove_redundant_windows_data_root_pointer()?;
+        let paths = torben_core::TorbenPaths::discover()?;
+        if paths.state_database().is_file() || paths.data_dir().is_dir() {
+            return TorbenCore::open(paths).map(Some);
+        }
+        let executable = std::env::current_exe().map_err(|error| {
+            TorbenError::new(
+                "host_executable_unavailable",
+                "Could not locate the Torben App executable.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+        let application_directory = executable.parent().ok_or_else(|| {
+            TorbenError::new(
+                "host_executable_unavailable",
+                "The Torben App executable has no parent directory.",
+            )
+        })?;
+        let default_base = default_windows_application_directory(application_directory);
+        let Some(selection) = prompt_for_windows_data_root(&default_base)? else {
+            return Ok(None);
+        };
+        prepare_windows_application(&executable, &selection)
+    }
+
+    #[cfg(any(not(windows), debug_assertions))]
+    TorbenCore::open_default().map(Some)
+}
+
+#[cfg(all(windows, not(debug_assertions)))]
+fn remove_redundant_windows_data_root_pointer() -> Result<(), TorbenError> {
+    let executable = std::env::current_exe().map_err(|error| {
+        TorbenError::new(
+            "host_executable_unavailable",
+            "Could not locate the Torben App executable.",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+    let application_directory = executable.parent().ok_or_else(|| {
+        TorbenError::new(
+            "host_executable_unavailable",
+            "The Torben App executable has no parent directory.",
+        )
+    })?;
+    let pointer = application_directory.join(WINDOWS_DATA_ROOT_POINTER_FILE);
+    let metadata = match std::fs::symlink_metadata(&pointer) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Ok(()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 16 * 1024 {
+        return Ok(());
+    }
+    let Ok(selected) = std::fs::read_to_string(&pointer) else {
+        return Ok(());
+    };
+    let selected = PathBuf::from(selected.trim());
+    let sibling_data = application_directory.join("userData");
+    if selected.is_absolute() && same_windows_path(&selected, &sibling_data) {
+        std::fs::remove_file(&pointer).map_err(|error| {
+            TorbenError::new(
+                "data_root_pointer_remove_failed",
+                "Could not remove the obsolete Torben App data-directory pointer.",
+            )
+            .with_detail("path", pointer.display().to_string())
+            .with_detail("reason", error.to_string())
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(all(windows, not(debug_assertions)))]
+fn default_windows_application_directory(application_directory: &std::path::Path) -> PathBuf {
+    for drive in b'D'..=b'Z' {
+        let root = PathBuf::from(format!("{}:\\", char::from(drive)));
+        if root.is_dir() {
+            return root.join("TorbenApp");
+        }
+    }
+    application_directory.to_path_buf()
+}
+
+#[cfg(all(windows, not(debug_assertions)))]
+fn prepare_windows_application(
+    executable: &std::path::Path,
+    application_directory: &std::path::Path,
+) -> Result<Option<TorbenCore>, TorbenError> {
+    if !application_directory.is_absolute() {
+        return Err(TorbenError::new(
+            "data_root_prompt_invalid",
+            "The selected Torben App base directory must be absolute.",
+        ));
+    }
+    std::fs::create_dir_all(application_directory).map_err(|error| {
+        TorbenError::new(
+            "application_directory_create_failed",
+            "Could not create the Torben App base directory.",
+        )
+        .with_detail("path", application_directory.display().to_string())
+        .with_detail("reason", error.to_string())
+    })?;
+    let data_directory = application_directory.join("userData");
+    std::fs::create_dir_all(&data_directory).map_err(|error| {
+        TorbenError::new(
+            "data_directory_create_failed",
+            "Could not create the Torben App data directory.",
+        )
+        .with_detail("path", data_directory.display().to_string())
+        .with_detail("reason", error.to_string())
+    })?;
+
+    let target_executable = application_directory.join("TorbenApp.exe");
+    if !same_windows_path(executable, &target_executable) {
+        replace_windows_executable(executable, &target_executable)?;
+        std::process::Command::new(&target_executable)
+            .arg("--torben-relocated-source")
+            .arg(executable)
+            .spawn()
+            .map_err(|error| {
+                TorbenError::new(
+                    "application_relaunch_failed",
+                    "The relocated Torben App could not be started.",
+                )
+                .with_detail("path", target_executable.display().to_string())
+                .with_detail("reason", error.to_string())
+            })?;
+        return Ok(None);
+    }
+
+    TorbenCore::open(torben_core::TorbenPaths::discover()?).map(Some)
+}
+
+#[cfg(all(windows, not(debug_assertions)))]
+fn schedule_relocated_source_cleanup() {
+    let mut arguments = std::env::args_os();
+    let mut source = None;
+    while let Some(argument) = arguments.next() {
+        if argument == "--torben-relocated-source" {
+            source = arguments.next().map(PathBuf::from);
+            break;
+        }
+    }
+    let Some(source) = source else {
+        return;
+    };
+    let Ok(executable) = std::env::current_exe() else {
+        return;
+    };
+    if same_windows_path(&source, &executable) || !identical_regular_files(&source, &executable) {
+        return;
+    }
+    std::thread::spawn(move || {
+        for _ in 0..100 {
+            match std::fs::remove_file(&source) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
+            }
+        }
+    });
+}
+
+#[cfg(all(windows, not(debug_assertions)))]
+fn identical_regular_files(left: &std::path::Path, right: &std::path::Path) -> bool {
+    let metadata = |path: &std::path::Path| std::fs::symlink_metadata(path).ok();
+    let (Some(left_metadata), Some(right_metadata)) = (metadata(left), metadata(right)) else {
+        return false;
+    };
+    if left_metadata.file_type().is_symlink()
+        || right_metadata.file_type().is_symlink()
+        || !left_metadata.is_file()
+        || !right_metadata.is_file()
+        || left_metadata.len() != right_metadata.len()
+    {
+        return false;
+    }
+    let (Ok(mut left_file), Ok(mut right_file)) =
+        (std::fs::File::open(left), std::fs::File::open(right))
+    else {
+        return false;
+    };
+    let mut left_buffer = vec![0_u8; 64 * 1024];
+    let mut right_buffer = vec![0_u8; 64 * 1024];
+    loop {
+        let Ok(left_read) = std::io::Read::read(&mut left_file, &mut left_buffer) else {
+            return false;
+        };
+        let Ok(right_read) = std::io::Read::read(&mut right_file, &mut right_buffer) else {
+            return false;
+        };
+        if left_read != right_read || left_buffer[..left_read] != right_buffer[..right_read] {
+            return false;
+        }
+        if left_read == 0 {
+            return true;
+        }
+    }
+}
+
+#[cfg(all(windows, not(debug_assertions)))]
+fn same_windows_path(left: &std::path::Path, right: &std::path::Path) -> bool {
+    let normalize = |path: &std::path::Path| {
+        std::fs::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .replace('/', "\\")
+            .to_ascii_lowercase()
+    };
+    normalize(left) == normalize(right)
+}
+
+#[cfg(all(windows, not(debug_assertions)))]
+fn replace_windows_executable(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> Result<(), TorbenError> {
+    let metadata = std::fs::symlink_metadata(source).map_err(|error| {
+        TorbenError::new(
+            "host_executable_unavailable",
+            "Could not inspect the current Torben App executable.",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(TorbenError::new(
+            "host_executable_unavailable",
+            "The current Torben App executable is not a regular file.",
+        ));
+    }
+    if let Ok(metadata) = std::fs::symlink_metadata(destination)
+        && (metadata.file_type().is_symlink() || !metadata.is_file())
+    {
+        return Err(TorbenError::new(
+            "application_target_invalid",
+            "The target TorbenApp.exe is not a regular file.",
+        )
+        .with_detail("path", destination.display().to_string()));
+    }
+    let staged = destination.with_extension("exe.next");
+    let previous = destination.with_extension("exe.previous");
+    remove_regular_windows_file(&staged)?;
+    remove_regular_windows_file(&previous)?;
+    std::fs::copy(source, &staged).map_err(|error| {
+        TorbenError::new(
+            "application_copy_failed",
+            "Could not copy TorbenApp.exe to the selected base directory.",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+    let had_destination = destination.exists();
+    if had_destination {
+        std::fs::rename(destination, &previous).map_err(|error| {
+            let _ = std::fs::remove_file(&staged);
+            TorbenError::new(
+                "application_replace_failed",
+                "Could not stage the existing TorbenApp.exe for replacement.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+    }
+    if let Err(error) = std::fs::rename(&staged, destination) {
+        if had_destination {
+            let _ = std::fs::rename(&previous, destination);
+        }
+        let _ = std::fs::remove_file(&staged);
+        return Err(TorbenError::new(
+            "application_replace_failed",
+            "Could not activate the TorbenApp.exe replacement.",
+        )
+        .with_detail("reason", error.to_string()));
+    }
+    remove_regular_windows_file(&previous)
+}
+
+#[cfg(all(windows, not(debug_assertions)))]
+fn remove_regular_windows_file(path: &std::path::Path) -> Result<(), TorbenError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(TorbenError::new(
+                "application_target_invalid",
+                "A Torben App replacement path is not a regular file.",
+            )
+            .with_detail("path", path.display().to_string()))
+        }
+        Ok(_) => std::fs::remove_file(path).map_err(|error| {
+            TorbenError::new(
+                "application_replace_failed",
+                "Could not remove a staged Torben App executable.",
+            )
+            .with_detail("reason", error.to_string())
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(TorbenError::new(
+            "application_replace_failed",
+            "Could not inspect a staged Torben App executable.",
+        )
+        .with_detail("reason", error.to_string())),
+    }
+}
+
+#[cfg(all(windows, not(debug_assertions)))]
+#[allow(clippy::too_many_lines)]
+fn prompt_for_windows_data_root(
+    application_directory: &std::path::Path,
+) -> Result<Option<PathBuf>, TorbenError> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const SCRIPT: &str = r"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+$defaultBase = $env:TORBEN_FIRST_RUN_APPLICATION_DIR
+if ([string]::IsNullOrWhiteSpace($defaultBase)) { exit 3 }
+$dataPath = Join-Path -Path $defaultBase -ChildPath 'userData'
+$isChinese = [System.Globalization.CultureInfo]::CurrentUICulture.Name.StartsWith('zh')
+if ($isChinese) {
+  $windowTitle = 'Torben App · 初次设置'
+  $heading = '确认存储位置'
+  $baseLabelText = '基准目录（将存放 TorbenApp.exe）'
+  $dataLabelText = '实际数据目录'
+  $hint = '插件、缓存和日志均保存在 userData 中；替换 TorbenApp.exe 不会影响这些数据。'
+  $useLabel = '使用此位置'
+  $chooseLabel = '更改基准目录'
+  $cancelLabel = '取消'
+  $folderTitle = '选择 Torben App 数据目录的基准位置'
+} else {
+  $windowTitle = 'Torben App · First setup'
+  $heading = 'Confirm storage location'
+  $baseLabelText = 'Base directory (where TorbenApp.exe will be stored)'
+  $dataLabelText = 'Actual data directory'
+  $hint = 'Plugins, caches, and logs stay in userData when TorbenApp.exe is replaced.'
+  $useLabel = 'Use this location'
+  $chooseLabel = 'Change base directory'
+  $cancelLabel = 'Cancel'
+  $folderTitle = 'Select the base location for Torben App data'
+}
+
+$form = [System.Windows.Forms.Form]::new()
+$form.Text = $windowTitle
+$form.ClientSize = [System.Drawing.Size]::new(620, 340)
+$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+$form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+$form.MaximizeBox = $false
+$form.MinimizeBox = $false
+$form.TopMost = $true
+
+$headingLabel = [System.Windows.Forms.Label]::new()
+$headingLabel.Location = [System.Drawing.Point]::new(24, 22)
+$headingLabel.Size = [System.Drawing.Size]::new(572, 30)
+$headingLabel.Font = [System.Drawing.Font]::new('Segoe UI', 12, [System.Drawing.FontStyle]::Bold)
+$headingLabel.Text = $heading
+
+$baseLabel = [System.Windows.Forms.Label]::new()
+$baseLabel.Location = [System.Drawing.Point]::new(24, 63)
+$baseLabel.Size = [System.Drawing.Size]::new(572, 22)
+$baseLabel.Font = [System.Drawing.Font]::new('Segoe UI', 9)
+$baseLabel.Text = $baseLabelText
+
+$baseBox = [System.Windows.Forms.TextBox]::new()
+$baseBox.Location = [System.Drawing.Point]::new(24, 88)
+$baseBox.Size = [System.Drawing.Size]::new(572, 32)
+$baseBox.Font = [System.Drawing.Font]::new('Segoe UI', 10)
+$baseBox.ReadOnly = $true
+$baseBox.BackColor = [System.Drawing.SystemColors]::Window
+$baseBox.Text = $defaultBase
+
+$dataLabel = [System.Windows.Forms.Label]::new()
+$dataLabel.Location = [System.Drawing.Point]::new(24, 140)
+$dataLabel.Size = [System.Drawing.Size]::new(572, 22)
+$dataLabel.Font = [System.Drawing.Font]::new('Segoe UI', 9)
+$dataLabel.Text = $dataLabelText
+
+$dataBox = [System.Windows.Forms.TextBox]::new()
+$dataBox.Location = [System.Drawing.Point]::new(24, 165)
+$dataBox.Size = [System.Drawing.Size]::new(572, 32)
+$dataBox.Font = [System.Drawing.Font]::new('Segoe UI', 10)
+$dataBox.ReadOnly = $true
+$dataBox.BackColor = [System.Drawing.SystemColors]::Window
+$dataBox.Text = $dataPath
+
+$hintLabel = [System.Windows.Forms.Label]::new()
+$hintLabel.Location = [System.Drawing.Point]::new(24, 218)
+$hintLabel.Size = [System.Drawing.Size]::new(572, 38)
+$hintLabel.Font = [System.Drawing.Font]::new('Segoe UI', 9)
+$hintLabel.ForeColor = [System.Drawing.SystemColors]::GrayText
+$hintLabel.Text = $hint
+
+$useButton = [System.Windows.Forms.Button]::new()
+$useButton.Location = [System.Drawing.Point]::new(86, 282)
+$useButton.Size = [System.Drawing.Size]::new(160, 36)
+$useButton.Text = $useLabel
+$useButton.Add_Click({ $form.DialogResult = [System.Windows.Forms.DialogResult]::OK; $form.Close() })
+
+$chooseButton = [System.Windows.Forms.Button]::new()
+$chooseButton.Location = [System.Drawing.Point]::new(256, 282)
+$chooseButton.Size = [System.Drawing.Size]::new(160, 36)
+$chooseButton.Text = $chooseLabel
+$chooseButton.Add_Click({ $form.DialogResult = [System.Windows.Forms.DialogResult]::Retry; $form.Close() })
+
+$cancelButton = [System.Windows.Forms.Button]::new()
+$cancelButton.Location = [System.Drawing.Point]::new(426, 282)
+$cancelButton.Size = [System.Drawing.Size]::new(170, 36)
+$cancelButton.Text = $cancelLabel
+$cancelButton.Add_Click({ $form.DialogResult = [System.Windows.Forms.DialogResult]::Cancel; $form.Close() })
+
+$form.AcceptButton = $useButton
+$form.CancelButton = $cancelButton
+$form.Controls.AddRange(@(
+  $headingLabel,
+  $baseLabel,
+  $baseBox,
+  $dataLabel,
+  $dataBox,
+  $hintLabel,
+  $useButton,
+  $chooseButton,
+  $cancelButton
+))
+$answer = $form.ShowDialog()
+$form.Dispose()
+if ($answer -eq [System.Windows.Forms.DialogResult]::OK) {
+  [Console]::Out.Write('DEFAULT')
+  exit 0
+}
+if ($answer -eq [System.Windows.Forms.DialogResult]::Cancel) { exit 2 }
+
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = $folderTitle
+$dialog.ShowNewFolderButton = $true
+$dialog.SelectedPath = $defaultBase
+if (Test-Path -LiteralPath $defaultBase -PathType Container) {
+  $dialog.SelectedPath = $defaultBase
+}
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  [Console]::Out.Write($dialog.SelectedPath)
+  $dialog.Dispose()
+  exit 0
+}
+$dialog.Dispose()
+exit 2
+";
+    let system_root = std::env::var_os("SystemRoot").ok_or_else(|| {
+        TorbenError::new(
+            "data_root_prompt_unavailable",
+            "Windows did not provide its system directory for the first-run data prompt.",
+        )
+    })?;
+    let powershell =
+        PathBuf::from(system_root).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    let output = std::process::Command::new(&powershell)
+        .args(["-NoLogo", "-NoProfile", "-STA", "-Command", SCRIPT])
+        .env("TORBEN_FIRST_RUN_APPLICATION_DIR", application_directory)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|error| {
+            TorbenError::new(
+                "data_root_prompt_unavailable",
+                "Could not open the first-run data-directory prompt.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+    if output.status.code() == Some(2) {
+        return Ok(None);
+    }
+    if !output.status.success() {
+        return Err(TorbenError::new(
+            "data_root_prompt_failed",
+            "The first-run data-directory prompt failed.",
+        )
+        .with_detail("exitCode", output.status.code().unwrap_or(-1).to_string()));
+    }
+    let selected = String::from_utf8(output.stdout).map_err(|error| {
+        TorbenError::new(
+            "data_root_prompt_invalid",
+            "The first-run data-directory prompt returned invalid text.",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+    let selected = selected.trim();
+    let selected_base = if selected == "DEFAULT" {
+        application_directory.to_path_buf()
+    } else {
+        PathBuf::from(selected)
+    };
+    if selected_base.as_os_str().is_empty() || !selected_base.is_absolute() {
+        return Err(TorbenError::new(
+            "data_root_prompt_invalid",
+            "The selected Torben App data-directory base must be an absolute path.",
+        ));
+    }
+    Ok(Some(selected_base))
+}
+
+fn take_startup_windows(config: &mut tauri::Config) -> Vec<tauri::utils::config::WindowConfig> {
+    // Config dataDirectory accepts relative paths only. Build windows explicitly so the
+    // absolute Core path takes effect before WebView2 can create an AppData profile.
+    config
+        .app
+        .windows
+        .iter_mut()
+        .filter_map(|window| {
+            if !window.create {
+                return None;
+            }
+            let startup = window.clone();
+            window.create = false;
+            Some(startup)
+        })
+        .collect()
+}
+
+fn configure_core_commands(
+    builder: tauri::Builder<tauri::Wry>,
     core: Arc<TorbenCore>,
-) -> tauri::Builder<R> {
+) -> tauri::Builder<tauri::Wry> {
     builder
         .manage(core)
         .invoke_handler(tauri::generate_handler![
@@ -624,6 +1234,8 @@ fn configure_core_commands<R: tauri::Runtime>(
             official_plugin_registry_status,
             refresh_official_plugin_registry,
             install_plugin,
+            install_bundled_temurin_plugin,
+            uninstall_bundled_temurin_plugin,
             install_official_plugin,
             install_official_plugin_from_registry,
             set_plugin_enabled,
@@ -646,8 +1258,26 @@ mod tests {
     };
 
     use super::{
-        external_discovery_task_result, merge_external_discovery, validate_updater_public_key,
+        external_discovery_task_result, merge_external_discovery, take_startup_windows,
+        validate_updater_public_key,
     };
+
+    #[test]
+    fn startup_windows_are_created_once_with_their_original_settings() {
+        let mut config: tauri::Config =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let expected = config.app.windows[0].clone();
+        let mut deferred = expected.clone();
+        deferred.label = "deferred".to_owned();
+        deferred.create = false;
+        config.app.windows.push(deferred);
+
+        let windows = take_startup_windows(&mut config);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0], expected);
+        assert!(config.app.windows.iter().all(|window| !window.create));
+        assert!(take_startup_windows(&mut config).is_empty());
+    }
 
     #[test]
     fn updater_key_is_optional_but_never_accepts_private_or_control_input() {

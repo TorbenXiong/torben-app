@@ -7,6 +7,10 @@ publication gates. macOS, Linux, and ARM64 evidence is retained for future platf
 
 ## Offline development gates
 
+All six bundled application providers are temporarily disabled in production while their writable
+data locations are reviewed. The provider lifecycle tests below run only through unit-test or the
+default-off `test-fixtures` paths; passing them does not advertise current application support.
+
 Ordinary tests must not contact public services. `.github/workflows/ci.yml` currently validates the
 locked workspace on Windows x64 only. macOS and Linux implementations remain future targets and are
 not part of the required preview gate. The required local gates are:
@@ -73,10 +77,11 @@ The Node.js first-milestone behaviors are covered by these fixture-backed tests:
 | Desktop command search supports platform shortcuts, focus, arrow selection, filtering, and keyboard navigation | `searches pages and applications from the keyboard command palette` and platform-label coverage in `apps/desktop/src/test/App.test.tsx`; local browser QA checks the 700×600 layout |
 | Keyboard users can bypass repeated navigation and system reduced-motion preferences suppress decorative movement | App shell skip-control focus assertions in `apps/desktop/src/test/App.test.tsx`; the reduced-motion rules are included in the Biome-checked desktop stylesheet |
 | Desktop startup, task polling, and settings errors recover without stale, overlapping, or duplicate notices | `retries a failed initial snapshot without restarting the desktop`, `clears a recovered task polling error without affecting the main snapshot`, `does not overlap slow task polling requests`, and `shows one local alert when saving settings fails` in `apps/desktop/src/test/App.test.tsx` |
+| Java catalog discovery returns one newest release per LTS line, persists a daily cache below the selected data root, defers maintenance until after startup and while the application is unfocused, and groups old cache entries while exposing managed upgrade | Temurin metadata and version-cache tests in `crates/torben-core`, the scheduled-task registry and idle-gate tests in `apps/desktop/src-tauri`, and Java grouping, upgrade, empty-cache, and event subscription tests in `apps/desktop/src/test` |
 | Local diagnostic logs are bounded and exclude free-form operation messages | `diagnostic_log::tests::operation_log_excludes_free_form_message`, `diagnostic_log::tests::rotates_to_one_bounded_backup`, and `tests::doctor_reports_the_local_diagnostic_log` in `crates/torben-core/src` |
 | Doctor does not report optional terminal integration or package-manager absence as a broken first-run state, but still rejects outdated Shell ownership and validates shims after a terminal selection exists | `shell_integration_actions_are_idempotent_and_update_doctor`, `doctor_distinguishes_optional_configuration_from_broken_configuration`, and `doctor_detects_outdated_command_shims` in `crates/torben-core/src/lib.rs` |
 | Fresh SQLite state records every embedded migration, the previous bootstrap ledger gap is repaired, and an older Core rejects a future schema before creating or changing application tables | `fresh_database_records_every_embedded_migration`, `repairs_the_preexisting_schema_two_receipt_gap`, and `rejects_a_database_from_a_newer_schema_before_creating_application_tables` in `crates/torben-core/src/store.rs` |
-| SQLite persists the ordered six-application catalog and all six official plus four package-manager sources; schema migration preserves existing installation state and mismatched persisted identities fail closed | `persists_the_ordered_application_and_complete_source_catalog`, `migration_four_adds_the_catalog_without_changing_existing_installations`, and `rejects_a_persisted_application_with_a_mismatched_row_identity` in `crates/torben-core/src/store.rs` |
+| SQLite persists the ordered six-application unavailable catalog and four package-manager sources; schema migration preserves existing installation state and mismatched persisted identities fail closed | `registered_applications_are_unavailable_until_data_paths_are_constrained` and `unavailable_applications_do_not_publish_managed_sources` in `crates/torben-core/src/catalog.rs`, plus `persists_the_ordered_application_and_complete_source_catalog`, `migration_four_adds_the_catalog_without_changing_existing_installations`, and `rejects_a_persisted_application_with_a_mismatched_row_identity` in `crates/torben-core/src/store.rs` |
 
 The cross-process lock test starts a separate copy of the Rust test process, holds the real fs4
 workspace file lock there, and proves that a contender cannot enter until the holder exits. Its

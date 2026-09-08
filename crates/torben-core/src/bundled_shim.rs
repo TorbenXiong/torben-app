@@ -2,13 +2,15 @@ use std::path::{Path, PathBuf};
 
 use torben_contracts::{TorbenError, TorbenResult};
 
+use crate::TorbenPaths;
+
 #[derive(Debug, Clone)]
 pub(crate) struct BundledShim {
     candidates: Vec<PathBuf>,
 }
 
 impl BundledShim {
-    pub(crate) fn discover() -> TorbenResult<Self> {
+    pub(crate) fn discover(paths: &TorbenPaths) -> TorbenResult<Self> {
         let current_executable = std::env::current_exe().map_err(|error| {
             TorbenError::new(
                 "host_executable_unavailable",
@@ -24,6 +26,7 @@ impl BundledShim {
         })?;
         let filename = format!("torben-shim{}", std::env::consts::EXE_SUFFIX);
         let mut candidates = vec![
+            paths.data_dir().join("tools").join(&filename),
             executable_directory.join(&filename),
             executable_directory.join("tools").join(&filename),
         ];

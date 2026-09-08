@@ -36,6 +36,16 @@ pub(crate) fn candidates_for_app(
                     && record.scope == InstallScope::Managed
             })
         });
+    if let Some(selected_version) = selected {
+        let channel = update_channel(app_id, selected_version);
+        if let Some(record) = installations.iter().find(|record| {
+            record.app_id == *app_id
+                && record.version == *selected_version
+                && record.scope == InstallScope::Managed
+        }) {
+            installed_by_channel.insert(channel, record);
+        }
+    }
     let mut candidates = Vec::new();
     for (channel, installed) in installed_by_channel {
         let available = versions
@@ -201,5 +211,32 @@ mod tests {
         let nine = ExactVersion::from_str("2.55.0+windows.9").unwrap();
         let ten = ExactVersion::from_str("2.55.0+windows.10").unwrap();
         assert!(compare_exact_versions(&ten, &nine).is_gt());
+    }
+
+    #[test]
+    fn selected_older_version_remains_the_update_subject() {
+        let temurin = AppId::new("temurin").unwrap();
+        let installations = [
+            installation(&temurin, "25.0.3+9.0.LTS"),
+            installation(&temurin, "25.0.4+101.0.LTS"),
+        ];
+        let selections = [SelectionRecord {
+            app_id: temurin.clone(),
+            version: ExactVersion::from_str("25.0.3+9.0.LTS").unwrap(),
+        }];
+        let versions = [available("25.0.4+101.0.LTS")];
+
+        let candidates =
+            candidates_for_app(&temurin, &installations, &selections, &versions, false);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].installed_version.to_string(),
+            "25.0.3+9.0.LTS"
+        );
+        assert_eq!(
+            candidates[0].selected_version.as_ref().unwrap().to_string(),
+            "25.0.3+9.0.LTS"
+        );
     }
 }

@@ -10,35 +10,20 @@ import {
   getOperationEvents,
   getSnapshot,
   initialTorbenUpdateStatus,
+  installBundledTemurinPlugin,
   installTorbenUpdate,
   migrateManagedLibrary,
-  setManagedAutoUpdate,
   setShellIntegration,
+  uninstallBundledTemurinPlugin,
   updateSettings,
 } from "./api";
 import { Layout } from "./components/Layout";
 import i18n from "./i18n";
-import {
-  CatalogPage,
-  CodexDetailPage,
-  DiagnosticsPage,
-  GitDetailPage,
-  InstalledPage,
-  NodeDetailPage,
-  OverviewPage,
-  PluginsPage,
-  PythonDetailPage,
-  SettingsPage,
-  TasksPage,
-  TemurinDetailPage,
-  VsCodeDetailPage,
-} from "./pages";
+import { DiagnosticsPage, LogsPage, PluginsPage, SettingsPage, TemurinDetailPage } from "./pages";
 import { applyThemePreference, resolveLanguagePreference } from "./preferences";
 import type {
   DashboardSnapshot,
-  ManagedUpdateCandidate,
   ManagedUpdateCheck,
-  ManagedUpdateResult,
   TorbenUpdateStatus,
   UserSettings,
 } from "./types";
@@ -133,18 +118,6 @@ export default function App() {
     const check = await checkManagedUpdates();
     setManagedUpdates(check);
     return check;
-  }, []);
-
-  const applyOneManagedUpdate = useCallback(
-    (candidate: ManagedUpdateCandidate): Promise<ManagedUpdateResult> =>
-      applyManagedUpdate(candidate),
-    [],
-  );
-
-  const changeManagedAutoUpdate = useCallback(async (appId: string, enabled: boolean) => {
-    const settings = await setManagedAutoUpdate(appId, enabled);
-    setSnapshot((current) => (current ? { ...current, settings } : current));
-    return settings;
   }, []);
 
   const checkForTorbenUpdate = useCallback(async () => {
@@ -250,8 +223,12 @@ export default function App() {
     );
   }
 
+  const temurinEnabled = snapshot.plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.temurin" && plugin.enabled,
+  );
+
   return (
-    <Layout applications={snapshot.applications}>
+    <Layout applications={snapshot.applications} plugins={snapshot.plugins}>
       {error ? (
         <div className="error-banner" role="alert">
           {error}
@@ -282,64 +259,35 @@ export default function App() {
       {managedUpdates.candidates.length ? (
         <div className="notice-banner">
           {t("appShell.updatesAvailable", { count: managedUpdates.candidates.length })}
-          <Link to="/installed">{t("appShell.reviewUpdates")}</Link>
+          <Link to="/java">{t("appShell.reviewUpdates")}</Link>
         </div>
       ) : null}
       <Routes>
-        <Route path="/overview" element={<OverviewPage snapshot={snapshot} />} />
-        <Route path="/catalog" element={<CatalogPage applications={snapshot.applications} />} />
         <Route
-          path="/catalog/node"
-          element={<NodeDetailPage installed={snapshot.installed} onChanged={refresh} />}
-        />
-        <Route
-          path="/catalog/temurin"
-          element={<TemurinDetailPage installed={snapshot.installed} onChanged={refresh} />}
-        />
-        <Route
-          path="/catalog/python"
-          element={<PythonDetailPage installed={snapshot.installed} onChanged={refresh} />}
-        />
-        <Route
-          path="/catalog/git"
-          element={<GitDetailPage installed={snapshot.installed} onChanged={refresh} />}
-        />
-        <Route
-          path="/catalog/vscode"
-          element={<VsCodeDetailPage installed={snapshot.installed} onChanged={refresh} />}
-        />
-        <Route
-          path="/catalog/codex"
-          element={<CodexDetailPage installed={snapshot.installed} onChanged={refresh} />}
-        />
-        <Route
-          path="/installed"
+          path="/java"
           element={
-            <InstalledPage
-              external={snapshot.external}
-              records={snapshot.installed}
-              selected={snapshot.selected}
-              onChanged={refresh}
-              onApplyUpdate={applyOneManagedUpdate}
-              onAutoUpdateChange={changeManagedAutoUpdate}
-              onCheckUpdates={refreshManagedUpdates}
-              onSettingsChanged={(settings) =>
-                setSnapshot((current) => (current ? { ...current, settings } : current))
-              }
-              settings={snapshot.settings}
-              updates={managedUpdates}
-            />
+            temurinEnabled ? (
+              <TemurinDetailPage
+                installed={snapshot.installed}
+                onChanged={refresh}
+                selected={snapshot.selected}
+              />
+            ) : (
+              <Navigate replace to="/plugins" />
+            )
           }
         />
         <Route
-          path="/tasks"
-          element={<TasksPage events={snapshot.operations} onChanged={refresh} />}
+          path="/logs"
+          element={<LogsPage events={snapshot.operations} onChanged={refresh} />}
         />
         <Route
           path="/plugins"
           element={
             <PluginsPage
               onChanged={refresh}
+              onInstallBundledTemurin={installBundledTemurinPlugin}
+              onUninstallBundledTemurin={uninstallBundledTemurinPlugin}
               plugins={snapshot.plugins}
               registry={snapshot.pluginRegistry}
             />
@@ -375,7 +323,11 @@ export default function App() {
             />
           }
         />
-        <Route path="*" element={<Navigate replace to="/overview" />} />
+        <Route path="/overview" element={<Navigate replace to="/plugins" />} />
+        <Route path="/catalog/*" element={<Navigate replace to="/plugins" />} />
+        <Route path="/installed" element={<Navigate replace to="/plugins" />} />
+        <Route path="/tasks" element={<Navigate replace to="/logs" />} />
+        <Route path="*" element={<Navigate replace to="/plugins" />} />
       </Routes>
     </Layout>
   );

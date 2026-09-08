@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invokeMock = vi.hoisted(() => vi.fn());
+const listenMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn() }));
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: vi.fn() }));
 
@@ -11,6 +13,7 @@ import {
   getOperationEvents,
   getVersions,
   installApp,
+  onVersionCatalogUpdated,
   selectVersion,
   uninstallApp,
 } from "../api";
@@ -18,6 +21,7 @@ import {
 describe("Tauri application lifecycle command mapping", () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    listenMock.mockReset();
     window.__TAURI_INTERNALS__ = {};
   });
 
@@ -65,5 +69,21 @@ describe("Tauri application lifecycle command mapping", () => {
       ["uninstall_app", { appId: "node", version: "24.19.0" }],
       ["list_operations"],
     ]);
+  });
+
+  it("subscribes to background version catalog updates", async () => {
+    const callback = vi.fn();
+    const unlisten = vi.fn();
+    listenMock.mockImplementationOnce(async (_eventName, handler) => {
+      handler({ payload: "temurin" });
+      return unlisten;
+    });
+
+    const stopListening = await onVersionCatalogUpdated(callback);
+
+    expect(listenMock).toHaveBeenCalledWith("version-catalog-updated", expect.any(Function));
+    expect(callback).toHaveBeenCalledWith("temurin");
+    stopListening();
+    expect(unlisten).toHaveBeenCalledOnce();
   });
 });

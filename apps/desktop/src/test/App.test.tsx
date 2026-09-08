@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { HashRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
@@ -12,34 +12,20 @@ import {
 } from "../api";
 import { commandShortcut } from "../components/Layout";
 import i18n from "../i18n";
-import {
-  CatalogPage,
-  CodexDetailPage,
-  DiagnosticsPage,
-  GitDetailPage,
-  InstalledPage,
-  OverviewPage,
-  PluginsPage,
-  PythonDetailPage,
-  SettingsPage,
-  TasksPage,
-  TemurinDetailPage,
-  VsCodeDetailPage,
-} from "../pages";
+import { DiagnosticsPage, LogsPage, PluginsPage, SettingsPage, TemurinDetailPage } from "../pages";
 import type {
   ApplicationDescriptor,
   InstallRecord,
   ManagedLibraryMigrationResult,
   ManagedToPackageMigrationPlan,
   ManagedToPackageMigrationResult,
-  ManagedUpdateCandidate,
+  ManagedUpdateResult,
   OperationEvent,
   PackageInstallationRecord,
   PackageToManagedMigrationPlan,
   PackageToManagedMigrationResult,
   PluginSummary,
   SchemaPage,
-  SelectionRecord,
   ShellIntegrationStatus,
   SourceAdapterStatus,
   SourceExecutionResult,
@@ -66,6 +52,27 @@ const bundledPlugin: PluginSummary = {
     externalCommands: ["node", "npm", "npx"],
     packageManagers: [],
   },
+};
+
+const installedTemurinPlugin: PluginSummary = {
+  id: "app.torben.plugin.temurin",
+  displayName: "Java",
+  version: "0.1.0",
+  enabled: true,
+  origin: "built_in",
+  publisher: "Torben App",
+  capabilities: ["version_discovery", "managed_install", "schema_ui"],
+  permissions: {
+    networkDomains: ["api.adoptium.net"],
+    filesystemRoots: ["managed_app_library"],
+    externalCommands: ["java", "javac"],
+    packageManagers: [],
+  },
+};
+
+const availableTemurinPlugin: PluginSummary = {
+  ...installedTemurinPlugin,
+  enabled: false,
 };
 
 const sideloadedPlugin: PluginSummary = {
@@ -112,7 +119,7 @@ describe("Torben App shell", () => {
     expect(commandShortcut("Linux x86_64")).toEqual({ aria: "Control+K", label: "Ctrl K" });
   });
 
-  it("loads the local-first overview without a Tauri runtime", async () => {
+  it("opens plugins first and omits the removed navigation pages", async () => {
     window.location.hash = "#/overview";
     render(
       <HashRouter>
@@ -121,25 +128,55 @@ describe("Torben App shell", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Good evening, Torben.")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Plugins" })).toBeInTheDocument();
     });
     expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(screen.getByText("Node.js, end to end")).toBeInTheDocument();
     expect(screen.getByText("Local-first")).toBeInTheDocument();
 
-    const catalogLink = screen.getByRole("link", { name: /^catalog$/i });
-    expect(catalogLink).toHaveClass("nav-item");
-    expect(catalogLink.className).not.toContain("isActive");
+    const links = screen.getAllByRole("link");
+    expect(links[0]).toHaveAccessibleName("Plugins");
+    expect(screen.queryByRole("link", { name: /^overview$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^catalog$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^installed$/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
     expect(screen.getByRole("button", { name: "Expand sidebar" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^catalog$/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^plugins$/i })).toBeInTheDocument();
 
     const skipLink = screen.getByRole("button", { name: "Skip to main content" });
     skipLink.focus();
     expect(skipLink).toHaveFocus();
     fireEvent.click(skipLink);
     expect(screen.getByRole("main")).toHaveFocus();
+  });
+
+  it("adds Java to the sidebar when the Java plugin is installed", async () => {
+    const snapshot = await getSnapshot();
+    vi.spyOn(api, "getSnapshot").mockResolvedValue({
+      ...snapshot,
+      applications: snapshot.applications.map((application) =>
+        application.id === "temurin" ? { ...application, capabilities: ["versions"] } : application,
+      ),
+      plugins: [installedTemurinPlugin],
+    });
+    window.location.hash = "#/overview";
+
+    render(
+      <HashRouter>
+        <App />
+      </HashRouter>,
+    );
+
+    await screen.findByRole("heading", { name: "Plugins" });
+    const javaLink = screen.getByRole("link", { name: "Java" });
+    expect(javaLink).toHaveAttribute("href", "#/java");
+    expect(javaLink.querySelector(".java-nav-icon")).toHaveAttribute(
+      "src",
+      "/icons/java-temurin.png",
+    );
+
+    fireEvent.click(javaLink);
+    expect(await screen.findByRole("heading", { name: "Available versions" })).toBeInTheDocument();
   });
 
   it("retries a failed initial snapshot without restarting the desktop", async () => {
@@ -156,7 +193,7 @@ describe("Torben App shell", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Initial snapshot fixture failed");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("Good evening, Torben.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Plugins" })).toBeInTheDocument();
     expect(screen.queryByText("Initial snapshot fixture failed")).not.toBeInTheDocument();
   });
 
@@ -188,8 +225,8 @@ describe("Torben App shell", () => {
     expect(warning).toHaveTextContent(
       "node: [plugin_response_malformed] The Node.js plugin returned malformed data. Inspect the Node.js plugin and retry discovery.",
     );
-    expect(screen.getByText("Good evening, Torben.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^catalog$/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Plugins" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^plugins$/i })).toBeInTheDocument();
   });
 
   it("clears a recovered task polling error without affecting the main snapshot", async () => {
@@ -207,19 +244,19 @@ describe("Torben App shell", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(screen.getByText("Good evening, Torben.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Plugins" })).toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
     expect(screen.getByRole("alert")).toHaveTextContent("Task polling fixture failed");
-    expect(screen.getByText("Good evening, Torben.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Plugins" })).toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
     expect(screen.queryByText("Task polling fixture failed")).not.toBeInTheDocument();
-    expect(screen.getByText("Good evening, Torben.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Plugins" })).toBeInTheDocument();
   });
 
   it("does not overlap slow task polling requests", async () => {
@@ -258,7 +295,7 @@ describe("Torben App shell", () => {
     expect(polling).toHaveBeenCalledTimes(2);
   });
 
-  it("searches pages and applications from the keyboard command palette", async () => {
+  it("omits unsupported applications from the keyboard command palette", async () => {
     window.location.hash = "#/overview";
     render(
       <HashRouter>
@@ -266,7 +303,7 @@ describe("Torben App shell", () => {
       </HashRouter>,
     );
 
-    await screen.findByRole("heading", { name: "Good evening, Torben." });
+    await screen.findByRole("heading", { name: "Plugins" });
     const trigger = screen.getByRole("button", { name: "Search apps and commands" });
     expect(trigger).toHaveAttribute("aria-keyshortcuts", "Control+K");
 
@@ -275,384 +312,152 @@ describe("Torben App shell", () => {
     expect(search).toHaveFocus();
 
     const initialOptions = screen.getAllByRole("option");
-    expect(initialOptions).toHaveLength(13);
+    expect(initialOptions).toHaveLength(4);
     expect(initialOptions[0]).toHaveAttribute("aria-selected", "true");
     fireEvent.keyDown(search, { key: "ArrowDown" });
     expect(initialOptions[1]).toHaveAttribute("aria-selected", "true");
 
     fireEvent.change(search, { target: { value: "Visual Studio" } });
-    const result = screen.getByRole("option", { name: /Visual Studio Code/ });
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "Plugins" } });
+    const result = screen.getByRole("option", { name: /Plugins/ });
     expect(screen.getAllByRole("option")).toHaveLength(1);
     expect(result).toHaveAttribute("aria-selected", "true");
 
     fireEvent.keyDown(search, { key: "Enter" });
-    await waitFor(() => expect(window.location.hash).toBe("#/catalog/vscode"));
+    await waitFor(() => expect(window.location.hash).toBe("#/plugins"));
     expect(
       screen.queryByRole("dialog", { name: "Search apps and commands" }),
     ).not.toBeInTheDocument();
   });
 
-  it("renders the overview navigation and main content in Simplified Chinese", async () => {
-    await i18n.changeLanguage("zh-CN");
-    const snapshot = await getSnapshot();
-
-    const view = render(
-      <HashRouter>
-        <OverviewPage snapshot={snapshot} />
-      </HashRouter>,
-    );
-
-    expect(screen.getByText("晚上好，Torben。")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /浏览应用目录/ })).toBeInTheDocument();
-    expect(screen.getByText("受管安装")).toBeInTheDocument();
-    expect(screen.getByText("1 项检查需关注")).toHaveClass("warning");
-    expect(screen.getByText("近期操作")).toBeInTheDocument();
-
-    view.rerender(
-      <HashRouter>
-        <OverviewPage
-          snapshot={{
-            ...snapshot,
-            doctor: snapshot.doctor.map((check) => ({ ...check, healthy: true })),
-          }}
-        />
-      </HashRouter>,
-    );
-    expect(screen.getByText("本地核心已就绪")).toHaveClass("positive");
-  });
-
-  it("shows only the latest event for each of the four most recent operations", async () => {
-    const snapshot = await getSnapshot();
-    const operation = (
-      operationId: string,
-      sequence: number,
-      timestamp: string,
-      phase: string,
-    ): OperationEvent => ({
-      operationId,
-      sequence,
-      state: "succeeded",
-      phase,
-      message: `${phase} message`,
-      progress: 1,
-      timestamp,
-    });
+  it("redirects removed application routes to plugins", async () => {
+    const versions = vi.spyOn(api, "getVersions");
+    window.location.hash = "#/catalog/node";
 
     render(
       <HashRouter>
-        <OverviewPage
-          snapshot={{
-            ...snapshot,
-            operations: [
-              operation("operation-a", 0, "6", "stale-a"),
-              operation("operation-e", 0, "2", "oldest-e"),
-              operation("operation-c", 0, "4", "latest-c"),
-              operation("operation-a", 1, "7", "latest-a"),
-              operation("operation-b", 0, "5", "latest-b"),
-              operation("operation-d", 0, "3", "latest-d"),
-            ],
-          }}
-        />
+        <App />
       </HashRouter>,
     );
 
-    expect(screen.getByText("latest-a")).toBeInTheDocument();
-    expect(screen.getByText("latest-b")).toBeInTheDocument();
-    expect(screen.getByText("latest-c")).toBeInTheDocument();
-    expect(screen.getByText("latest-d")).toBeInTheDocument();
-    expect(screen.queryByText("stale-a")).not.toBeInTheDocument();
-    expect(screen.queryByText("oldest-e")).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Plugins" })).toBeInTheDocument();
+    await waitFor(() => expect(window.location.hash).toBe("#/plugins"));
+    expect(versions).not.toHaveBeenCalled();
   });
 
-  it("renders managed installation actions in Simplified Chinese", async () => {
-    await i18n.changeLanguage("zh-CN");
-    const records: InstallRecord[] = [
-      {
-        appId: "node",
-        version: "24.19.0",
-        sourceId: "node.official",
-        scope: "managed",
-        installPath: "C:/Torben/node/24.19.0",
-        installedAt: "fixture",
-        health: "healthy",
-      },
-    ];
-
-    render(
-      <InstalledPage
-        external={[]}
-        onChanged={async () => undefined}
-        records={records}
-        selected={[{ appId: "node", version: "24.19.0" }]}
-      />,
-    );
-
-    expect(screen.getByRole("heading", { name: "已安装的应用" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "检查更新" })).toBeEnabled();
-    expect(screen.getByText("已选择")).toBeInTheDocument();
-    expect(screen.getByText("健康")).toBeInTheDocument();
-    expect(screen.queryByText("healthy")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "清除" })).toBeEnabled();
-  });
-
-  it("preserves an unknown installation health diagnostic for investigation", () => {
-    const record: InstallRecord = {
-      appId: "node",
-      version: "24.19.0",
-      sourceId: "node.official",
-      scope: "managed",
-      installPath: "C:/Torben/node/24.19.0",
-      installedAt: "fixture",
-      health: "version output mismatch",
-    };
-
-    render(
-      <InstalledPage
-        external={[]}
-        onChanged={async () => undefined}
-        records={[record]}
-        selected={[]}
-      />,
-    );
-
-    expect(screen.getByText("version output mismatch")).toBeInTheDocument();
-  });
-
-  it("localizes built-in catalog metadata and searches by Chinese category", async () => {
-    await i18n.changeLanguage("zh-CN");
-    const snapshot = await getSnapshot();
-
-    render(
-      <HashRouter>
-        <CatalogPage applications={snapshot.applications} />
-      </HashRouter>,
-    );
-
-    expect(
-      screen.getByText("提供受管 LTS 和 Current 版本的 JavaScript 运行时。"),
-    ).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: "搜索应用目录" }), {
-      target: { value: "编辑器" },
-    });
-    expect(screen.getByRole("heading", { name: "Visual Studio Code" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Node.js" })).not.toBeInTheDocument();
-  });
-
-  it("shows the selected managed version and requires clearing it before uninstall", () => {
-    const records: InstallRecord[] = [
-      {
-        appId: "node",
-        version: "24.19.0",
-        sourceId: "node.official",
-        scope: "managed",
-        installPath: "C:/Torben/node/24.19.0",
-        installedAt: "fixture",
-        health: "healthy",
-      },
-    ];
-    const selected: SelectionRecord[] = [{ appId: "node", version: "24.19.0" }];
-
-    render(
-      <InstalledPage
-        external={[]}
-        onChanged={async () => undefined}
-        records={records}
-        selected={selected}
-      />,
-    );
-
-    expect(screen.getByText("Selected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Clear" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Uninstall node 24.19.0" })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "Use" })).not.toBeInTheDocument();
-  });
-
-  it("uses the matching application icon for non-Node external installations", () => {
-    const external: InstallRecord = {
-      appId: "python",
-      version: "3.14.7",
-      sourceId: "python.external",
-      scope: "external",
-      installPath: "C:/Python314/python.exe",
-      installedAt: "fixture",
-      health: "healthy",
-    };
-
-    render(
-      <InstalledPage
-        external={[external]}
-        onChanged={async () => undefined}
-        records={[]}
-        selected={[]}
-      />,
-    );
-
-    expect(screen.getByText("Py")).toHaveClass("app-icon-python");
-    expect(screen.queryByText("JS")).not.toBeInTheDocument();
-    expect(screen.getByText("Read only")).toBeInTheDocument();
-  });
-
-  it("routes package-manager installations to source management", () => {
-    const records: InstallRecord[] = [
-      {
-        appId: "vscode",
-        version: "1.134.0",
-        sourceId: "source.winget",
-        scope: "package_manager",
-        installPath: "C:/Program Files/Microsoft VS Code/Code.exe",
-        installedAt: "fixture",
-        health: "healthy",
-      },
-    ];
-
-    render(
-      <HashRouter>
-        <InstalledPage
-          external={[]}
-          onChanged={async () => undefined}
-          records={records}
-          selected={[]}
-        />
-      </HashRouter>,
-    );
-
-    expect(screen.getByText("Package manager")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Manage source" })).toHaveAttribute(
-      "href",
-      "#/diagnostics",
-    );
-    expect(screen.queryByRole("button", { name: "Use" })).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Uninstall vscode 1.134.0" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("shows release-line updates and requires an explicit per-app auto-update preference", async () => {
-    const record: InstallRecord = {
-      appId: "node",
-      version: "24.19.0",
-      sourceId: "node.official",
-      scope: "managed",
-      installPath: "C:/Torben/node/24.19.0",
-      installedAt: "fixture",
-      health: "healthy",
-    };
-    const candidate: ManagedUpdateCandidate = {
-      appId: "node",
-      channel: "24",
-      installedVersion: "24.19.0",
-      availableVersion: "24.20.1",
-      selectedVersion: "24.19.0",
-      releasedAt: "2026-08-24T00:00:00Z",
-      recommended: true,
-      automatic: false,
-    };
-    const onApplyUpdate = vi.fn(async () => ({
-      candidate,
-      installation: { ...record, version: "24.20.1" },
-      selectionUpdated: true,
-    }));
-    const onAutoUpdateChange = vi.fn(async () => ({
-      theme: "system" as const,
-      language: "en" as const,
-      updates: {
-        ...defaultUpdatePreferences,
-        automaticallyUpdateApps: ["node"],
-      },
-    }));
-    const onCheckUpdates = vi.fn(async () => ({
-      checkedApps: 1,
-      candidates: [candidate],
-      warnings: [],
-    }));
-    const onChanged = vi.fn(async () => undefined);
-
-    render(
-      <InstalledPage
-        external={[]}
-        onApplyUpdate={onApplyUpdate}
-        onAutoUpdateChange={onAutoUpdateChange}
-        onChanged={onChanged}
-        onCheckUpdates={onCheckUpdates}
-        records={[record]}
-        selected={[{ appId: "node", version: "24.19.0" }]}
-        settings={{ theme: "system", language: "en", updates: defaultUpdatePreferences }}
-        updates={{ checkedApps: 1, candidates: [candidate], warnings: [] }}
-      />,
-    );
-
-    expect(screen.getByText("24.19.0 → 24.20.1 · channel 24")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Enable automatic updates for node" }));
-    await waitFor(() => {
-      expect(onAutoUpdateChange).toHaveBeenCalledWith("node", true);
-      expect(onCheckUpdates).toHaveBeenCalledOnce();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Update node to 24.20.1" }));
-    await waitFor(() => {
-      expect(onApplyUpdate).toHaveBeenCalledWith(candidate);
-      expect(onChanged).toHaveBeenCalledOnce();
-      expect(onCheckUpdates).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  it("shows Eclipse Temurin LTS releases and Java command integration", async () => {
+  it("shows Java LTS releases without the redundant introduction cards", async () => {
     render(<TemurinDetailPage installed={[]} onChanged={async () => undefined} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Eclipse Temurin")).toBeInTheDocument();
       expect(screen.getByText("v21.0.2+13.0.LTS")).toBeInTheDocument();
     });
-    expect(screen.getByText(/java and javac resolve/)).toBeInTheDocument();
-    expect(screen.getByText("OpenPGP + SHA-256")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Refresh Eclipse Temurin versions" })).toBeEnabled();
+    expect(screen.queryByText("Terminal commands")).not.toBeInTheDocument();
+    expect(screen.queryByText("Transactional storage")).not.toBeInTheDocument();
+    expect(screen.queryByText("Source ownership")).not.toBeInTheDocument();
+    expect(screen.getByText("JDK 21")).toBeInTheDocument();
+    expect(screen.queryByText("Recommended")).not.toBeInTheDocument();
   });
 
-  it("shows stable CPython releases and pip command integration", async () => {
-    render(<PythonDetailPage installed={[]} onChanged={async () => undefined} />);
+  it("groups Java releases by JDK line and upgrades an installed older release", async () => {
+    vi.spyOn(api, "getVersions").mockResolvedValue([
+      {
+        version: "25.0.3+9.0.LTS",
+        ltsName: "Java 25 LTS",
+        releasedAt: "2026-04-21T00:00:00Z",
+        recommended: false,
+      },
+      {
+        version: "25.0.4+101.0.LTS",
+        ltsName: "Java 25 LTS",
+        releasedAt: "2026-07-21T00:00:00Z",
+        recommended: false,
+      },
+      {
+        version: "21.0.12+101.0.LTS",
+        ltsName: "Java 21 LTS",
+        releasedAt: "2026-07-21T00:00:00Z",
+        recommended: false,
+      },
+    ]);
+    const record: InstallRecord = {
+      appId: "temurin",
+      version: "25.0.3+9.0.LTS",
+      sourceId: "temurin.official",
+      scope: "managed",
+      installPath: "C:/Torben/temurin/25.0.3+9.0.LTS",
+      installedAt: "fixture",
+      health: "healthy",
+    };
+    const applyUpdate = vi
+      .spyOn(api, "applyManagedUpdate")
+      .mockResolvedValue({} as ManagedUpdateResult);
+    const onChanged = vi.fn(async () => undefined);
+
+    render(<TemurinDetailPage installed={[record]} onChanged={onChanged} selected={[record]} />);
+
+    expect(await screen.findAllByText("JDK 25")).toHaveLength(1);
+    expect(screen.getByText("v25.0.3+9.0.LTS → v25.0.4+101.0.LTS")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade Java to 25.0.4+101.0.LTS" }));
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Python" })).toBeInTheDocument();
-      expect(screen.getByText("v3.14.7")).toBeInTheDocument();
+      expect(applyUpdate).toHaveBeenCalledWith({
+        appId: "temurin",
+        channel: "25",
+        installedVersion: "25.0.3+9.0.LTS",
+        availableVersion: "25.0.4+101.0.LTS",
+        selectedVersion: "25.0.3+9.0.LTS",
+        releasedAt: "2026-07-21T00:00:00Z",
+        recommended: false,
+        automatic: false,
+      });
+      expect(onChanged).toHaveBeenCalledOnce();
     });
-    expect(screen.getAllByText("Stable").length).toBeGreaterThan(0);
-    expect(screen.getByText(/python, python3, pip, and pip3 resolve/)).toBeInTheDocument();
-    expect(screen.getByText("Signed catalog / Sigstore")).toBeInTheDocument();
   });
 
-  it("shows the managed Git CLI release and terminal command integration", async () => {
-    render(<GitDetailPage installed={[]} onChanged={async () => undefined} />);
+  it("shows a quiet background-update state before the Java catalog cache is ready", async () => {
+    vi.spyOn(api, "getVersions").mockResolvedValue([]);
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Git" })).toBeInTheDocument();
-      expect(screen.getByText("v2.55.0+windows.5")).toBeInTheDocument();
-    });
-    expect(screen.getByText(/git resolves through one managed shim directory/)).toBeInTheDocument();
-    expect(screen.getByText("Signed metadata / SHA-256")).toBeInTheDocument();
-  });
+    render(<TemurinDetailPage installed={[]} onChanged={async () => undefined} />);
 
-  it("shows stable Visual Studio Code releases with managed updates disabled", async () => {
-    render(<VsCodeDetailPage installed={[]} onChanged={async () => undefined} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Visual Studio Code" })).toBeInTheDocument();
-      expect(screen.getByText("v1.134.0")).toBeInTheDocument();
-    });
     expect(
-      screen.getByText(/code resolves through one managed shim directory/),
+      await screen.findByText(
+        "Version information is updating in the background and will appear here automatically.",
+      ),
     ).toBeInTheDocument();
-    expect(screen.getByText("Microsoft metadata / SHA-256")).toBeInTheDocument();
   });
 
-  it("shows native Codex releases without claiming authentication state", async () => {
-    render(<CodexDetailPage installed={[]} onChanged={async () => undefined} />);
+  it("uninstalls a selected Java version after clearing its terminal selection", async () => {
+    const clear = vi.spyOn(api, "clearSelection").mockResolvedValue(undefined);
+    const uninstall = vi.spyOn(api, "uninstallApp").mockResolvedValue(undefined);
+    const onChanged = vi.fn(async () => undefined);
+    const record: InstallRecord = {
+      appId: "temurin",
+      version: "21.0.2+13.0.LTS",
+      sourceId: "temurin.official",
+      scope: "managed",
+      installPath: "C:/Torben/temurin/21.0.2+13.0.LTS",
+      installedAt: "fixture",
+      health: "healthy",
+    };
+
+    render(<TemurinDetailPage installed={[record]} onChanged={onChanged} selected={[record]} />);
+
+    const uninstallButton = await screen.findByRole("button", {
+      name: "Uninstall Java 21.0.2+13.0.LTS",
+    });
+    fireEvent.click(uninstallButton);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("Torben App will clear the terminal selection");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Uninstall" }));
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Codex CLI" })).toBeInTheDocument();
-      expect(screen.getByText("v0.149.1")).toBeInTheDocument();
+      expect(clear).toHaveBeenCalledWith("temurin");
+      expect(uninstall).toHaveBeenCalledWith("temurin", "21.0.2+13.0.LTS");
+      expect(onChanged).toHaveBeenCalledOnce();
     });
-    expect(screen.getByText(/CODEX_HOME stays user-owned/)).toBeInTheDocument();
-    expect(screen.getByText("GitHub SHA-256 / Linux Sigstore")).toBeInTheDocument();
+    expect(clear.mock.invocationCallOrder[0]).toBeLessThan(uninstall.mock.invocationCallOrder[0]);
   });
 
   it("preserves structured Core error codes and remediation in the UI", () => {
@@ -1343,6 +1148,51 @@ describe("Torben App shell", () => {
     ).toBeInTheDocument();
   });
 
+  it("installs the available Eclipse Temurin plugin with an explicit install action", async () => {
+    const installTemurin = vi.fn(async () => installedTemurinPlugin);
+    const onChanged = vi.fn(async () => undefined);
+    render(
+      <PluginsPage
+        onChanged={onChanged}
+        onInstallBundledTemurin={installTemurin}
+        plugins={[availableTemurinPlugin]}
+      />,
+    );
+
+    expect(screen.getByText(/Install the plugin, then open Manage JDK/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Install Java" }));
+
+    await waitFor(() => {
+      expect(installTemurin).toHaveBeenCalledOnce();
+      expect(onChanged).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("explains how to use and uninstall an installed Eclipse Temurin plugin", async () => {
+    const uninstallTemurin = vi.fn(async () => undefined);
+    const onChanged = vi.fn(async () => undefined);
+    render(
+      <HashRouter>
+        <PluginsPage
+          onChanged={onChanged}
+          onUninstallBundledTemurin={uninstallTemurin}
+          plugins={[installedTemurinPlugin]}
+        />
+      </HashRouter>,
+    );
+
+    expect(screen.getByRole("link", { name: /Manage JDK/ })).toHaveAttribute("href", "#/java");
+    expect(screen.getByText(/install multiple JDKs/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall Java" }));
+    expect(screen.getByText("Uninstall Java plugin?")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
+
+    await waitFor(() => {
+      expect(uninstallTemurin).toHaveBeenCalledOnce();
+      expect(onChanged).toHaveBeenCalledOnce();
+    });
+  });
+
   it("toggles sideloaded plugins through the shared Core action", async () => {
     const changeEnabled = vi.fn(async () => undefined);
     const onChanged = vi.fn(async () => undefined);
@@ -1592,7 +1442,7 @@ describe("Torben App shell", () => {
     ];
     const cancel = vi.fn(async () => undefined);
     const onChanged = vi.fn(async () => undefined);
-    render(<TasksPage cancel={cancel} events={events} onChanged={onChanged} />);
+    render(<LogsPage cancel={cancel} events={events} onChanged={onChanged} />);
 
     expect(screen.getByText("download")).toBeInTheDocument();
     expect(screen.queryByText("prepare")).not.toBeInTheDocument();
@@ -1614,7 +1464,7 @@ describe("Torben App shell", () => {
     await i18n.changeLanguage("zh-CN");
     const timestamp = "1700000000";
     render(
-      <TasksPage
+      <LogsPage
         events={[
           {
             operationId: "22222222-2222-4222-8222-222222222222",

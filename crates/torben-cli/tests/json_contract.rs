@@ -102,9 +102,9 @@ fn mutation_error_keeps_json_stdout_separate_from_diagnostics() {
     assert!(output.stderr.is_empty(), "stderr={:?}", output.stderr);
     assert_complete_envelope(&envelope);
     assert_eq!(envelope["ok"], false);
-    assert_eq!(envelope["error"]["code"], "version_not_installed");
+    assert_eq!(envelope["error"]["code"], "capability_not_available");
     assert_eq!(envelope["error"]["details"]["appId"], "node");
-    assert_eq!(envelope["error"]["details"]["version"], "1.0.0");
+    assert!(envelope["error"]["details"].get("version").is_none());
 }
 
 #[test]
