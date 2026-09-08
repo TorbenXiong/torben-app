@@ -33,3 +33,12 @@ test("NSIS preserves upgrades and explicit paths and also covers silent installs
   assert.match(hook, /!define MUI_CUSTOMFUNCTION_GUIINIT TorbenSetDefaultInstallDirectory/u);
   assert.match(hook, /!macro NSIS_HOOK_PREINSTALL[\s\S]*SetOutPath \$INSTDIR/u);
 });
+
+test("NSIS does not replace the user's directory-page choice before copying files", () => {
+  const preinstall = hook.match(/!macro NSIS_HOOK_PREINSTALL([\s\S]*?)!macroend/u)?.[1];
+  assert.ok(preinstall);
+  assert.match(
+    preinstall,
+    /\$\{If\} \$\{Silent\}\s+Call TorbenSetDefaultInstallDirectory\s+\$\{EndIf\}\s+SetOutPath \$INSTDIR/u,
+  );
+});

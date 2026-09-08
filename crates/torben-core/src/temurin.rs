@@ -164,34 +164,33 @@ impl TemurinProvider {
         let mut versions = Vec::new();
         for (feature, releases) in releases {
             let releases = releases?;
-            for (index, (version, distribution)) in releases.into_iter().enumerate() {
+            if let Some((version, distribution)) = releases.into_iter().next() {
                 versions.push(VersionDescriptor {
                     version,
                     lts_name: Some(format!("Java {feature} LTS")),
                     released_at: distribution.released_at,
-                    recommended: index == 0,
+                    recommended: false,
                 });
             }
         }
-        versions.sort_by(|left, right| {
-            right
-                .recommended
-                .cmp(&left.recommended)
-                .then_with(|| right.version.cmp(&left.version))
-        });
+        versions.sort_by(|left, right| right.version.cmp(&left.version));
         versions.dedup_by(|left, right| left.version == right.version);
         Ok(versions)
     }
 
     pub async fn resolve_version(&self, requested: &str) -> TorbenResult<ExactVersion> {
-        let versions = self.list_versions().await?;
         if let Ok(exact) = ExactVersion::from_str(requested) {
-            return versions
+            let feature =
+                u32::try_from(exact.as_semver().major).map_err(|_| version_not_found(requested))?;
+            return self
+                .feature_releases(feature)
+                .await?
                 .into_iter()
-                .find(|candidate| candidate.version == exact)
-                .map(|candidate| candidate.version)
+                .find(|(candidate, _)| candidate == &exact)
+                .map(|(candidate, _)| candidate)
                 .ok_or_else(|| version_not_found(requested));
         }
+        let versions = self.list_versions().await?;
         let normalized = requested.to_ascii_lowercase();
         if matches!(normalized.as_str(), "lts" | "latest" | "current") {
             return versions
@@ -618,7 +617,7 @@ impl TemurinProvider {
             || *strip_components != 0
             || executable != "java"
             || arguments.as_slice() != ["-version"]
-            || expected_output != &java_version_core(version)
+            || !install_plan_version_matches(version, expected_output)
             || commands.as_slice() != ["java", "javac"]
         {
             return Err(invalid_plan("official distribution details"));
@@ -987,12 +986,35 @@ fn is_sha256(value: &str) -> bool {
 }
 
 fn java_version_core(version: &ExactVersion) -> String {
-    let version = version.as_semver();
-    if version.major == 8 {
-        format!("1.8.0_{}", version.patch)
+    let semver = version.as_semver();
+    if semver.major == 8 {
+        format!("1.8.0_{}", semver.patch)
+    } else if let Some(patch) = temurin_patch_component(version) {
+        format!("{}.{}", java_version_base(version), patch)
     } else {
-        format!("{}.{}.{}", version.major, version.minor, version.patch)
+        java_version_base(version)
     }
+}
+
+fn java_version_base(version: &ExactVersion) -> String {
+    let version = version.as_semver();
+    format!("{}.{}.{}", version.major, version.minor, version.patch)
+}
+
+fn install_plan_version_matches(version: &ExactVersion, expected: &str) -> bool {
+    expected == java_version_core(version) || expected == java_version_base(version)
+}
+
+fn temurin_patch_component(version: &ExactVersion) -> Option<u64> {
+    let encoded = version
+        .as_semver()
+        .build
+        .as_str()
+        .split('.')
+        .next()?
+        .parse::<u64>()
+        .ok()?;
+    (encoded >= 100).then_some(encoded / 100)
 }
 
 fn extract_java_version(output: &str) -> Option<String> {
@@ -1178,6 +1200,14 @@ mod tests {
             extract_command_version("javac", "javac 21.0.2\n"),
             Some("21.0.2".to_owned())
         );
+        assert_eq!(
+            java_version_core(&ExactVersion::from_str("25.0.4+101.0.LTS").unwrap()),
+            "25.0.4.1"
+        );
+        assert!(install_plan_version_matches(
+            &ExactVersion::from_str("25.0.4+101.0.LTS").unwrap(),
+            "25.0.4"
+        ));
     }
 
     #[tokio::test]
@@ -1192,6 +1222,7 @@ mod tests {
         server.join().unwrap();
         assert_eq!(versions.len(), 1);
         assert_eq!(versions[0].version.to_string(), "21.0.2+13.0.LTS");
+        assert!(!versions[0].recommended);
         assert_eq!(lts, versions[0].version);
         assert_eq!(feature, versions[0].version);
     }
@@ -1738,7 +1769,7 @@ mod tests {
                 "pluginVersion": env!("CARGO_PKG_VERSION"),
                 "applications": [{
                     "id": "temurin",
-                    "displayName": "Eclipse Temurin",
+                    "displayName": "Java",
                     "summary": "fixture",
                     "categories": ["runtime"],
                     "capabilities": ["versions", "install", "select", "uninstall"],

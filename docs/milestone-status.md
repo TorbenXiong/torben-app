@@ -17,6 +17,29 @@ Windows x64 gates required for the next supported release.
   explicitly cancelled before the first commit. The DCO workflow, checker, tests, and sign-off
   documentation have been removed; Apache-2.0 remains the project license.
 
+## Current software-plugin support decision
+
+- Node.js, Python, Git, Visual Studio Code, and Codex CLI remain temporarily unsupported.
+  Production builds publish no capabilities or managed sources for them and reject their Core
+  management actions with `capability_not_available`.
+- Eclipse Temurin JDK is the first restored software plugin. Its provider payload is installed
+  under `userData/plugins`, and managed JDK versions remain under the same `userData` root.
+- Java discovery keeps only the newest release for each LTS feature line. The desktop reads its
+  local catalog immediately, refreshes it through a process-local daily scheduled task only after
+  startup and while the application is unfocused, and exposes an upgrade action when an installed
+  LTS line is behind. Explicit plugin and JDK actions execute immediately and bypass the idle gate.
+- The portable release contains only `TorbenApp.exe`. Its first launch scans D through Z and proposes
+  `<drive>:\TorbenApp` on the first available drive, falling back to the launched executable's directory.
+  Confirmation creates the base and `userData`, replaces an existing target `TorbenApp.exe` as an
+  upgrade, relaunches the target copy, and removes the byte-identical original launch file. New
+  builds keep the data path implicit as `<base>\userData` and create no pointer file.
+- The catalog keeps the remaining five descriptors visible as unavailable so the product backlog
+  remains explicit. Each application will be restored separately only after its own writable data
+  is constrained to the user-selected Torben App installation root and the Windows x64 behavior is
+  verified.
+- Provider code, distribution validation, and local fixtures remain engineering assets. Their test
+  coverage proves dormant implementation behavior and is not a current product-support claim.
+
 ## Repository implementation
 
 ### Foundation
@@ -28,11 +51,12 @@ Windows x64 gates required for the next supported release.
 - Core owns SQLite migrations, platform-standard paths, the managed application library,
   cross-process locking, durable journals, cancellation markers, diagnostic logs, settings, and
   startup recovery. Frontend and plugin processes do not access SQLite directly.
-- Full Core startup transactionally synchronizes the ordered six-application directory, all six
-  official sources, and the winget, Homebrew, apt, and DNF source descriptors into SQLite. App list,
+- Full Core startup transactionally synchronizes the ordered six-application directory without
+  managed sources, plus the winget, Homebrew, apt, and DNF source descriptors into SQLite. App list,
   search, and detail queries read that persisted Core-owned snapshot.
-- The desktop exposes Overview, Catalog, application detail, Installed, Tasks, Plugins,
-  Diagnostics, and Settings routes. Theme, English/Simplified Chinese localization, keyboard
+- The desktop opens on Plugins and exposes installed plugin applications such as Java directly in
+  the sidebar, followed by Logs, Diagnostics, and Settings. The former Overview, Catalog, and
+  Installed routes redirect to Plugins. Theme, English/Simplified Chinese localization, keyboard
   navigation, reduced-motion behavior, and responsive minimum-window layouts are covered by
   frontend tests.
 - Shell integration is explicit and user-level. Windows user `Path` and Unix login profiles use
@@ -40,9 +64,9 @@ Windows x64 gates required for the next supported release.
   cloud synchronization, background services, and project-level version pinning remain outside the
   product boundary.
 
-### Node.js vertical milestone
+### Dormant Node.js vertical implementation
 
-- Official metadata discovery, exact/LTS/Current resolution, signed checksum verification,
+- Fixture builds retain official metadata discovery, exact/LTS/Current resolution, signed checksum verification,
   per-target archive selection, safe extraction, staging health checks, atomic commit, multi-version
   installation, global selection, external read-only discovery, cancellation, rollback, recovery,
   and permanent uninstall are implemented in the shared Core path.
@@ -51,9 +75,9 @@ Windows x64 gates required for the next supported release.
 - Real CLI subprocess and desktop-command fixture tests cover discovery through uninstall, fresh
   terminal resolution, GUI/CLI concurrency, cross-process cancellation, and restart recovery.
 
-### Application and source expansion
+### Dormant application and source implementations
 
-- Eclipse Temurin, Python, Git, Visual Studio Code, and Codex CLI have official-only metadata,
+- Fixture builds retain Eclipse Temurin, Python, Git, Visual Studio Code, and Codex CLI official-only metadata,
   per-platform distribution validation, supply-chain checks, staging, health checks, external
   read-only discovery, Schema UI, selection where applicable, managed updates, and uninstall.
 - Python uses the PSF Install Manager target mode on Windows and verified CPython source builds on

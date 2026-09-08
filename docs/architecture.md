@@ -24,11 +24,22 @@ camel-case payloads in one typed module.
 
 Plugins are native trusted processes that communicate through versioned JSON-RPC over stdio. A plugin describes applications, resolves aliases to exact versions, and produces application-specific plans. Core remains responsible for locking, durable operation state, download verification, staging, health checks, atomic commit, rollback, and SQLite state.
 
+The six bundled software providers are currently dormant. Production builds keep their application
+descriptors as unavailable catalog entries, omit their provider summaries and diagnostics, and
+reject application management calls. The implementation and fixture paths below are retained for
+one-at-a-time review; a provider returns to product support only after the managed application also
+keeps its own writable data under the selected Torben App installation root.
+
 On Windows, Core starts provider plugins, package-source tools, health checks, and other managed
 background commands with `CREATE_NO_WINDOW`. The plugin host applies the same flag at its process
 boundary. Standard input, output, and error remain piped where required, but these background
 processes do not create user-visible console windows during desktop startup or operations. Other
 platforms keep their native process behavior through the shared command helpers.
+
+Release desktop executables use a Windows application manifest with `requireAdministrator`. This
+lets a portable copy request UAC before initializing and writing its installation-root data, without
+silently falling back to a per-user AppData location. Debug builds keep the normal development
+manifest so local tests and `pnpm dev` do not trigger UAC on every rebuild.
 
 Every plugin request has a host-enforced timeout and a matching JSON-RPC request identifier. A
 timeout, early process exit, malformed JSON, mismatched response, or plugin-reported structured
@@ -49,7 +60,7 @@ notifications with their final response. The host accepts them only for the acti
 validates bounded phase, message, and progress fields, limits each call to 1,024 events, and applies
 one timeout to the complete response stream. Plain calls, unknown notification methods, malformed
 events, and events for another operation fail closed. Core maps accepted events into the same
-durable operation journal used by the GUI task center and CLI, while the plugin remains unable to
+durable operation journal used by the GUI operation log and CLI, while the plugin remains unable to
 write journals or SQLite directly.
 
 Schema UI uses two protocol methods: `schema.pages` returns bounded host-rendered pages and
@@ -95,7 +106,20 @@ Platform-standard directories contain four independent areas:
 - Cache: downloaded archives and read-through metadata.
 - Logs: structured local diagnostics.
 
-Core appends newline-delimited JSON diagnostics to `torben.jsonl` under the platform log directory.
+Core appends newline-delimited JSON diagnostics to `torben.jsonl` under the resolved log directory.
+On Windows, data, configuration, cache, and logs are rooted in the sibling `userData` directory
+beside the installed executable; deployed shims resolve the same root from `userData/tools/shims`.
+The first release launch scans D through Z for the first available drive, proposes
+`<drive>:\TorbenApp` on that drive, and lets the user choose another absolute base directory. It creates
+the base and `userData`, replaces an existing `<base>\TorbenApp.exe` as an upgrade, then relaunches
+from that location and removes the original launch file after verifying identical bytes. New builds
+do not create a path-pointer file because the data root is always `<base>\userData`. For backward
+compatibility, Core can still read an older custom pointer, while deployed aliases derive the active
+root directly from their `<data root>/tools/shims` location.
+Desktop WebView2 data is explicitly rooted at `<data root>/webview` through the window builder before
+any window is created. No AppData
+fallback is used when the installation directory is unwritable. Other platforms retain their
+platform-standard Core directory resolution, and `TORBEN_DATA_DIR` explicitly overrides either layout.
 The CLI and desktop serialize writes through a separate cross-process file lock. The active file is
 limited to 5 MiB and rotates to one backup, bounding retained diagnostics to approximately 10 MiB
 plus at most one record. Lifecycle and operation-state records contain only host-defined structured
@@ -115,7 +139,7 @@ application catalog. On full Core startup, the six bundled application descripto
 official sources plus winget, Homebrew, apt, and DNF are synchronized in one SQLite transaction;
 application list, search, and detail queries then read the persisted snapshot. Every journal update
 is projected into the operations table with its kind, latest state, complete event JSON, and update
-time; the desktop task center reads this Core-owned projection rather than opening the database or
+time; the desktop operation log reads this Core-owned projection rather than opening the database or
 journal files directly.
 Every embedded migration records its exact version, including migrations whose structural change
 was already present in a newly created database. Core checks the migration ledger before creating
@@ -463,6 +487,16 @@ by major, Python by `major.minor`, and Git/VS Code/Codex by major. Package-manag
 records never become managed update candidates. Catalog failures retain their structured code,
 details, and remediation as per-application warnings while other catalogs continue.
 
+The desktop owns a process-local scheduled-task registry for non-mutating maintenance work. It
+waits through a two-minute startup protection period, then checks only while no Torben App window
+is focused. The Temurin catalog task contacts Adoptium only when its cache is at least 24 hours old,
+writes `cache/version-catalogs/temurin.json` below the selected data root, and emits a desktop event
+so the Java page can reread the cache. The automatic scheduler does not start a refresh while the
+user is working in the application. Successful explicit plugin installation starts the catalog
+refresh immediately; manual plugin, JDK, upgrade, and uninstall actions never wait for the idle
+gate. The scheduler exists only while Torben App is running and does not register an
+operating-system task or keep a resident service.
+
 Applying a candidate re-runs discovery and requires the exact installed/available pair to remain
 current before calling the ordinary install transaction. The old version is retained. If a version
 from that line was selected before installation, Core takes the workspace lock again and moves the
@@ -480,7 +514,7 @@ installation selected in SQLite. The workspace and desktop package build
 transactionally deploys twelve byte-identical aliases from that bundled binary, and only then
 updates selection state. Existing aliases are staged for rollback during replacement, and a
 non-file or symbolic-link destination fails closed. Selection and clearing a selection use the
-workspace lock and emit durable operation events shared by the CLI and desktop task center.
+workspace lock and emit durable operation events shared by the CLI and desktop operation log.
 
 Torben App never changes the system-level PATH. User-level shell integration is an explicit,
 workspace-locked and reversible action exposed through the same Core API to the desktop and CLI.
@@ -518,7 +552,9 @@ and explicitly added.
 
 The Temurin provider uses the official Adoptium v3 `available_releases` and
 `assets/feature_releases/{feature}/ga` endpoints to discover exact Eclipse Temurin HotSpot JDK
-archives for Windows, Linux, and macOS on x64 and ARM64. Core accepts only `vendor=eclipse`, GA JDK
+archives for Windows, Linux, and macOS on x64 and ARM64. The public catalog retains only the newest
+release in each advertised LTS feature line; exact resolution still accepts a cached release that
+remains in the official feature catalog. Core accepts only `vendor=eclipse`, GA JDK
 assets whose architecture, operating system, heap, JVM, project, filename, GitHub release path,
 size, SHA-256, and detached signature link all match the active request. Metadata, keys, signatures,
 and archives have explicit response-size bounds and origin allowlists.
@@ -556,7 +592,7 @@ digest, identity, and issuer. It never skips the certificate chain or transparen
 SHA-256 alone is not treated as a sufficient trust root.
 
 Both installation executors run inside the durable Core transaction and Python is available in the
-catalog, CLI, desktop detail page, plugin Schema UI, task center, and diagnostics. Windows requires
+catalog, CLI, desktop detail page, plugin Schema UI, operation log, and diagnostics. Windows requires
 the official Python Install Manager to be preinstalled and invokes it only with an exact tag and a
 staging `--target`. Unix runs `configure`, parallel `make`, and `make install` with `DESTDIR` under
 staging, without a package manager or privilege elevation. Core validates the exact CPython version

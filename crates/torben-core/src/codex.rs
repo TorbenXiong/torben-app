@@ -597,7 +597,9 @@ impl CodexProvider {
             if canonical.starts_with(managed_root) || ensure_regular_file(&canonical).is_err() {
                 continue;
             }
-            let Ok(version) = isolated_version(&canonical).await else {
+            let Ok(version) =
+                isolated_version(&canonical, &managed_root.join("health-checks")).await
+            else {
                 continue;
             };
             records.push(InstallRecord {
@@ -691,7 +693,7 @@ impl CodexProvider {
         version: &ExactVersion,
     ) -> TorbenResult<()> {
         let executable = self.command_path(install_path, "codex")?;
-        let actual = isolated_version(&executable).await?;
+        let actual = isolated_version(&executable, install_path).await?;
         if &actual != version {
             return Err(TorbenError::new(
                 "health_check_version_mismatch",
@@ -1075,8 +1077,8 @@ fn find_payload_binary(payload: &Path, name: &str) -> TorbenResult<PathBuf> {
     .with_detail("binary", name))
 }
 
-async fn isolated_version(executable: &Path) -> TorbenResult<ExactVersion> {
-    let isolated_home = std::env::temp_dir().join(format!(
+async fn isolated_version(executable: &Path, temporary_root: &Path) -> TorbenResult<ExactVersion> {
+    let isolated_home = temporary_root.join(format!(
         "torben-codex-health-{}-{}",
         std::process::id(),
         timestamp_nanos()

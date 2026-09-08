@@ -119,13 +119,7 @@ impl StateStore {
                    value_json TEXT NOT NULL
                  );
                  INSERT OR IGNORE INTO schema_migrations(version, applied_at)
-                   VALUES (1, datetime('now'));
-                  INSERT OR IGNORE INTO sources(id, display_name, managed)
-                   VALUES ('node.official', 'Official archive', 1);
-                  INSERT OR IGNORE INTO sources(id, display_name, managed)
-                   VALUES ('temurin.official', 'Eclipse Temurin official archive', 1);
-                  INSERT OR IGNORE INTO sources(id, display_name, managed)
-                   VALUES ('python.official', 'Official Python distribution', 1);",
+                   VALUES (1, datetime('now'));",
             )
             .map_err(database_error)?;
         let has_plugin_origin = {
@@ -206,6 +200,9 @@ impl StateStore {
                 )
                 .map_err(database_error)?;
         }
+        transaction
+            .execute("DELETE FROM sources", [])
+            .map_err(database_error)?;
         for source in sources {
             transaction
                 .execute(
@@ -1001,6 +998,23 @@ impl StateStore {
             .execute(
                 "UPDATE plugins SET enabled=?2 WHERE id=?1",
                 params![plugin_id.as_str(), i32::from(enabled)],
+            )
+            .map_err(database_error)?;
+        if changed == 0 {
+            return Err(
+                TorbenError::new("plugin_not_found", "The plugin is not installed.")
+                    .with_detail("pluginId", plugin_id.to_string()),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn delete_plugin(&self, plugin_id: &PluginId) -> TorbenResult<()> {
+        let connection = self.lock()?;
+        let changed = connection
+            .execute(
+                "DELETE FROM plugins WHERE id=?1",
+                params![plugin_id.as_str()],
             )
             .map_err(database_error)?;
         if changed == 0 {

@@ -131,6 +131,12 @@ impl BundledPlugin {
         let mut candidates = vec![
             executable_directory.join(&filename),
             executable_directory.join("plugins").join(&filename),
+            executable_directory
+                .join("userData")
+                .join("plugins")
+                .join(plugin_id)
+                .join(manifest.version.to_string())
+                .join(&filename),
         ];
         if executable_directory.ends_with("deps")
             && let Some(target_directory) = executable_directory.parent()

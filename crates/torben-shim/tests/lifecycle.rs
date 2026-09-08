@@ -94,9 +94,9 @@ fn fresh_shim_processes_follow_persisted_node_selection() {
             .any(|record| record.version == version_b)
     );
 
-    reopened_core
+    reopened_store
         .clear_selection(&app_id)
-        .expect("clear persisted selection through Core");
+        .expect("clear persisted fixture selection");
     let output = run_from_new_terminal("node", &shim_directory, root.path());
     assert_eq!(output.status.code(), Some(127));
     assert!(
@@ -200,6 +200,16 @@ fn assert_new_terminal_commands(shim_directory: &Path, root: &Path, expected: &E
             &run_from_new_terminal(command, shim_directory, root),
             expected,
         );
+        #[cfg(windows)]
+        {
+            let output = Command::new(shim_directory.join(format!("{command}.exe")))
+                .env_remove("TORBEN_DATA_DIR")
+                .current_dir(root.parent().unwrap())
+                .output()
+                .expect("run deployed shim without a data-directory override");
+            assert_successful_version(&output, expected);
+            assert!(!shim_directory.join("data").exists());
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import type {
@@ -48,62 +49,48 @@ const mockApplications: ApplicationDescriptor[] = [
     displayName: "Node.js",
     summary: "JavaScript runtime with managed LTS and Current releases.",
     categories: ["Runtime", "Development"],
-    capabilities: ["versions", "install", "select", "uninstall", "external-detection"],
-    sources: [{ id: "node.official", displayName: "Official archive", managed: true }],
+    capabilities: [],
+    sources: [],
   },
   {
     id: "temurin",
-    displayName: "Eclipse Temurin",
+    displayName: "Java",
     summary: "OpenJDK builds from Adoptium.",
     categories: ["Runtime", "Development"],
-    capabilities: ["versions", "install", "select", "uninstall", "external-detection"],
-    sources: [
-      {
-        id: "temurin.official",
-        displayName: "Eclipse Temurin official archive",
-        managed: true,
-      },
-    ],
+    capabilities: [],
+    sources: [],
   },
   {
     id: "python",
     displayName: "Python",
     summary: "The Python programming language.",
     categories: ["Runtime", "Development"],
-    capabilities: ["versions", "install", "select", "uninstall", "external-detection"],
-    sources: [
-      { id: "python.official", displayName: "Official Python distribution", managed: true },
-    ],
+    capabilities: [],
+    sources: [],
   },
   {
     id: "git",
     displayName: "Git",
     summary: "Official Git command-line releases with managed terminal selection.",
     categories: ["Tool", "Development"],
-    capabilities: ["versions", "install", "select", "uninstall", "external-detection"],
-    sources: [{ id: "git.official", displayName: "Official Git distribution", managed: true }],
+    capabilities: [],
+    sources: [],
   },
   {
     id: "vscode",
     displayName: "Visual Studio Code",
     summary: "Microsoft's official cross-platform code editor distribution.",
     categories: ["Editor", "Development"],
-    capabilities: ["versions", "install", "select", "uninstall", "external-detection"],
-    sources: [
-      {
-        id: "vscode.official",
-        displayName: "Microsoft Visual Studio Code archive",
-        managed: true,
-      },
-    ],
+    capabilities: [],
+    sources: [],
   },
   {
     id: "codex",
     displayName: "Codex CLI",
     summary: "OpenAI's official coding agent command-line client.",
     categories: ["AI", "Development"],
-    capabilities: ["versions", "install", "select", "uninstall", "external-detection"],
-    sources: [{ id: "codex.official", displayName: "OpenAI Codex native release", managed: true }],
+    capabilities: [],
+    sources: [],
   },
 ];
 
@@ -162,7 +149,7 @@ const mockNodeSchemaPages: SchemaPage[] = [
 const mockTemurinSchemaPages: SchemaPage[] = [
   {
     id: "temurin",
-    title: "Eclipse Temurin provider",
+    title: "Java provider",
     description: "Official Adoptium LTS metadata, signed archives, and managed JDK commands.",
     sections: [
       {
@@ -386,169 +373,12 @@ const mockCodexSchemaPages: SchemaPage[] = [
 
 const mockSnapshot: DashboardSnapshot = {
   applications: mockApplications,
-  installed: [
-    {
-      appId: "node",
-      version: "24.19.0",
-      sourceId: "node.official",
-      scope: "managed",
-      installPath: "mock/data/apps/node/24.19.0",
-      installedAt: "2026-08-20T00:00:00Z",
-      health: "healthy",
-    },
-  ],
-  selected: [{ appId: "node", version: "24.19.0" }],
+  installed: [],
+  selected: [],
   external: [],
   warnings: [],
   operations: [],
-  plugins: [
-    {
-      id: "app.torben.plugin.node",
-      displayName: "Node.js",
-      version: "0.1.0",
-      enabled: true,
-      origin: "built_in",
-      publisher: "Torben App",
-      capabilities: [
-        "version_discovery",
-        "external_discovery",
-        "managed_install",
-        "global_selection",
-        "managed_uninstall",
-        "schema_ui",
-      ],
-      permissions: {
-        networkDomains: ["nodejs.org"],
-        filesystemRoots: ["managed_app_library", "download_cache", "staging"],
-        externalCommands: ["node", "npm", "npx"],
-        packageManagers: [],
-      },
-    },
-    {
-      id: "app.torben.plugin.temurin",
-      displayName: "Eclipse Temurin",
-      version: "0.1.0",
-      enabled: true,
-      origin: "built_in",
-      publisher: "Torben App",
-      capabilities: [
-        "version_discovery",
-        "external_discovery",
-        "managed_install",
-        "global_selection",
-        "managed_uninstall",
-        "schema_ui",
-      ],
-      permissions: {
-        networkDomains: [
-          "api.adoptium.net",
-          "github.com",
-          "release-assets.githubusercontent.com",
-          "packages.adoptium.net",
-        ],
-        filesystemRoots: ["managed_app_library", "download_cache", "staging"],
-        externalCommands: ["java", "javac"],
-        packageManagers: [],
-      },
-    },
-    {
-      id: "app.torben.plugin.python",
-      displayName: "Python",
-      version: "0.1.0",
-      enabled: true,
-      origin: "built_in",
-      publisher: "Torben App",
-      capabilities: [
-        "version_discovery",
-        "external_discovery",
-        "managed_install",
-        "global_selection",
-        "managed_uninstall",
-        "schema_ui",
-      ],
-      permissions: {
-        networkDomains: ["www.python.org"],
-        filesystemRoots: ["managed_app_library", "download_cache", "staging"],
-        externalCommands: ["py", "make", "cc", "python", "python3", "pip", "pip3"],
-        packageManagers: [],
-      },
-    },
-    {
-      id: "app.torben.plugin.git",
-      displayName: "Git",
-      version: "0.1.0",
-      enabled: true,
-      origin: "built_in",
-      publisher: "Torben App",
-      capabilities: [
-        "version_discovery",
-        "external_discovery",
-        "managed_install",
-        "global_selection",
-        "managed_uninstall",
-        "schema_ui",
-      ],
-      permissions: {
-        networkDomains: [
-          "api.github.com",
-          "github.com",
-          "release-assets.githubusercontent.com",
-          "www.kernel.org",
-        ],
-        filesystemRoots: ["managed_app_library", "download_cache", "staging"],
-        externalCommands: ["make", "cc", "git"],
-        packageManagers: [],
-      },
-    },
-    {
-      id: "app.torben.plugin.vscode",
-      displayName: "Visual Studio Code",
-      version: "0.1.0",
-      enabled: true,
-      origin: "built_in",
-      publisher: "Torben App",
-      capabilities: [
-        "version_discovery",
-        "external_discovery",
-        "managed_install",
-        "global_selection",
-        "managed_uninstall",
-        "schema_ui",
-      ],
-      permissions: {
-        networkDomains: [
-          "api.github.com",
-          "update.code.visualstudio.com",
-          "vscode.download.prss.microsoft.com",
-        ],
-        filesystemRoots: ["managed_app_library", "download_cache", "staging"],
-        externalCommands: ["code"],
-        packageManagers: [],
-      },
-    },
-    {
-      id: "app.torben.plugin.codex",
-      displayName: "Codex CLI",
-      version: "0.1.0",
-      enabled: true,
-      origin: "built_in",
-      publisher: "Torben App",
-      capabilities: [
-        "version_discovery",
-        "external_discovery",
-        "managed_install",
-        "global_selection",
-        "managed_uninstall",
-        "schema_ui",
-      ],
-      permissions: {
-        networkDomains: ["api.github.com", "github.com", "release-assets.githubusercontent.com"],
-        filesystemRoots: ["managed_app_library", "download_cache", "staging"],
-        externalCommands: ["codex"],
-        packageManagers: [],
-      },
-    },
-  ],
+  plugins: [],
   pluginRegistry: {
     configured: false,
     sourceUrl: null,
@@ -782,7 +612,7 @@ export async function getVersions(appId: string): Promise<VersionDescriptor[]> {
           version: "21.0.2+13.0.LTS",
           ltsName: "Java 21 LTS",
           releasedAt: "2026-01-20T00:00:00Z",
-          recommended: true,
+          recommended: false,
         },
       ]
     : [
@@ -790,6 +620,13 @@ export async function getVersions(appId: string): Promise<VersionDescriptor[]> {
         { version: "22.22.3", ltsName: "Jod", releasedAt: "2026-05-20", recommended: true },
         { version: "26.7.0", releasedAt: "2026-08-05", recommended: false },
       ];
+}
+
+export async function onVersionCatalogUpdated(
+  callback: (appId: string) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) return () => undefined;
+  return listen<string>("version-catalog-updated", (event) => callback(event.payload));
 }
 
 export async function installApp(appId: string, version: string): Promise<InstallRecord> {
@@ -1035,6 +872,22 @@ export async function installPlugin(
     throw new Error("Plugin installation is available in the Tauri desktop runtime.");
   }
   return invoke<PluginSummary>("install_plugin", { manifestPath, developerMode });
+}
+
+export async function installBundledTemurinPlugin(): Promise<PluginSummary> {
+  if (!isTauri()) {
+    throw new Error(
+      "Bundled Temurin plugin installation is available in the Tauri desktop runtime.",
+    );
+  }
+  return invoke<PluginSummary>("install_bundled_temurin_plugin");
+}
+
+export async function uninstallBundledTemurinPlugin(): Promise<void> {
+  if (!isTauri()) {
+    throw new Error("Bundled Temurin plugin uninstall is available in the Tauri desktop runtime.");
+  }
+  await invoke("uninstall_bundled_temurin_plugin");
 }
 
 export async function installOfficialPlugin(

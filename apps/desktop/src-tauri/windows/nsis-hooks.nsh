@@ -42,6 +42,9 @@ FunctionEnd
 ; Silent installers do not invoke .onGUIInit. Tauri has already called SetOutPath when
 ; this hook runs, so apply the selected directory again before any files are copied.
 !macro NSIS_HOOK_PREINSTALL
-  Call TorbenSetDefaultInstallDirectory
+  ; The directory page has already captured the user's choice in an interactive run.
+  ${If} ${Silent}
+    Call TorbenSetDefaultInstallDirectory
+  ${EndIf}
   SetOutPath $INSTDIR
 !macroend

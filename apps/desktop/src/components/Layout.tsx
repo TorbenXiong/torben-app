@@ -1,41 +1,55 @@
 import { Button, cn } from "@torben-app/ui";
 import {
-  Blocks,
   Boxes,
   CheckCircle2,
-  CircleGauge,
   Command,
-  Download,
-  Library,
-  type LucideIcon,
   PanelLeftClose,
   PanelLeftOpen,
+  ScrollText,
   Search,
   Settings,
   Sparkles,
   X,
 } from "lucide-react";
 import { Dialog, Tooltip } from "radix-ui";
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  type ComponentType,
+  type ReactNode,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { NavLink, useNavigate } from "react-router";
-import type { ApplicationDescriptor } from "../types";
+import type { ApplicationDescriptor, PluginSummary } from "../types";
 
-const navigation = [
-  { to: "/overview", key: "overview", icon: CircleGauge },
-  { to: "/catalog", key: "catalog", icon: Blocks },
-  { to: "/installed", key: "installed", icon: Library },
-  { to: "/tasks", key: "tasks", icon: Download },
-  { to: "/plugins", key: "plugins", icon: Boxes },
-  { to: "/diagnostics", key: "diagnostics", icon: CheckCircle2 },
-  { to: "/settings", key: "settings", icon: Settings },
+const baseNavigation = [
+  { to: "/plugins", key: "plugins", group: "manage", icon: Boxes },
+  { to: "/logs", key: "logs", group: "manage", icon: ScrollText },
+  { to: "/diagnostics", key: "diagnostics", group: "system", icon: CheckCircle2 },
+  { to: "/settings", key: "settings", group: "system", icon: Settings },
 ] as const;
+
+function JavaIcon({ size = 17 }: { size?: number }) {
+  return (
+    <img
+      alt=""
+      aria-hidden="true"
+      className="java-nav-icon"
+      height={size}
+      src="/icons/java-temurin.png"
+      width={size}
+    />
+  );
+}
 
 const supportedApplicationRoutes = new Set(["node", "temurin", "python", "git", "vscode", "codex"]);
 
 interface CommandItem {
   description: string;
-  icon: LucideIcon;
+  icon: ComponentType<{ size?: number }>;
   id: string;
   label: string;
   section: "applications" | "pages";
@@ -51,9 +65,11 @@ export function commandShortcut(platform: string) {
 export function Layout({
   applications,
   children,
+  plugins,
 }: {
   applications: ApplicationDescriptor[];
   children: ReactNode;
+  plugins: PluginSummary[];
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -66,6 +82,17 @@ export function Layout({
   const shortcut = commandShortcut(
     typeof navigator === "undefined" ? "" : navigator.platform || navigator.userAgent,
   );
+  const temurinEnabled = plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.temurin" && plugin.enabled,
+  );
+  const navigation = useMemo(() => {
+    if (!temurinEnabled) return [...baseNavigation];
+    return [
+      baseNavigation[0],
+      { to: "/java", key: "java", group: "manage", icon: JavaIcon },
+      ...baseNavigation.slice(1),
+    ];
+  }, [temurinEnabled]);
   const commands = useMemo<CommandItem[]>(() => {
     const pages = navigation.map(({ to, key, icon }) => {
       const label = t(key);
@@ -81,7 +108,12 @@ export function Layout({
       };
     });
     const applicationCommands = applications
-      .filter((application) => supportedApplicationRoutes.has(application.id))
+      .filter(
+        (application) =>
+          application.capabilities.length > 0 &&
+          supportedApplicationRoutes.has(application.id) &&
+          (application.id !== "temurin" || temurinEnabled),
+      )
       .map((application) => ({
         description: t("layout.applicationCommandDescription", {
           application: application.displayName,
@@ -98,10 +130,10 @@ export function Layout({
         ]
           .join(" ")
           .toLocaleLowerCase(),
-        to: `/catalog/${application.id}`,
+        to: application.id === "temurin" ? "/java" : "/plugins",
       }));
     return [...pages, ...applicationCommands];
-  }, [applications, t]);
+  }, [applications, navigation, t, temurinEnabled]);
   const filteredCommands = useMemo(() => {
     const query = commandQuery.trim().toLocaleLowerCase();
     return query ? commands.filter((command) => command.searchable.includes(query)) : commands;
@@ -189,22 +221,27 @@ export function Layout({
           </div>
 
           <nav className="sidebar-nav" aria-label={t("layout.primaryNavigation")}>
-            {navigation.map(({ to, key, icon: Icon }) => (
-              <Tooltip.Root key={to}>
-                <Tooltip.Trigger asChild>
-                  <NavLink aria-label={t(key)} className="nav-item" to={to}>
-                    <Icon size={17} />
-                    <span>{t(key)}</span>
-                  </NavLink>
-                </Tooltip.Trigger>
-                {collapsed ? (
-                  <Tooltip.Portal>
-                    <Tooltip.Content className="tooltip" side="right" sideOffset={8}>
-                      {t(key)}
-                    </Tooltip.Content>
-                  </Tooltip.Portal>
-                ) : null}
-              </Tooltip.Root>
+            {navigation.map(({ to, key, group, icon: Icon }, index) => (
+              <div className="nav-entry" key={to}>
+                {(index === 0 || navigation[index - 1]?.group !== group) && (
+                  <span className="nav-section-label">{t(`layout.navGroups.${group}`)}</span>
+                )}
+                <Tooltip.Root>
+                  <Tooltip.Trigger asChild>
+                    <NavLink aria-label={t(key)} className="nav-item" to={to}>
+                      <Icon size={17} />
+                      <span>{t(key)}</span>
+                    </NavLink>
+                  </Tooltip.Trigger>
+                  {collapsed ? (
+                    <Tooltip.Portal>
+                      <Tooltip.Content className="tooltip" side="right" sideOffset={8}>
+                        {t(key)}
+                      </Tooltip.Content>
+                    </Tooltip.Portal>
+                  ) : null}
+                </Tooltip.Root>
+              </div>
             ))}
           </nav>
 
@@ -219,6 +256,11 @@ export function Layout({
 
         <div className="workspace">
           <header className="topbar" data-tauri-drag-region>
+            <div className="topbar-context" aria-hidden="true">
+              <strong>Torben App</strong>
+              <span>/</span>
+              <span>{t("layout.localWorkspace")}</span>
+            </div>
             <Dialog.Root onOpenChange={changeCommandOpen} open={commandOpen}>
               <Dialog.Trigger asChild>
                 <button

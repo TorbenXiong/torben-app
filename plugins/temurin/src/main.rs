@@ -256,7 +256,7 @@ async fn dispatch(
 fn temurin_descriptor() -> Result<ApplicationDescriptor, TorbenError> {
     Ok(ApplicationDescriptor {
         id: AppId::new(APP_ID)?,
-        display_name: "Eclipse Temurin".to_owned(),
+        display_name: "Java".to_owned(),
         summary: "Cross-platform Eclipse Temurin HotSpot JDK LTS releases from Adoptium."
             .to_owned(),
         categories: vec!["runtime".to_owned(), "development".to_owned()],
@@ -278,7 +278,7 @@ fn temurin_descriptor() -> Result<ApplicationDescriptor, TorbenError> {
 fn temurin_schema_page() -> SchemaPage {
     SchemaPage {
         id: "temurin".to_owned(),
-        title: "Eclipse Temurin provider".to_owned(),
+        title: "Java provider".to_owned(),
         description: Some(
             "Official Adoptium LTS metadata, signed archives, and managed JDK commands.".to_owned(),
         ),
@@ -361,16 +361,29 @@ fn api_target() -> Result<String, TorbenError> {
 }
 
 fn java_version_core(version: &ExactVersion) -> String {
-    if version.as_semver().major == 8 {
-        format!("1.8.0_{}", version.as_semver().patch)
-    } else {
+    let semver = version.as_semver();
+    if semver.major == 8 {
+        format!("1.8.0_{}", semver.patch)
+    } else if let Some(patch) = temurin_patch_component(version) {
         format!(
-            "{}.{}.{}",
-            version.as_semver().major,
-            version.as_semver().minor,
-            version.as_semver().patch
+            "{}.{}.{}.{}",
+            semver.major, semver.minor, semver.patch, patch
         )
+    } else {
+        format!("{}.{}.{}", semver.major, semver.minor, semver.patch)
     }
+}
+
+fn temurin_patch_component(version: &ExactVersion) -> Option<u64> {
+    let encoded = version
+        .as_semver()
+        .build
+        .as_str()
+        .split('.')
+        .next()?
+        .parse::<u64>()
+        .ok()?;
+    (encoded >= 100).then_some(encoded / 100)
 }
 
 fn platform_error(field: &str, value: &str) -> TorbenError {
@@ -406,4 +419,18 @@ fn io_error(error: std::io::Error) -> TorbenError {
         "The Eclipse Temurin plugin stdio operation failed.",
     )
     .with_detail("reason", error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[test]
+    fn converts_adoptium_semver_patch_encoding_to_the_java_runtime_version() {
+        let version = ExactVersion::from_str("25.0.4+101.0.LTS").unwrap();
+
+        assert_eq!(java_version_core(&version), "25.0.4.1");
+    }
 }
