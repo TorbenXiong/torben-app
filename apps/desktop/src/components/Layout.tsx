@@ -1,17 +1,22 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button, cn } from "@torben-app/ui";
 import {
+  ArrowLeft,
+  ArrowRight,
   Boxes,
   CheckCircle2,
   Command,
+  Minus,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
   Search,
   Settings,
   Sparkles,
+  Square,
   X,
 } from "lucide-react";
-import { Dialog, Tooltip } from "radix-ui";
+import { Dialog, DropdownMenu, Tooltip } from "radix-ui";
 import {
   type ComponentType,
   type ReactNode,
@@ -25,12 +30,12 @@ import { useTranslation } from "react-i18next";
 import { NavLink, useNavigate } from "react-router";
 import type { ApplicationDescriptor, PluginSummary } from "../types";
 
-const baseNavigation = [
-  { to: "/plugins", key: "plugins", group: "manage", icon: Boxes },
-  { to: "/logs", key: "logs", group: "manage", icon: ScrollText },
-  { to: "/diagnostics", key: "diagnostics", group: "system", icon: CheckCircle2 },
-  { to: "/settings", key: "settings", group: "system", icon: Settings },
-] as const;
+const primaryNavigation = [{ to: "/plugins", key: "plugins", icon: Boxes }] as const;
+
+const logsNavigation = { to: "/logs", key: "logs", icon: ScrollText };
+const diagnosticsNavigation = { to: "/diagnostics", key: "diagnostics", icon: CheckCircle2 };
+const settingsNavigation = { to: "/settings", key: "settings", icon: Settings };
+const appVersion = "0.1.0";
 
 function JavaIcon({ size = 17 }: { size?: number }) {
   return (
@@ -57,6 +62,56 @@ interface CommandItem {
   to: string;
 }
 
+interface NavigationItem {
+  icon: ComponentType<{ size?: number }>;
+  key: string;
+  to: string;
+}
+
+async function performWindowAction(
+  action: (appWindow: ReturnType<typeof getCurrentWindow>) => Promise<void>,
+) {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+    return;
+  }
+  await action(getCurrentWindow());
+}
+
+function SidebarLink({
+  child = false,
+  collapsed,
+  item,
+  label,
+}: {
+  child?: boolean;
+  collapsed: boolean;
+  item: NavigationItem;
+  label: string;
+}) {
+  const Icon = item.icon;
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild>
+        <NavLink
+          aria-label={label}
+          className={cn("nav-item", child && "nav-item-child")}
+          to={item.to}
+        >
+          <Icon size={child ? 15 : 16} />
+          <span>{label}</span>
+        </NavLink>
+      </Tooltip.Trigger>
+      {collapsed ? (
+        <Tooltip.Portal>
+          <Tooltip.Content className="tooltip" side="right" sideOffset={8}>
+            {label}
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      ) : null}
+    </Tooltip.Root>
+  );
+}
+
 export function commandShortcut(platform: string) {
   const apple = /mac|iphone|ipad|ipod/i.test(platform);
   return apple ? { aria: "Meta+K", label: "⌘ K" } : { aria: "Control+K", label: "Ctrl K" };
@@ -75,6 +130,7 @@ export function Layout({
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [activeCommand, setActiveCommand] = useState(0);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const { t } = useTranslation();
   const navigate = useNavigate();
   const commandListId = useId();
@@ -85,14 +141,29 @@ export function Layout({
   const temurinEnabled = plugins.some(
     (plugin) => plugin.id === "app.torben.plugin.temurin" && plugin.enabled,
   );
-  const navigation = useMemo(() => {
-    if (!temurinEnabled) return [...baseNavigation];
-    return [
-      baseNavigation[0],
-      { to: "/java", key: "java", group: "manage", icon: JavaIcon },
-      ...baseNavigation.slice(1),
-    ];
-  }, [temurinEnabled]);
+  const pythonEnabled = plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.python" && plugin.enabled,
+  );
+  const runtimePages = useMemo<NavigationItem[]>(() => {
+    const runtimePages = [];
+    if (temurinEnabled) {
+      runtimePages.push({ to: "/java", key: "java", icon: JavaIcon });
+    }
+    if (pythonEnabled) {
+      runtimePages.push({ to: "/python", key: "python", icon: Command });
+    }
+    return runtimePages;
+  }, [pythonEnabled, temurinEnabled]);
+  const navigation = useMemo(
+    () => [
+      ...primaryNavigation,
+      ...runtimePages,
+      logsNavigation,
+      diagnosticsNavigation,
+      settingsNavigation,
+    ],
+    [runtimePages],
+  );
   const commands = useMemo<CommandItem[]>(() => {
     const pages = navigation.map(({ to, key, icon }) => {
       const label = t(key);
@@ -112,7 +183,8 @@ export function Layout({
         (application) =>
           application.capabilities.length > 0 &&
           supportedApplicationRoutes.has(application.id) &&
-          (application.id !== "temurin" || temurinEnabled),
+          (application.id !== "temurin" || temurinEnabled) &&
+          (application.id !== "python" || pythonEnabled),
       )
       .map((application) => ({
         description: t("layout.applicationCommandDescription", {
@@ -130,10 +202,15 @@ export function Layout({
         ]
           .join(" ")
           .toLocaleLowerCase(),
-        to: application.id === "temurin" ? "/java" : "/plugins",
+        to:
+          application.id === "temurin"
+            ? "/java"
+            : application.id === "python"
+              ? "/python"
+              : "/plugins",
       }));
     return [...pages, ...applicationCommands];
-  }, [applications, navigation, t, temurinEnabled]);
+  }, [applications, navigation, pythonEnabled, t, temurinEnabled]);
   const filteredCommands = useMemo(() => {
     const query = commandQuery.trim().toLocaleLowerCase();
     return query ? commands.filter((command) => command.searchable.includes(query)) : commands;
@@ -200,6 +277,160 @@ export function Layout({
         >
           {t("layout.skipToContent")}
         </button>
+        <header className="window-titlebar">
+          <div className="titlebar-navigation">
+            <Tooltip.Root>
+              <Tooltip.Trigger asChild>
+                <button
+                  aria-label={collapsed ? t("layout.expandSidebar") : t("layout.collapseSidebar")}
+                  className="titlebar-tool"
+                  onClick={() => setCollapsed((value) => !value)}
+                  type="button"
+                >
+                  {collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content className="tooltip" side="bottom" sideOffset={6}>
+                  {collapsed ? t("layout.expandSidebar") : t("layout.collapseSidebar")}
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
+            <Tooltip.Root>
+              <Tooltip.Trigger asChild>
+                <button
+                  aria-label={t("layout.goBack")}
+                  className="titlebar-tool"
+                  onClick={() => navigate(-1)}
+                  type="button"
+                >
+                  <ArrowLeft size={15} />
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content className="tooltip" side="bottom" sideOffset={6}>
+                  {t("layout.goBack")}
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
+            <Tooltip.Root>
+              <Tooltip.Trigger asChild>
+                <button
+                  aria-label={t("layout.goForward")}
+                  className="titlebar-tool"
+                  onClick={() => navigate(1)}
+                  type="button"
+                >
+                  <ArrowRight size={15} />
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content className="tooltip" side="bottom" sideOffset={6}>
+                  {t("layout.goForward")}
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <button className="titlebar-help-trigger" type="button">
+                  {t("layout.help")}
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content align="start" className="help-menu-content" sideOffset={2}>
+                  <DropdownMenu.Item
+                    className="help-menu-item"
+                    onSelect={() => navigate(diagnosticsNavigation.to)}
+                  >
+                    {t(diagnosticsNavigation.key)}
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    className="help-menu-item"
+                    onSelect={() => navigate(logsNavigation.to)}
+                  >
+                    {t(logsNavigation.key)}
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Separator className="help-menu-separator" />
+                  <DropdownMenu.Item className="help-menu-item" onSelect={() => setAboutOpen(true)}>
+                    {t("layout.about")}
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          </div>
+          <div className="titlebar-drag-region" data-tauri-drag-region />
+          <div className="window-controls">
+            <button
+              aria-label={t("layout.minimizeWindow")}
+              className="window-control"
+              onClick={() => {
+                void performWindowAction((appWindow) => appWindow.minimize());
+              }}
+              type="button"
+            >
+              <Minus size={14} />
+            </button>
+            <button
+              aria-label={t("layout.maximizeWindow")}
+              className="window-control"
+              onClick={() => {
+                void performWindowAction((appWindow) => appWindow.toggleMaximize());
+              }}
+              type="button"
+            >
+              <Square size={11} />
+            </button>
+            <button
+              aria-label={t("layout.closeWindow")}
+              className="window-control window-close"
+              onClick={() => {
+                void performWindowAction((appWindow) => appWindow.close());
+              }}
+              type="button"
+            >
+              <X size={15} />
+            </button>
+          </div>
+        </header>
+
+        <Dialog.Root onOpenChange={setAboutOpen} open={aboutOpen}>
+          <Dialog.Portal>
+            <Dialog.Overlay className="dialog-overlay" />
+            <Dialog.Content className="dialog-content about-dialog">
+              <div className="about-dialog-header">
+                <div className="about-mark" aria-hidden="true">
+                  <Sparkles size={22} strokeWidth={2.3} />
+                </div>
+                <div>
+                  <Dialog.Title>{t("layout.aboutTitle")}</Dialog.Title>
+                  <span className="about-version">
+                    {t("layout.aboutVersion", { version: appVersion })}
+                  </span>
+                </div>
+                <Dialog.Close asChild>
+                  <Button
+                    aria-label={t("common.close")}
+                    className="about-dialog-close"
+                    size="icon"
+                    variant="ghost"
+                  >
+                    <X size={16} />
+                  </Button>
+                </Dialog.Close>
+              </div>
+              <Dialog.Description className="about-description">
+                {t("layout.aboutDescription")}
+              </Dialog.Description>
+              <p className="about-privacy">{t("layout.aboutPrivacy")}</p>
+              <div className="dialog-actions about-actions">
+                <Dialog.Close asChild>
+                  <Button variant="secondary">{t("common.close")}</Button>
+                </Dialog.Close>
+              </div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+
         <aside className="sidebar">
           <div className="brand-row">
             <div className="brand-mark" aria-hidden="true">
@@ -209,48 +440,36 @@ export function Layout({
               <strong>Torben</strong>
               <span>App</span>
             </div>
-            <Button
-              aria-label={collapsed ? t("layout.expandSidebar") : t("layout.collapseSidebar")}
-              className="sidebar-toggle"
-              onClick={() => setCollapsed((value) => !value)}
-              size="icon"
-              variant="ghost"
-            >
-              {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-            </Button>
           </div>
 
           <nav className="sidebar-nav" aria-label={t("layout.primaryNavigation")}>
-            {navigation.map(({ to, key, group, icon: Icon }, index) => (
-              <div className="nav-entry" key={to}>
-                {(index === 0 || navigation[index - 1]?.group !== group) && (
-                  <span className="nav-section-label">{t(`layout.navGroups.${group}`)}</span>
-                )}
-                <Tooltip.Root>
-                  <Tooltip.Trigger asChild>
-                    <NavLink aria-label={t(key)} className="nav-item" to={to}>
-                      <Icon size={17} />
-                      <span>{t(key)}</span>
-                    </NavLink>
-                  </Tooltip.Trigger>
-                  {collapsed ? (
-                    <Tooltip.Portal>
-                      <Tooltip.Content className="tooltip" side="right" sideOffset={8}>
-                        {t(key)}
-                      </Tooltip.Content>
-                    </Tooltip.Portal>
-                  ) : null}
-                </Tooltip.Root>
-              </div>
-            ))}
+            <div className="sidebar-primary-nav">
+              {primaryNavigation.map((item) => (
+                <SidebarLink collapsed={collapsed} item={item} key={item.to} label={t(item.key)} />
+              ))}
+              {runtimePages.length ? (
+                <div className="installed-plugin-nav">
+                  <span className="nav-section-label">{t("layout.installedPlugins")}</span>
+                  {runtimePages.map((item) => (
+                    <SidebarLink
+                      child
+                      collapsed={collapsed}
+                      item={item}
+                      key={item.to}
+                      label={t(item.key)}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </div>
           </nav>
 
           <div className="sidebar-footer">
-            <div aria-hidden="true" className="status-dot" />
-            <div>
-              <strong>{t("layout.localCore")}</strong>
-              <span>{t("layout.readyVersion")}</span>
-            </div>
+            <SidebarLink
+              collapsed={collapsed}
+              item={settingsNavigation}
+              label={t(settingsNavigation.key)}
+            />
           </div>
         </aside>
 

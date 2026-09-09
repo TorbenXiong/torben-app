@@ -1,15 +1,15 @@
 # Torben App
 
 Torben App 是本地优先的 Windows x64 应用与运行时管理器。当前版本以单文件
-`TorbenApp.exe` 交付，通过插件逐个开放软件管理能力；目前支持 Java（Eclipse Temurin）。
+`TorbenApp.exe` 交付，通过插件逐个开放软件管理能力；目前支持 Java（Eclipse Temurin）和 Python。
 
 项目为独立重写，不读取或复用 SoftPilot 的代码与状态格式。
 
 ## 当前范围
 
 - 支持平台：Windows x64。
-- 当前软件插件：Java（Eclipse Temurin）。
-- 暂不开放：Node.js、Python、Git、Visual Studio Code 和 Codex CLI。
+- 当前软件插件：Java（Eclipse Temurin）和 Python。
+- 暂不开放：Node.js、Git、Visual Studio Code 和 Codex CLI。
 - 暂缓平台：Windows ARM64、macOS 和 Linux。
 - 不包含账号、云同步、遥测、常驻后台服务和项目级版本固定。
 
@@ -40,8 +40,11 @@ WebView2 数据。升级只需运行新的 `TorbenApp.exe`；应用会替换目�
 Release 可执行文件通过 Windows manifest 请求管理员权限。开发构建不会在每次启动时触发
 UAC。
 
-界面默认打开“插件”。安装 Java 插件后，左侧出现 Java 管理入口；其他固定入口为日志、
-诊断和设置。
+界面默认打开“插件”。安装 Java 或 Python 插件后，左侧出现对应的运行时管理入口；设置
+固定在侧栏底部，日志和诊断集中在标题栏“帮助”菜单中。“帮助”菜单也提供版本和产品
+介绍。Python 插件内置固定版本且经过 SHA-256 校验的 python.org 官方 Python Install
+Manager；Torben App 使用其 `--target` 模式将运行时写入 `userData`，不依赖系统 `PATH`
+中的 `py`。
 
 ## 仓库结构
 
@@ -81,8 +84,13 @@ pnpm dev
 构建 Windows x64 单文件便携包：
 
 ```powershell
+pnpm run prepare:python-manager
 pnpm --filter @torben-app/desktop tauri:build:portable
 ```
+
+第一条命令会从 `python.org/ftp/python/pymanager` 下载固定的 Python Install Manager 26.3
+MSI 到忽略版本控制的 `.tools` 目录，并校验发布页公布的 SHA-256。构建脚本本身不会隐式
+下载，缺少该文件时会直接失败并给出准备命令。
 
 产物位于：
 

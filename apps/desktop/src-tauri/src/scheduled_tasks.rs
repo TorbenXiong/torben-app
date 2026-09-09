@@ -18,11 +18,18 @@ struct ScheduledTaskDefinition {
     interval: Duration,
 }
 
-const TASKS: &[ScheduledTaskDefinition] = &[ScheduledTaskDefinition {
-    id: "refresh-temurin-version-catalog",
-    app_id: "temurin",
-    interval: VERSION_CATALOG_REFRESH_INTERVAL,
-}];
+const TASKS: &[ScheduledTaskDefinition] = &[
+    ScheduledTaskDefinition {
+        id: "refresh-temurin-version-catalog",
+        app_id: "temurin",
+        interval: VERSION_CATALOG_REFRESH_INTERVAL,
+    },
+    ScheduledTaskDefinition {
+        id: "refresh-python-version-catalog",
+        app_id: "python",
+        interval: VERSION_CATALOG_REFRESH_INTERVAL,
+    },
+];
 
 static RUNNING_TASKS: LazyLock<Mutex<BTreeSet<String>>> =
     LazyLock::new(|| Mutex::new(BTreeSet::new()));
@@ -146,6 +153,14 @@ mod tests {
         let task = TASKS.iter().find(|task| task.app_id == "temurin").unwrap();
         assert_eq!(task.interval.as_secs(), 86_400);
         assert_eq!(STARTUP_GRACE_PERIOD.as_secs(), 120);
+    }
+
+    #[test]
+    fn python_catalog_refreshes_daily() {
+        let task = TASKS.iter().find(|task| task.app_id == "python").unwrap();
+
+        assert_eq!(task.id, "refresh-python-version-catalog");
+        assert_eq!(task.interval.as_secs(), 86_400);
     }
 
     #[test]

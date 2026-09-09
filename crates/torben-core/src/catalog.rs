@@ -42,7 +42,7 @@ pub fn applications() -> TorbenResult<Vec<ApplicationDescriptor>> {
                 "uninstall",
                 "external-detection",
             ],
-            false,
+            true,
         )?,
         app(
             "git",
@@ -142,20 +142,22 @@ fn app(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn only_temurin_is_available_until_other_data_paths_are_constrained() {
+    fn temurin_and_python_are_available() {
         let applications = super::applications().unwrap();
 
         assert_eq!(applications.len(), 6);
-        let temurin = applications
-            .iter()
-            .find(|application| application.id.as_str() == "temurin")
-            .unwrap();
-        assert!(!temurin.capabilities.is_empty());
-        assert!(!temurin.sources.is_empty());
+        for app_id in ["temurin", "python"] {
+            let application = applications
+                .iter()
+                .find(|application| application.id.as_str() == app_id)
+                .unwrap();
+            assert!(!application.capabilities.is_empty());
+            assert!(!application.sources.is_empty());
+        }
         assert!(
             applications
                 .iter()
-                .filter(|application| application.id.as_str() != "temurin")
+                .filter(|application| !matches!(application.id.as_str(), "temurin" | "python"))
                 .all(|application| {
                     application.capabilities.is_empty() && application.sources.is_empty()
                 })
@@ -167,12 +169,17 @@ mod tests {
         let applications = super::applications().unwrap();
         let sources = super::sources(&applications).unwrap();
 
-        assert_eq!(sources.len(), 5);
-        assert_eq!(sources.iter().filter(|source| source.managed).count(), 1);
+        assert_eq!(sources.len(), 6);
+        assert_eq!(sources.iter().filter(|source| source.managed).count(), 2);
         assert!(
             sources
                 .iter()
                 .any(|source| source.id.as_str() == "temurin.official")
+        );
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.id.as_str() == "python.official")
         );
     }
 }

@@ -19,11 +19,16 @@ Windows x64 gates required for the next supported release.
 
 ## Current software-plugin support decision
 
-- Node.js, Python, Git, Visual Studio Code, and Codex CLI remain temporarily unsupported.
+- Node.js, Git, Visual Studio Code, and Codex CLI remain temporarily unsupported.
   Production builds publish no capabilities or managed sources for them and reject their Core
   management actions with `capability_not_available`.
-- Eclipse Temurin JDK is the first restored software plugin. Its provider payload is installed
-  under `userData/plugins`, and managed JDK versions remain under the same `userData` root.
+- Eclipse Temurin JDK and Python are restored software plugins. Their provider payloads are
+  installed under `userData/plugins`, and managed runtimes remain under the same `userData` root.
+- The Python plugin package includes the pinned official Python Install Manager 26.3 MSI on
+  Windows x64. Core verifies and extracts it inside operation staging, pins the official index,
+  and invokes it with an exact tag, a Core-owned download directory, and staging `--target`.
+  CPython and pip must pass health checks before atomic commit; `python`, `python3`, `pip`, and
+  `pip3` use the shared Torben shim directory.
 - Java discovery keeps only the newest release for each LTS feature line. The desktop reads its
   local catalog immediately, refreshes it through a process-local daily scheduled task only after
   startup and while the application is unfocused, and exposes an upgrade action when an installed
@@ -33,7 +38,7 @@ Windows x64 gates required for the next supported release.
   Confirmation creates the base and `userData`, replaces an existing target `TorbenApp.exe` as an
   upgrade, relaunches the target copy, and removes the byte-identical original launch file. New
   builds keep the data path implicit as `<base>\userData` and create no pointer file.
-- The catalog keeps the remaining five descriptors visible as unavailable so the product backlog
+- The catalog keeps the remaining four descriptors visible as unavailable so the product backlog
   remains explicit. Each application will be restored separately only after its own writable data
   is constrained to the user-selected Torben App installation root and the Windows x64 behavior is
   verified.
@@ -77,11 +82,11 @@ Windows x64 gates required for the next supported release.
 
 ### Dormant application and source implementations
 
-- Fixture builds retain Eclipse Temurin, Python, Git, Visual Studio Code, and Codex CLI official-only metadata,
+- Fixture builds retain Node.js, Git, Visual Studio Code, and Codex CLI official-only metadata,
   per-platform distribution validation, supply-chain checks, staging, health checks, external
   read-only discovery, Schema UI, selection where applicable, managed updates, and uninstall.
-- Python uses the PSF Install Manager target mode on Windows and verified CPython source builds on
-  macOS/Linux. Git, VS Code, and Codex use their documented platform-specific official assets and
+- Deferred Python implementations use verified CPython source builds on macOS/Linux. Git, VS Code,
+  and Codex use their documented platform-specific official assets and
   signatures. Codex management never reads or changes authentication, Provider, configuration,
   history, plugin, skill, or credential-store data.
 - winget, Homebrew, apt, and DNF adapters expose availability, installed-state inspection, reviewed

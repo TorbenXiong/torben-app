@@ -12,7 +12,14 @@ import {
 } from "../api";
 import { commandShortcut } from "../components/Layout";
 import i18n from "../i18n";
-import { DiagnosticsPage, LogsPage, PluginsPage, SettingsPage, TemurinDetailPage } from "../pages";
+import {
+  DiagnosticsPage,
+  LogsPage,
+  PluginsPage,
+  PythonDetailPage,
+  SettingsPage,
+  TemurinDetailPage,
+} from "../pages";
 import type {
   ApplicationDescriptor,
   InstallRecord,
@@ -75,6 +82,27 @@ const availableTemurinPlugin: PluginSummary = {
   enabled: false,
 };
 
+const installedPythonPlugin: PluginSummary = {
+  id: "app.torben.plugin.python",
+  displayName: "Python",
+  version: "0.1.0",
+  enabled: true,
+  origin: "built_in",
+  publisher: "Torben App",
+  capabilities: ["version_discovery", "managed_install", "global_selection", "schema_ui"],
+  permissions: {
+    networkDomains: ["www.python.org"],
+    filesystemRoots: ["managed_app_library"],
+    externalCommands: ["python", "python3", "pip", "pip3"],
+    packageManagers: [],
+  },
+};
+
+const availablePythonPlugin: PluginSummary = {
+  ...installedPythonPlugin,
+  enabled: false,
+};
+
 const sideloadedPlugin: PluginSummary = {
   id: "dev.example.fixture",
   displayName: "Fixture",
@@ -133,8 +161,38 @@ describe("Torben App shell", () => {
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(screen.getByText("Local-first")).toBeInTheDocument();
 
-    const links = screen.getAllByRole("link");
-    expect(links[0]).toHaveAccessibleName("Plugins");
+    const primaryNavigation = screen.getByRole("navigation", { name: "Primary navigation" });
+    expect(within(primaryNavigation).getAllByRole("link")[0]).toHaveAccessibleName("Plugins");
+    const collapseButton = screen.getByRole("button", { name: "Collapse sidebar" });
+    const backButton = screen.getByRole("button", { name: "Go back" });
+    const forwardButton = screen.getByRole("button", { name: "Go forward" });
+    const helpButton = screen.getByRole("button", { name: "Help" });
+    const settingsLink = screen.getByRole("link", { name: "Settings" });
+    expect(screen.getByRole("button", { name: "Minimize window" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Maximize or restore window" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close window" })).toBeInTheDocument();
+    expect(collapseButton.compareDocumentPosition(backButton)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(backButton.compareDocumentPosition(forwardButton)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(forwardButton.compareDocumentPosition(helpButton)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(within(primaryNavigation).queryByRole("link", { name: "Logs" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Diagnostics" })).not.toBeInTheDocument();
+    fireEvent.pointerDown(helpButton, { button: 0, ctrlKey: false });
+    expect(await screen.findByRole("menuitem", { name: "Diagnostics" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Logs" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "About Torben App" }));
+    const aboutDialog = screen.getByRole("dialog", { name: "Torben App" });
+    expect(aboutDialog).toHaveTextContent("Version 0.1.0");
+    expect(aboutDialog).toHaveTextContent("local-first application manager for Windows");
+    fireEvent.click(within(aboutDialog).getByText("Close", { selector: "button" }));
+    expect(screen.queryByRole("dialog", { name: "Torben App" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Local core")).not.toBeInTheDocument();
+    expect(settingsLink.closest(".sidebar-footer")).not.toBeNull();
     expect(screen.queryByRole("link", { name: /^overview$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^catalog$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^installed$/i })).not.toBeInTheDocument();
@@ -169,6 +227,8 @@ describe("Torben App shell", () => {
 
     await screen.findByRole("heading", { name: "Plugins" });
     const javaLink = screen.getByRole("link", { name: "Java" });
+    expect(screen.getByText("Installed")).toBeInTheDocument();
+    expect(javaLink).toHaveClass("nav-item-child");
     expect(javaLink).toHaveAttribute("href", "#/java");
     expect(javaLink.querySelector(".java-nav-icon")).toHaveAttribute(
       "src",
@@ -177,6 +237,27 @@ describe("Torben App shell", () => {
 
     fireEvent.click(javaLink);
     expect(await screen.findByRole("heading", { name: "Available versions" })).toBeInTheDocument();
+  });
+
+  it("adds Python to the sidebar when the Python plugin is installed", async () => {
+    const snapshot = await getSnapshot();
+    vi.spyOn(api, "getSnapshot").mockResolvedValue({
+      ...snapshot,
+      applications: snapshot.applications.map((application) =>
+        application.id === "python" ? { ...application, capabilities: ["versions"] } : application,
+      ),
+      plugins: [installedPythonPlugin],
+    });
+    window.location.hash = "#/overview";
+
+    render(
+      <HashRouter>
+        <App />
+      </HashRouter>,
+    );
+
+    await screen.findByRole("heading", { name: "Plugins" });
+    expect(screen.getByRole("link", { name: /^Python$/ })).toHaveAttribute("href", "#/python");
   });
 
   it("retries a failed initial snapshot without restarting the desktop", async () => {
@@ -458,6 +539,37 @@ describe("Torben App shell", () => {
       expect(onChanged).toHaveBeenCalledOnce();
     });
     expect(clear.mock.invocationCallOrder[0]).toBeLessThan(uninstall.mock.invocationCallOrder[0]);
+  });
+
+  it("installs and selects an official Python runtime", async () => {
+    vi.spyOn(api, "getVersions").mockResolvedValue([
+      {
+        version: "3.14.7",
+        releasedAt: "2026-08-05T12:00:00Z",
+        recommended: true,
+      },
+    ]);
+    const install = vi.spyOn(api, "installApp").mockResolvedValue({} as InstallRecord);
+    const onChanged = vi.fn(async () => undefined);
+
+    const { rerender } = render(<PythonDetailPage installed={[]} onChanged={onChanged} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Install" }));
+    await waitFor(() => expect(install).toHaveBeenCalledWith("python", "3.14.7"));
+
+    const record: InstallRecord = {
+      appId: "python",
+      version: "3.14.7",
+      sourceId: "python.official",
+      scope: "managed",
+      installPath: "C:/Torben/python/3.14.7",
+      installedAt: "fixture",
+      health: "healthy",
+    };
+    const select = vi.spyOn(api, "selectVersion").mockResolvedValue(undefined);
+    rerender(<PythonDetailPage installed={[record]} onChanged={onChanged} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Use in terminal" }));
+
+    await waitFor(() => expect(select).toHaveBeenCalledWith("python", "3.14.7"));
   });
 
   it("preserves structured Core error codes and remediation in the UI", () => {
@@ -1191,6 +1303,40 @@ describe("Torben App shell", () => {
       expect(uninstallTemurin).toHaveBeenCalledOnce();
       expect(onChanged).toHaveBeenCalledOnce();
     });
+  });
+
+  it("installs and uninstalls the bundled Python plugin", async () => {
+    const installPython = vi.fn(async () => installedPythonPlugin);
+    const uninstallPython = vi.fn(async () => undefined);
+    const onChanged = vi.fn(async () => undefined);
+    const { rerender } = render(
+      <PluginsPage
+        onChanged={onChanged}
+        onInstallBundledPython={installPython}
+        plugins={[availablePythonPlugin]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Install Python" }));
+    await waitFor(() => expect(installPython).toHaveBeenCalledOnce());
+
+    rerender(
+      <HashRouter>
+        <PluginsPage
+          onChanged={onChanged}
+          onUninstallBundledPython={uninstallPython}
+          plugins={[installedPythonPlugin]}
+        />
+      </HashRouter>,
+    );
+    expect(screen.getByRole("link", { name: /Manage Python/ })).toHaveAttribute("href", "#/python");
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall Python" }));
+    expect(screen.getByText("Uninstall Python plugin?")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Any managed Python runtime must be uninstalled first/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
+    await waitFor(() => expect(uninstallPython).toHaveBeenCalledOnce());
   });
 
   it("toggles sideloaded plugins through the shared Core action", async () => {

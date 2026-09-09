@@ -489,12 +489,13 @@ details, and remediation as per-application warnings while other catalogs contin
 
 The desktop owns a process-local scheduled-task registry for non-mutating maintenance work. It
 waits through a two-minute startup protection period, then checks only while no Torben App window
-is focused. The Temurin catalog task contacts Adoptium only when its cache is at least 24 hours old,
-writes `cache/version-catalogs/temurin.json` below the selected data root, and emits a desktop event
-so the Java page can reread the cache. The automatic scheduler does not start a refresh while the
-user is working in the application. Successful explicit plugin installation starts the catalog
-refresh immediately; manual plugin, JDK, upgrade, and uninstall actions never wait for the idle
-gate. The scheduler exists only while Torben App is running and does not register an
+is focused. The Temurin and Python catalog tasks contact their official services only when their
+caches are at least 24 hours old, write below `cache/version-catalogs` in the selected data root,
+and emit a desktop event so the runtime pages can reread the cache. The automatic scheduler does not
+start a refresh while the user is working in the application. Successful explicit plugin
+installation starts the catalog refresh immediately; manual plugin, runtime, upgrade, and uninstall
+actions never wait for the idle gate. The scheduler exists only while Torben App is running and does
+not register an
 operating-system task or keep a resident service.
 
 Applying a candidate re-runs discovery and requires the exact installed/available pair to remain
@@ -575,9 +576,11 @@ selection clearing, uninstall, journals, and SQLite state without contacting the
 ## Python installation strategy
 
 Python.org does not publish one portable binary format across Torben App's three desktop
-platforms. The provider therefore has two official-only execution paths. On Windows it delegates
-the exact runtime extraction to the PSF Python Install Manager using `py install --target`; this
-does not register the extracted runtime or create global aliases. On macOS and Linux it selects the
+platforms. The provider therefore has two official-only execution paths. On Windows the bundled
+plugin package carries a pinned PSF Python Install Manager MSI. Core verifies its SHA-256, extracts
+an operation-local manager layout, and delegates exact runtime extraction using
+`pymanager.exe install --config=<operation config> --target`; the operation config pins the
+download cache while `--target` avoids runtime registration and global aliases. On macOS and Linux it selects the
 official XZ CPython source archive, verifies its Python release-manager Sigstore bundle, and builds
 with a managed user-level prefix inside staging. The source build requires the platform compiler
 and build tools but does not invoke a package manager or elevate privileges.
@@ -591,10 +594,12 @@ Fulcio certificate chain, signed certificate timestamp, Rekor transparency-log e
 digest, identity, and issuer. It never skips the certificate chain or transparency log; a webpage
 SHA-256 alone is not treated as a sufficient trust root.
 
-Both installation executors run inside the durable Core transaction and Python is available in the
-catalog, CLI, desktop detail page, plugin Schema UI, operation log, and diagnostics. Windows requires
-the official Python Install Manager to be preinstalled and invokes it only with an exact tag and a
-staging `--target`. Unix runs `configure`, parallel `make`, and `make install` with `DESTDIR` under
+Both installation executors run inside the durable Core transaction. Python is supported on the
+current Windows x64 target in the catalog, CLI, desktop detail page, plugin Schema UI, operation log,
+and diagnostics; the source-build path is retained for deferred platforms. Windows does not use a
+system-installed `py`: it executes only the manager bundled beside the installed Python provider,
+pins the official Windows index on the command line, and uses an exact tag and staging `--target`.
+Unix runs `configure`, parallel `make`, and `make install` with `DESTDIR` under
 staging, without a package manager or privilege elevation. Core validates the exact CPython version
 and a working pip before commit. Selection deploys `python`, `python3`, `pip`, and `pip3` shims; it
 does not set `PYTHONHOME`. External Python discovery remains read-only.

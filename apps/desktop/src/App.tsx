@@ -10,16 +10,25 @@ import {
   getOperationEvents,
   getSnapshot,
   initialTorbenUpdateStatus,
+  installBundledPythonPlugin,
   installBundledTemurinPlugin,
   installTorbenUpdate,
   migrateManagedLibrary,
   setShellIntegration,
+  uninstallBundledPythonPlugin,
   uninstallBundledTemurinPlugin,
   updateSettings,
 } from "./api";
 import { Layout } from "./components/Layout";
 import i18n from "./i18n";
-import { DiagnosticsPage, LogsPage, PluginsPage, SettingsPage, TemurinDetailPage } from "./pages";
+import {
+  DiagnosticsPage,
+  LogsPage,
+  PluginsPage,
+  PythonDetailPage,
+  SettingsPage,
+  TemurinDetailPage,
+} from "./pages";
 import { applyThemePreference, resolveLanguagePreference } from "./preferences";
 import type {
   DashboardSnapshot,
@@ -226,6 +235,9 @@ export default function App() {
   const temurinEnabled = snapshot.plugins.some(
     (plugin) => plugin.id === "app.torben.plugin.temurin" && plugin.enabled,
   );
+  const pythonEnabled = snapshot.plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.python" && plugin.enabled,
+  );
 
   return (
     <Layout applications={snapshot.applications} plugins={snapshot.plugins}>
@@ -259,10 +271,26 @@ export default function App() {
       {managedUpdates.candidates.length ? (
         <div className="notice-banner">
           {t("appShell.updatesAvailable", { count: managedUpdates.candidates.length })}
-          <Link to="/java">{t("appShell.reviewUpdates")}</Link>
+          <Link to={managedUpdates.candidates[0]?.appId === "python" ? "/python" : "/java"}>
+            {t("appShell.reviewUpdates")}
+          </Link>
         </div>
       ) : null}
       <Routes>
+        <Route
+          path="/python"
+          element={
+            pythonEnabled ? (
+              <PythonDetailPage
+                installed={snapshot.installed}
+                onChanged={refresh}
+                selected={snapshot.selected}
+              />
+            ) : (
+              <Navigate replace to="/plugins" />
+            )
+          }
+        />
         <Route
           path="/java"
           element={
@@ -287,7 +315,9 @@ export default function App() {
             <PluginsPage
               onChanged={refresh}
               onInstallBundledTemurin={installBundledTemurinPlugin}
+              onInstallBundledPython={installBundledPythonPlugin}
               onUninstallBundledTemurin={uninstallBundledTemurinPlugin}
+              onUninstallBundledPython={uninstallBundledPythonPlugin}
               plugins={snapshot.plugins}
               registry={snapshot.pluginRegistry}
             />

@@ -13,9 +13,11 @@ import {
   getOperationEvents,
   getVersions,
   installApp,
+  installBundledPythonPlugin,
   onVersionCatalogUpdated,
   selectVersion,
   uninstallApp,
+  uninstallBundledPythonPlugin,
 } from "../api";
 
 describe("Tauri application lifecycle command mapping", () => {
@@ -85,5 +87,18 @@ describe("Tauri application lifecycle command mapping", () => {
     expect(callback).toHaveBeenCalledWith("temurin");
     stopListening();
     expect(unlisten).toHaveBeenCalledOnce();
+  });
+
+  it("maps bundled Python plugin lifecycle commands", async () => {
+    const plugin = { id: "app.torben.plugin.python" };
+    invokeMock.mockResolvedValueOnce(plugin).mockResolvedValueOnce(undefined);
+
+    await expect(installBundledPythonPlugin()).resolves.toEqual(plugin);
+    await uninstallBundledPythonPlugin();
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["install_bundled_python_plugin"],
+      ["uninstall_bundled_python_plugin"],
+    ]);
   });
 });

@@ -32,6 +32,9 @@ const MAX_RELEASE_FILE_METADATA_BYTES: u64 = 4 * 1024 * 1024;
 const ACTIVE_MINOR_LINES: usize = 5;
 const MAX_SIGSTORE_BUNDLE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_SOURCE_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_PYTHON_MANAGER_PACKAGE_BYTES: u64 = 16 * 1024 * 1024;
+const PYTHON_WINDOWS_INDEX: &str = "https://www.python.org/ftp/python/index-windows.json";
+const PYTHON_MANAGER_EXECUTABLE: &str = "pymanager.exe";
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub trait PythonSigstoreVerifier: Send + Sync {
@@ -269,6 +272,7 @@ impl PythonProvider {
         app_id: &AppId,
         version: &ExactVersion,
         plan: &InstallPlan,
+        python_manager_package: Option<&Path>,
         journal: &mut OperationJournal,
     ) -> TorbenResult<InstallRecord> {
         let distribution = self.validate_install_plan(plan, app_id, version).await?;
@@ -288,8 +292,15 @@ impl PythonProvider {
         }
         let staged_runtime = match &distribution.kind {
             PythonInstallKind::WindowsManager { tag } => {
-                self.install_with_manager(paths, tag, &staging, journal, &cancellation)
-                    .await?
+                self.install_with_manager(
+                    paths,
+                    tag,
+                    &staging,
+                    python_manager_package,
+                    journal,
+                    &cancellation,
+                )
+                .await?
             }
             PythonInstallKind::SourceArchive(source) => {
                 self.build_source_runtime(
@@ -541,35 +552,49 @@ impl PythonProvider {
         paths: &TorbenPaths,
         tag: &str,
         staging: &Path,
+        python_manager_package: Option<&Path>,
         journal: &mut OperationJournal,
         cancellation: &CancellationProbe,
     ) -> TorbenResult<PathBuf> {
         if !cfg!(windows) {
             return Err(platform_error("os", std::env::consts::OS));
         }
-        let manager = self.python_manager(paths.data_dir())?;
+        let manager = self
+            .prepare_python_manager(python_manager_package, staging, cancellation)
+            .await?;
         let runtime = staging.join("runtime");
         journal.record(
             OperationState::Running,
             "install",
-            format!("Extracting CPython {tag} with the official Python Install Manager"),
+            format!("Preparing the bundled Python Install Manager and extracting CPython {tag}"),
             Some(0.55),
         )?;
         let target = format!("--target={}", runtime.display());
         let download_dir = paths.cache_dir().join("python-manager");
         std::fs::create_dir_all(&download_dir).map_err(io_error)?;
+        let config_path = staging.join("python-manager-config.json");
+        let config = serde_json::json!({
+            "confirm": false,
+            "download_dir": download_dir,
+        });
+        let config_bytes = serde_json::to_vec(&config).map_err(|error| {
+            TorbenError::internal(
+                "Could not serialize the bundled Python Install Manager configuration.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+        std::fs::write(&config_path, config_bytes).map_err(io_error)?;
         run_process(
             &manager,
             &[
                 OsString::from("install"),
+                OsString::from(format!("--config={}", config_path.display())),
+                OsString::from(format!("--source={PYTHON_WINDOWS_INDEX}")),
                 OsString::from(target),
                 OsString::from(tag),
             ],
-            None,
-            &[
-                ("PYTHON_MANAGER_CONFIRM", OsStr::new("false")),
-                ("PYTHON_MANAGER_DOWNLOAD_DIR", download_dir.as_os_str()),
-            ],
+            manager.parent(),
+            &[("PYTHON_MANAGER_CONFIRM", OsStr::new("false"))],
             cancellation,
         )
         .await?;
@@ -628,24 +653,69 @@ impl PythonProvider {
         Ok(())
     }
 
-    fn python_manager(&self, managed_root: &Path) -> TorbenResult<PathBuf> {
-        #[cfg(not(test))]
-        let _ = self;
+    async fn prepare_python_manager(
+        &self,
+        package: Option<&Path>,
+        staging: &Path,
+        cancellation: &CancellationProbe,
+    ) -> TorbenResult<PathBuf> {
         #[cfg(test)]
         if let Some(manager) = &self.python_manager_override {
             ensure_regular_file(manager)?;
             return Ok(manager.clone());
         }
-        find_external_command("py", managed_root).map_err(|error| {
+        let package = package.ok_or_else(|| {
             TorbenError::new(
-                "python_install_manager_unavailable",
-                "The official Python Install Manager is required on Windows.",
+                "python_install_manager_missing",
+                "The Python plugin does not contain its pinned Python Install Manager package.",
             )
-            .with_detail("reasonCode", error.code)
-            .with_remediation(
-                "Install the Python Install Manager from python.org, then retry the managed installation.",
+            .with_remediation("Reinstall the bundled Python plugin, then retry the installation.")
+        })?;
+        let metadata = package.symlink_metadata().map_err(|error| {
+            TorbenError::new(
+                "python_install_manager_missing",
+                "The bundled Python Install Manager package is unavailable.",
             )
-        })
+            .with_detail("path", package.display().to_string())
+            .with_detail("reason", error.to_string())
+        })?;
+        if !metadata.is_file()
+            || metadata.file_type().is_symlink()
+            || metadata.len() > MAX_PYTHON_MANAGER_PACKAGE_BYTES
+        {
+            return Err(TorbenError::new(
+                "python_install_manager_invalid",
+                "The bundled Python Install Manager package is not a bounded regular file.",
+            )
+            .with_detail("path", package.display().to_string()));
+        }
+        let actual_sha256 = sha256_file_checked(package, Some(cancellation))?;
+        if actual_sha256 != crate::PYTHON_MANAGER_PACKAGE_SHA256 {
+            return Err(TorbenError::new(
+                "python_install_manager_hash_mismatch",
+                "The bundled Python Install Manager package does not match its pinned SHA-256.",
+            )
+            .with_detail("expected", crate::PYTHON_MANAGER_PACKAGE_SHA256)
+            .with_detail("actual", actual_sha256));
+        }
+
+        let manager_root = staging.join("python-manager");
+        std::fs::create_dir_all(&manager_root).map_err(io_error)?;
+        let installer = windows_installer_executable()?;
+        run_process(
+            &installer,
+            &[
+                OsString::from("/a"),
+                package.as_os_str().to_owned(),
+                OsString::from("/qn"),
+                OsString::from(format!("TARGETDIR={}", manager_root.display())),
+            ],
+            None,
+            &[],
+            cancellation,
+        )
+        .await?;
+        find_extracted_python_manager(&manager_root)
     }
 
     async fn fetch_bytes(
@@ -1013,6 +1083,62 @@ fn find_external_command(command: &str, managed_root: &Path) -> TorbenResult<Pat
     .with_detail("command", command))
 }
 
+fn windows_installer_executable() -> TorbenResult<PathBuf> {
+    if !cfg!(windows) {
+        return Err(platform_error("os", std::env::consts::OS));
+    }
+    let system_root = std::env::var_os("SystemRoot").ok_or_else(|| {
+        TorbenError::new(
+            "windows_installer_unavailable",
+            "Windows did not provide its system directory.",
+        )
+    })?;
+    let executable = PathBuf::from(system_root)
+        .join("System32")
+        .join("msiexec.exe");
+    ensure_regular_file(&executable).map_err(|error| {
+        TorbenError::new(
+            "windows_installer_unavailable",
+            "Windows Installer is required to unpack the bundled Python Install Manager.",
+        )
+        .with_detail("path", executable.display().to_string())
+        .with_detail("reasonCode", error.code)
+    })?;
+    Ok(executable)
+}
+
+fn find_extracted_python_manager(root: &Path) -> TorbenResult<PathBuf> {
+    ensure_regular_directory(root)?;
+    let mut matches = Vec::new();
+    for entry in walkdir::WalkDir::new(root).follow_links(false) {
+        let entry = entry.map_err(|error| {
+            TorbenError::new(
+                "python_install_manager_extract_failed",
+                "Could not inspect the extracted Python Install Manager package.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+        if entry.file_type().is_file()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case(PYTHON_MANAGER_EXECUTABLE))
+        {
+            let path = entry.into_path();
+            ensure_regular_file(&path)?;
+            matches.push(path);
+        }
+    }
+    if matches.len() != 1 {
+        return Err(TorbenError::new(
+            "python_install_manager_layout_invalid",
+            "The bundled Python Install Manager package did not contain exactly one pymanager.exe entry point.",
+        )
+        .with_detail("matches", matches.len().to_string()));
+    }
+    Ok(matches.remove(0))
+}
+
 async fn run_process(
     executable: &Path,
     arguments: &[OsString],
@@ -1038,6 +1164,10 @@ async fn run_process(
         "PYTHONPATH",
         "PYTHONSTARTUP",
         "PYTHONUSERBASE",
+        "PYTHON_MANAGER_CONFIG",
+        "PYTHON_MANAGER_SOURCE_URL",
+        "PYTHON_MANAGER_DEFAULT",
+        "PYTHON_MANAGER_AUTOMATIC_INSTALL",
         "VIRTUAL_ENV",
     ] {
         command.env_remove(variable);
@@ -1406,6 +1536,40 @@ mod tests {
         assert_eq!(error.code, "python_sigstore_verifier_unavailable");
     }
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn bundled_manager_package_must_match_its_pinned_hash_before_extraction() {
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().join("workspace"));
+        paths.ensure_layout().unwrap();
+        let store = Arc::new(StateStore::open(paths.state_database()).unwrap());
+        let journal = OperationJournal::start(
+            &paths,
+            store,
+            OperationKind::Install,
+            &AppId::new("python").unwrap(),
+            Some(&ExactVersion::from_str("3.14.7").unwrap()),
+        )
+        .unwrap();
+        let package = root.path().join("python-manager.msi");
+        std::fs::write(&package, b"modified python manager").unwrap();
+        let provider = PythonProvider::with_base_url(
+            Url::parse("http://127.0.0.1:9/api/v2/downloads/").unwrap(),
+        )
+        .unwrap();
+
+        let error = provider
+            .prepare_python_manager(
+                Some(&package),
+                &paths.staging_dir(),
+                &journal.cancellation_probe(),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "python_install_manager_hash_mismatch");
+    }
+
     #[tokio::test]
     async fn local_catalog_lists_latest_active_lines_and_resolves_aliases() {
         let (base_url, server) = fixture_server(4);
@@ -1481,7 +1645,7 @@ mod tests {
         .unwrap();
 
         let record = provider
-            .install(&paths, &app_id, &version, &plan, &mut journal)
+            .install(&paths, &app_id, &version, &plan, None, &mut journal)
             .await
             .unwrap();
         server.join().unwrap();
@@ -1543,7 +1707,7 @@ mod tests {
         std::fs::write(
             &source,
             r#"
-use std::{fs, path::PathBuf};
+use std::{env, fs, path::PathBuf};
 fn main() {
     let current = std::env::current_exe().unwrap();
     let stem = current.file_stem().unwrap().to_string_lossy().to_ascii_lowercase();
@@ -1555,7 +1719,21 @@ fn main() {
         println!("pip 26.0 from fixture");
         return;
     }
-    let target = std::env::args()
+    let arguments = env::args().collect::<Vec<_>>();
+    assert!(arguments.iter().any(|arg| arg == "install"));
+    assert!(arguments
+        .iter()
+        .any(|arg| arg == "--source=https://www.python.org/ftp/python/index-windows.json"));
+    assert_eq!(env::var("PYTHON_MANAGER_CONFIRM").as_deref(), Ok("false"));
+    let config_path = arguments
+        .iter()
+        .find_map(|arg| arg.strip_prefix("--config=").map(PathBuf::from))
+        .expect("config argument");
+    let config = fs::read_to_string(config_path).unwrap();
+    assert!(config.contains("\"confirm\":false"));
+    assert!(config.contains("\"download_dir\""));
+    let target = arguments
+        .iter()
         .find_map(|arg| arg.strip_prefix("--target=").map(PathBuf::from))
         .expect("target argument");
     let scripts = target.join("Scripts");

@@ -13,6 +13,7 @@ void i18n.use(initReactI18next).init({
         diagnostics: "Diagnostics",
         settings: "Settings",
         java: "Java",
+        python: "Python",
         common: {
           available: "Available",
           cancel: "Cancel",
@@ -33,6 +34,19 @@ void i18n.use(initReactI18next).init({
         layout: {
           expandSidebar: "Expand sidebar",
           collapseSidebar: "Collapse sidebar",
+          goBack: "Go back",
+          goForward: "Go forward",
+          help: "Help",
+          about: "About Torben App",
+          aboutTitle: "Torben App",
+          aboutVersion: "Version {{version}}",
+          aboutDescription:
+            "Torben App is a local-first application manager for Windows. Use plugins to manage tools such as Java and Python from one workspace.",
+          aboutPrivacy:
+            "Your application state stays on this device. Torben App does not require an account or collect telemetry.",
+          minimizeWindow: "Minimize window",
+          maximizeWindow: "Maximize or restore window",
+          closeWindow: "Close window",
           primaryNavigation: "Primary navigation",
           skipToContent: "Skip to main content",
           localCore: "Local core",
@@ -40,6 +54,7 @@ void i18n.use(initReactI18next).init({
           search: "Search apps and commands",
           localFirst: "Local-first",
           localWorkspace: "Local workspace",
+          installedPlugins: "Installed",
           navGroups: {
             workspace: "Workspace",
             runtimes: "Runtimes",
@@ -76,6 +91,9 @@ void i18n.use(initReactI18next).init({
           officialReleases: "Official releases",
           availableVersions: "Available versions",
           installed: "Installed",
+          select: "Use in terminal",
+          selecting: "Selecting…",
+          selected: "Terminal default",
           catalogUpdating:
             "Version information is updating in the background and will appear here automatically.",
           upgrade: "Upgrade",
@@ -151,14 +169,20 @@ void i18n.use(initReactI18next).init({
           uninstallPlugin: "Uninstall plugin",
           uninstallPluginAria: "Uninstall {{plugin}}",
           manageJdk: "Manage JDK",
+          managePython: "Manage Python",
           availableToInstall: "Available",
           temurinUsageBeforeInstall:
             "Install the plugin, then open Manage JDK to browse official versions and install a JDK.",
           temurinUsageAfterInstall:
             "Use Manage JDK to browse versions, install multiple JDKs, and choose the default java and javac.",
-          uninstallConfirmTitle: "Uninstall Java plugin?",
+          pythonUsageBeforeInstall:
+            "Install the plugin, then open Manage Python to browse official CPython versions.",
+          pythonUsageAfterInstall:
+            "Use Manage Python to install versions and choose the default python and pip commands.",
+          pythonRuntime: "Python runtime",
+          uninstallConfirmTitle: "Uninstall {{plugin}} plugin?",
           uninstallConfirmDescription:
-            "This removes the plugin files and its registration. Any managed JDK must be uninstalled first.",
+            "This removes the plugin files and its registration. Any managed {{application}} must be uninstalled first.",
           bundled: "Bundled",
           disable: "Disable",
           noPluginsTitle: "No plugins",
@@ -342,6 +366,7 @@ void i18n.use(initReactI18next).init({
         diagnostics: "诊断",
         settings: "设置",
         java: "Java",
+        python: "Python",
         common: {
           available: "可用",
           cancel: "取消",
@@ -362,6 +387,18 @@ void i18n.use(initReactI18next).init({
         layout: {
           expandSidebar: "展开侧边栏",
           collapseSidebar: "收起侧边栏",
+          goBack: "后退",
+          goForward: "前进",
+          help: "帮助",
+          about: "关于 Torben App",
+          aboutTitle: "Torben App",
+          aboutVersion: "版本 {{version}}",
+          aboutDescription:
+            "Torben App 是面向 Windows 的本地优先应用管理器。你可以通过插件，在同一个工作区管理 Java、Python 等工具。",
+          aboutPrivacy: "应用状态保留在本机。Torben App 无需账号，也不收集遥测数据。",
+          minimizeWindow: "最小化窗口",
+          maximizeWindow: "最大化或还原窗口",
+          closeWindow: "关闭窗口",
           primaryNavigation: "主导航",
           skipToContent: "跳转到主要内容",
           localCore: "本地核心",
@@ -369,6 +406,7 @@ void i18n.use(initReactI18next).init({
           search: "搜索应用和命令",
           localFirst: "本地优先",
           localWorkspace: "本地工作区",
+          installedPlugins: "已安装",
           navGroups: {
             workspace: "工作区",
             runtimes: "运行环境",
@@ -402,6 +440,9 @@ void i18n.use(initReactI18next).init({
           officialReleases: "官方发行版",
           availableVersions: "可用版本",
           installed: "已安装",
+          select: "用于终端",
+          selecting: "正在选择…",
+          selected: "终端默认版本",
           catalogUpdating: "版本信息正在后台更新，完成后会自动显示。",
           upgrade: "升级",
           upgrading: "升级中",
@@ -472,13 +513,17 @@ void i18n.use(initReactI18next).init({
           uninstallPlugin: "卸载插件",
           uninstallPluginAria: "卸载 {{plugin}}",
           manageJdk: "管理 JDK",
+          managePython: "管理 Python",
           availableToInstall: "可安装",
           temurinUsageBeforeInstall: "安装插件后，进入“管理 JDK”浏览官方版本并安装 JDK。",
           temurinUsageAfterInstall:
             "进入“管理 JDK”查看版本、安装多个 JDK，并选择默认的 java 和 javac。",
-          uninstallConfirmTitle: "卸载 Java 插件？",
+          pythonUsageBeforeInstall: "安装插件后，进入“管理 Python”浏览官方 CPython 版本。",
+          pythonUsageAfterInstall: "进入“管理 Python”安装版本，并选择默认的 python 和 pip 命令。",
+          pythonRuntime: "Python 运行时",
+          uninstallConfirmTitle: "卸载 {{plugin}} 插件？",
           uninstallConfirmDescription:
-            "这将删除插件文件和注册信息。若仍有受管 JDK，请先卸载所有 JDK。",
+            "这将删除插件文件和注册信息。若仍有受管 {{application}}，请先全部卸载。",
           bundled: "内置",
           disable: "禁用",
           noPluginsTitle: "暂无插件",
