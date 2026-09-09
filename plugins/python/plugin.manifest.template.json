@@ -16,7 +16,7 @@
   "permissions": {
     "networkDomains": ["www.python.org"],
     "filesystemRoots": ["managed_app_library", "download_cache", "staging"],
-    "externalCommands": ["py", "make", "cc", "python", "python3", "pip", "pip3"],
+    "externalCommands": ["make", "cc", "python", "python3", "pip", "pip3"],
     "packageManagers": []
   },
   "targets": [],

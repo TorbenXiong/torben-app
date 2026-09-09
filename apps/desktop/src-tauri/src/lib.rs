@@ -34,12 +34,26 @@ const EMBEDDED_TEMURIN_PLUGIN: &[u8] = include_bytes!(concat!(
     "/../../../target/release/torben-plugin-temurin.exe"
 ));
 #[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_PYTHON_PLUGIN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../target/release/torben-plugin-python.exe"
+));
+#[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_PYTHON_MANAGER: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../.tools/python-manager/python-manager-26.3.msi"
+));
+#[cfg(all(windows, not(debug_assertions)))]
 const EMBEDDED_TORBEN_SHIM: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../target/release/torben-shim.exe"
 ));
 #[cfg(any(not(windows), debug_assertions))]
 const EMBEDDED_TEMURIN_PLUGIN: &[u8] = &[];
+#[cfg(any(not(windows), debug_assertions))]
+const EMBEDDED_PYTHON_PLUGIN: &[u8] = &[];
+#[cfg(any(not(windows), debug_assertions))]
+const EMBEDDED_PYTHON_MANAGER: &[u8] = &[];
 #[cfg(any(not(windows), debug_assertions))]
 const EMBEDDED_TORBEN_SHIM: &[u8] = &[];
 
@@ -234,7 +248,7 @@ async fn list_versions_for_core(
     app_id: String,
 ) -> Result<Vec<VersionDescriptor>, TorbenError> {
     let app_id = AppId::new(app_id)?;
-    if app_id.as_str() == "temurin" {
+    if matches!(app_id.as_str(), "temurin" | "python") {
         return Ok(core.cached_versions(&app_id)?.unwrap_or_default());
     }
     core.versions(&app_id).await
@@ -499,6 +513,44 @@ async fn uninstall_bundled_temurin_plugin(
         .map_err(|error| {
             TorbenError::internal(
                 "The bundled Temurin plugin uninstall task could not be completed.",
+            )
+            .with_detail("reason", error.to_string())
+        })?
+}
+
+#[tauri::command]
+async fn install_bundled_python_plugin(
+    core: State<'_, Arc<TorbenCore>>,
+    app: tauri::AppHandle,
+) -> Result<PluginSummary, TorbenError> {
+    let core = Arc::clone(core.inner());
+    let install_core = Arc::clone(&core);
+    let summary = tauri::async_runtime::spawn_blocking(move || {
+        install_core.install_bundled_python(
+            EMBEDDED_PYTHON_PLUGIN,
+            EMBEDDED_PYTHON_MANAGER,
+            EMBEDDED_TORBEN_SHIM,
+        )
+    })
+    .await
+    .map_err(|error| {
+        TorbenError::internal("The bundled Python plugin installation task could not be completed.")
+            .with_detail("reason", error.to_string())
+    })??;
+    scheduled_tasks::refresh_after_user_action(core, app, AppId::new("python")?);
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn uninstall_bundled_python_plugin(
+    core: State<'_, Arc<TorbenCore>>,
+) -> Result<(), TorbenError> {
+    let core = Arc::clone(core.inner());
+    tauri::async_runtime::spawn_blocking(move || core.uninstall_bundled_python())
+        .await
+        .map_err(|error| {
+            TorbenError::internal(
+                "The bundled Python plugin uninstall task could not be completed.",
             )
             .with_detail("reason", error.to_string())
         })?
@@ -1236,6 +1288,8 @@ fn configure_core_commands(
             install_plugin,
             install_bundled_temurin_plugin,
             uninstall_bundled_temurin_plugin,
+            install_bundled_python_plugin,
+            uninstall_bundled_python_plugin,
             install_official_plugin,
             install_official_plugin_from_registry,
             set_plugin_enabled,

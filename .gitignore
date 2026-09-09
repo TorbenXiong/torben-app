@@ -26,6 +26,7 @@ Thumbs.db
 .torben-data/
 *.log
 
-# Test artifacts
+# Build and test artifacts
+/artifacts/
 test-results/
 playwright-report/

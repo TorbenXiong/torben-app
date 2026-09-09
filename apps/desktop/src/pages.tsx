@@ -45,6 +45,7 @@ import {
   planSourceMigration,
   planSourceOperation,
   refreshOfficialPluginRegistry,
+  selectVersion,
   setPluginEnabled,
   setShellIntegration,
   uninstallApp,
@@ -99,6 +100,293 @@ export function TemurinDetailPage({
   selected?: SelectionRecord[];
 }) {
   return <JavaDetailPage installed={installed} onChanged={onChanged} selected={selected} />;
+}
+
+interface PythonVersionRow {
+  channel: string;
+  available?: VersionDescriptor;
+  installed?: InstallRecord;
+  selected: boolean;
+  updateAvailable: boolean;
+}
+
+function pythonVersionNumbers(version: string): number[] {
+  return version.split(".").map(Number);
+}
+
+function comparePythonVersions(left: string, right: string): number {
+  const leftParts = pythonVersionNumbers(left);
+  const rightParts = pythonVersionNumbers(right);
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function pythonChannel(version: string): string | undefined {
+  const match = version.match(/^(\d+\.\d+)\./);
+  return match?.[1];
+}
+
+function buildPythonVersionRows(
+  versions: VersionDescriptor[],
+  installed: InstallRecord[],
+  selected: SelectionRecord[],
+): PythonVersionRow[] {
+  const availableByChannel = new Map(
+    versions.flatMap((version) => {
+      const channel = pythonChannel(version.version);
+      return channel ? [[channel, version] as const] : [];
+    }),
+  );
+  const installedByChannel = new Map<string, InstallRecord[]>();
+  for (const record of installed.filter((record) => record.appId === "python")) {
+    const channel = pythonChannel(record.version);
+    if (!channel) continue;
+    installedByChannel.set(channel, [...(installedByChannel.get(channel) ?? []), record]);
+  }
+  const selectedVersion = selected.find((record) => record.appId === "python")?.version;
+  return [...new Set([...availableByChannel.keys(), ...installedByChannel.keys()])]
+    .sort((left, right) => comparePythonVersions(right, left))
+    .map((channel) => {
+      const available = availableByChannel.get(channel);
+      const installedVersions = installedByChannel.get(channel) ?? [];
+      const active = installedVersions.find((record) => record.version === selectedVersion);
+      const installedRecord =
+        active ??
+        installedVersions.sort((left, right) =>
+          comparePythonVersions(right.version, left.version),
+        )[0];
+      return {
+        channel,
+        available,
+        installed: installedRecord,
+        selected: installedRecord?.version === selectedVersion,
+        updateAvailable: Boolean(
+          available &&
+            installedRecord &&
+            comparePythonVersions(available.version, installedRecord.version) > 0,
+        ),
+      };
+    });
+}
+
+export function PythonDetailPage({
+  installed,
+  onChanged,
+  selected = [],
+}: {
+  installed: InstallRecord[];
+  onChanged: () => Promise<void>;
+  selected?: SelectionRecord[];
+}) {
+  const { t } = useTranslation();
+  const [versions, setVersions] = useState<VersionDescriptor[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const readVersions = useCallback(async (showLoading: boolean) => {
+    if (showLoading) setLoading(true);
+    setError(null);
+    try {
+      setVersions(await getVersions("python"));
+    } catch (reason) {
+      setError(formatTorbenError(reason));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void readVersions(true);
+    void onVersionCatalogUpdated((updatedAppId) => {
+      if (updatedAppId === "python") void readVersions(false);
+    })
+      .then((stopListening) => {
+        if (disposed) stopListening();
+        else unlisten = stopListening;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [readVersions]);
+
+  async function run(action: string, operation: () => Promise<unknown>) {
+    setBusy(action);
+    setError(null);
+    try {
+      await operation();
+      await onChanged();
+    } catch (reason) {
+      setError(formatTorbenError(reason));
+      await onChanged().catch(() => undefined);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const rows = buildPythonVersionRows(versions, installed, selected);
+  return (
+    <div className="page-stack">
+      {error ? (
+        <div className="error-banner" role="alert">
+          <CircleAlert size={16} /> {error}
+        </div>
+      ) : null}
+      <div className="detail-grid">
+        <Card className="version-panel">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">{t("runtimePage.officialReleases")}</span>
+              <h2>{t("runtimePage.availableVersions")}</h2>
+            </div>
+          </div>
+          {loading ? (
+            <div className="skeleton-list">
+              <span />
+              <span />
+            </div>
+          ) : (
+            <div className="version-list">
+              {rows.length === 0 ? (
+                <p className="version-catalog-status">{t("runtimePage.catalogUpdating")}</p>
+              ) : null}
+              {rows.map((row) => (
+                <div className="version-row java-version-row" key={row.channel}>
+                  <div className="version-main">
+                    <strong>Python {row.channel}</strong>
+                    <span className="java-version-summary">
+                      v{row.installed?.version ?? row.available?.version}
+                    </span>
+                  </div>
+                  <span className="release-date">
+                    {row.available?.releasedAt.slice(0, 10) ?? ""}
+                  </span>
+                  <span className="version-actions">
+                    {row.installed ? (
+                      row.updateAvailable && row.available ? (
+                        <Button
+                          disabled={Boolean(busy)}
+                          onClick={() =>
+                            void run(`upgrade:${row.channel}`, () =>
+                              applyManagedUpdate({
+                                appId: "python",
+                                channel: row.channel,
+                                installedVersion: row.installed?.version ?? "",
+                                availableVersion: row.available?.version ?? "",
+                                selectedVersion: row.selected
+                                  ? (row.installed?.version ?? null)
+                                  : null,
+                                releasedAt: row.available?.releasedAt ?? "",
+                                recommended: row.available?.recommended ?? false,
+                                automatic: false,
+                              }),
+                            )
+                          }
+                          size="sm"
+                          variant="secondary"
+                        >
+                          <ArrowDownToLine size={14} />
+                          {busy === `upgrade:${row.channel}`
+                            ? t("runtimePage.upgrading")
+                            : t("runtimePage.upgrade")}
+                        </Button>
+                      ) : (
+                        <Badge tone="positive">
+                          <Check size={12} /> {t("runtimePage.installed")}
+                        </Badge>
+                      )
+                    ) : row.available ? (
+                      <Button
+                        disabled={Boolean(busy)}
+                        onClick={() =>
+                          void run(`install:${row.available?.version}`, () =>
+                            installApp("python", row.available?.version ?? ""),
+                          )
+                        }
+                        size="sm"
+                        variant="secondary"
+                      >
+                        <ArrowDownToLine size={14} /> {t("common.install")}
+                      </Button>
+                    ) : null}
+                    {row.installed ? (
+                      row.selected ? (
+                        <Badge tone="accent">{t("runtimePage.selected")}</Badge>
+                      ) : (
+                        <Button
+                          disabled={Boolean(busy)}
+                          onClick={() =>
+                            void run(`select:${row.installed?.version}`, () =>
+                              selectVersion("python", row.installed?.version ?? ""),
+                            )
+                          }
+                          size="sm"
+                        >
+                          {busy === `select:${row.installed.version}`
+                            ? t("runtimePage.selecting")
+                            : t("runtimePage.select")}
+                        </Button>
+                      )
+                    ) : null}
+                    {row.installed ? (
+                      <Dialog.Root>
+                        <Dialog.Trigger asChild>
+                          <Button disabled={Boolean(busy)} size="sm" variant="danger">
+                            <Trash2 size={14} /> {t("runtimePage.uninstall")}
+                          </Button>
+                        </Dialog.Trigger>
+                        <Dialog.Portal>
+                          <Dialog.Overlay className="dialog-overlay" />
+                          <Dialog.Content className="dialog-content">
+                            <Dialog.Title>
+                              {t("runtimePage.uninstallTitle", {
+                                app: "Python",
+                                version: row.installed.version,
+                              })}
+                            </Dialog.Title>
+                            <Dialog.Description>
+                              {row.selected
+                                ? t("runtimePage.uninstallSelectedDescription")
+                                : t("runtimePage.uninstallDescription")}
+                            </Dialog.Description>
+                            <div className="dialog-actions">
+                              <Dialog.Close asChild>
+                                <Button variant="ghost">{t("common.cancel")}</Button>
+                              </Dialog.Close>
+                              <Dialog.Close asChild>
+                                <Button
+                                  onClick={() =>
+                                    void run(`uninstall:${row.installed?.version}`, async () => {
+                                      if (row.selected) await clearSelection("python");
+                                      await uninstallApp("python", row.installed?.version ?? "");
+                                    })
+                                  }
+                                  variant="danger"
+                                >
+                                  {t("runtimePage.uninstall")}
+                                </Button>
+                              </Dialog.Close>
+                            </div>
+                          </Dialog.Content>
+                        </Dialog.Portal>
+                      </Dialog.Root>
+                    ) : null}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
 }
 
 interface JavaVersionRow {
@@ -593,6 +881,8 @@ interface PluginsPageProps {
   installManifest?: (manifestPath: string, developerMode: boolean) => Promise<PluginSummary>;
   onInstallBundledTemurin?: () => Promise<PluginSummary>;
   onUninstallBundledTemurin?: () => Promise<void>;
+  onInstallBundledPython?: () => Promise<PluginSummary>;
+  onUninstallBundledPython?: () => Promise<void>;
   installRegistryPlugin?: (pluginId: string, version?: string) => Promise<PluginSummary>;
   refreshRegistry?: () => Promise<PluginRegistryStatus>;
   loadSchemaPages?: (pluginId: string) => Promise<SchemaPage[]>;
@@ -624,6 +914,12 @@ export function PluginsPage({
   },
   onUninstallBundledTemurin = async () => {
     throw new Error("Bundled Temurin uninstall is unavailable.");
+  },
+  onInstallBundledPython = async () => {
+    throw new Error("Bundled Python installation is unavailable.");
+  },
+  onUninstallBundledPython = async () => {
+    throw new Error("Bundled Python uninstall is unavailable.");
   },
   installRegistryPlugin = installOfficialPluginFromRegistry,
   refreshRegistry = refreshOfficialPluginRegistry,
@@ -668,11 +964,12 @@ export function PluginsPage({
     }
   }
 
-  async function installTemurinPlugin(plugin: PluginSummary) {
+  async function installBundledPlugin(plugin: PluginSummary) {
     setBusy(plugin.id);
     setError(null);
     try {
-      await onInstallBundledTemurin();
+      if (plugin.id === "app.torben.plugin.python") await onInstallBundledPython();
+      else await onInstallBundledTemurin();
       await onChanged();
     } catch (reason) {
       setError(formatTorbenError(reason));
@@ -681,11 +978,12 @@ export function PluginsPage({
     }
   }
 
-  async function uninstallTemurinPlugin(plugin: PluginSummary) {
+  async function uninstallBundledPlugin(plugin: PluginSummary) {
     setBusy(plugin.id);
     setError(null);
     try {
-      await onUninstallBundledTemurin();
+      if (plugin.id === "app.torben.plugin.python") await onUninstallBundledPython();
+      else await onUninstallBundledTemurin();
       await onChanged();
       setUninstallPlugin(null);
     } catch (reason) {
@@ -948,6 +1246,8 @@ export function PluginsPage({
           const builtIn = plugin.origin === "built_in";
           const official = plugin.origin === "official_registry";
           const temurin = plugin.id === "app.torben.plugin.temurin";
+          const python = plugin.id === "app.torben.plugin.python";
+          const installableBundled = temurin || python;
           const pluginDisplayName = temurin ? "Java" : plugin.displayName;
           const bundledAppId =
             plugin.id === "app.torben.plugin.temurin"
@@ -984,7 +1284,7 @@ export function PluginsPage({
                     <Badge>
                       {plugin.enabled
                         ? t("common.enabled")
-                        : temurin
+                        : installableBundled
                           ? t("pluginsPage.availableToInstall")
                           : t("common.disabled")}
                     </Badge>
@@ -995,11 +1295,19 @@ export function PluginsPage({
                   {t("pluginsPage.capabilityCount", { count: plugin.capabilities.length })}
                 </p>
                 <PluginPermissionList permissions={plugin.permissions} />
-                {temurin ? (
+                {installableBundled ? (
                   <p className="plugin-metadata">
                     {plugin.enabled
-                      ? t("pluginsPage.temurinUsageAfterInstall")
-                      : t("pluginsPage.temurinUsageBeforeInstall")}
+                      ? t(
+                          python
+                            ? "pluginsPage.pythonUsageAfterInstall"
+                            : "pluginsPage.temurinUsageAfterInstall",
+                        )
+                      : t(
+                          python
+                            ? "pluginsPage.pythonUsageBeforeInstall"
+                            : "pluginsPage.temurinUsageBeforeInstall",
+                        )}
                   </p>
                 ) : null}
               </div>
@@ -1011,13 +1319,20 @@ export function PluginsPage({
                     </Link>
                   </Button>
                 ) : null}
+                {python && plugin.enabled ? (
+                  <Button asChild size="sm">
+                    <Link to="/python">
+                      <Wrench size={14} /> {t("pluginsPage.managePython")}
+                    </Link>
+                  </Button>
+                ) : null}
                 {plugin.capabilities.includes("schema_ui") ? (
                   <Button
                     aria-label={t("pluginsPage.openPagesAria", { plugin: pluginDisplayName })}
                     disabled={!plugin.enabled || Boolean(busy)}
                     onClick={() => void openSchemaPages(plugin)}
                     size="sm"
-                    variant={temurin ? "secondary" : undefined}
+                    variant={installableBundled ? "secondary" : undefined}
                   >
                     <Wrench size={14} />
                     {busy === `schema:${plugin.id}`
@@ -1025,7 +1340,7 @@ export function PluginsPage({
                       : t("pluginsPage.open")}
                   </Button>
                 ) : null}
-                {temurin ? (
+                {installableBundled ? (
                   plugin.enabled ? (
                     <Button
                       aria-label={t("pluginsPage.uninstallPluginAria", {
@@ -1044,7 +1359,7 @@ export function PluginsPage({
                         plugin: pluginDisplayName,
                       })}
                       disabled={Boolean(busy)}
-                      onClick={() => void installTemurinPlugin(plugin)}
+                      onClick={() => void installBundledPlugin(plugin)}
                       size="sm"
                     >
                       <ArrowDownToLine size={14} />
@@ -1097,8 +1412,19 @@ export function PluginsPage({
         <Dialog.Portal>
           <Dialog.Overlay className="dialog-overlay" />
           <Dialog.Content className="dialog-content">
-            <Dialog.Title>{t("pluginsPage.uninstallConfirmTitle")}</Dialog.Title>
-            <Dialog.Description>{t("pluginsPage.uninstallConfirmDescription")}</Dialog.Description>
+            <Dialog.Title>
+              {t("pluginsPage.uninstallConfirmTitle", {
+                plugin: uninstallPlugin?.id === "app.torben.plugin.python" ? "Python" : "Java",
+              })}
+            </Dialog.Title>
+            <Dialog.Description>
+              {t("pluginsPage.uninstallConfirmDescription", {
+                application:
+                  uninstallPlugin?.id === "app.torben.plugin.python"
+                    ? t("pluginsPage.pythonRuntime")
+                    : "JDK",
+              })}
+            </Dialog.Description>
             <div className="dialog-actions">
               <Button
                 disabled={Boolean(busy)}
@@ -1110,7 +1436,7 @@ export function PluginsPage({
               <Button
                 disabled={Boolean(busy)}
                 onClick={() => {
-                  if (uninstallPlugin) void uninstallTemurinPlugin(uninstallPlugin);
+                  if (uninstallPlugin) void uninstallBundledPlugin(uninstallPlugin);
                 }}
                 variant="danger"
               >

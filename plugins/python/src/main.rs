@@ -292,7 +292,7 @@ fn python_descriptor() -> Result<ApplicationDescriptor, TorbenError> {
 
 fn python_schema_page() -> SchemaPage {
     let install_method = if cfg!(windows) {
-        "Official Python Install Manager target extraction"
+        "Bundled Python Install Manager target extraction"
     } else {
         "Verified CPython source build with managed prefix"
     };
@@ -320,7 +320,7 @@ fn python_schema_page() -> SchemaPage {
                     "integrity",
                     "Integrity",
                     if cfg!(windows) {
-                        "Python Install Manager signed catalog and target extraction"
+                        "Pinned Python Install Manager package + signed catalog"
                     } else {
                         "Release-manager Sigstore identity + SHA-256"
                     },

@@ -94,6 +94,58 @@ const mockApplications: ApplicationDescriptor[] = [
   },
 ];
 
+const mockAvailablePlugins: PluginSummary[] = [
+  {
+    id: "app.torben.plugin.temurin",
+    displayName: "Java",
+    version: "0.1.0",
+    enabled: false,
+    origin: "built_in",
+    publisher: "Torben App",
+    capabilities: [
+      "version_discovery",
+      "external_discovery",
+      "managed_install",
+      "global_selection",
+      "managed_uninstall",
+      "schema_ui",
+    ],
+    permissions: {
+      networkDomains: [
+        "api.adoptium.net",
+        "github.com",
+        "release-assets.githubusercontent.com",
+        "packages.adoptium.net",
+      ],
+      filesystemRoots: ["managed_app_library", "download_cache", "staging"],
+      externalCommands: ["java", "javac"],
+      packageManagers: [],
+    },
+  },
+  {
+    id: "app.torben.plugin.python",
+    displayName: "Python",
+    version: "0.1.0",
+    enabled: false,
+    origin: "built_in",
+    publisher: "Torben App",
+    capabilities: [
+      "version_discovery",
+      "external_discovery",
+      "managed_install",
+      "global_selection",
+      "managed_uninstall",
+      "schema_ui",
+    ],
+    permissions: {
+      networkDomains: ["www.python.org"],
+      filesystemRoots: ["managed_app_library", "download_cache", "staging"],
+      externalCommands: ["python", "python3", "pip", "pip3"],
+      packageManagers: [],
+    },
+  },
+];
+
 const mockNodeSchemaPages: SchemaPage[] = [
   {
     id: "node",
@@ -213,7 +265,7 @@ const mockPythonSchemaPages: SchemaPage[] = [
             label: "Integrity",
             description: null,
             kind: "status",
-            value: "Python Install Manager signed catalog or Sigstore + SHA-256",
+            value: "Pinned Python Install Manager package or Sigstore + SHA-256",
             placeholder: null,
             options: [],
             readOnly: true,
@@ -378,7 +430,7 @@ const mockSnapshot: DashboardSnapshot = {
   external: [],
   warnings: [],
   operations: [],
-  plugins: [],
+  plugins: mockAvailablePlugins,
   pluginRegistry: {
     configured: false,
     sourceUrl: null,
@@ -888,6 +940,22 @@ export async function uninstallBundledTemurinPlugin(): Promise<void> {
     throw new Error("Bundled Temurin plugin uninstall is available in the Tauri desktop runtime.");
   }
   await invoke("uninstall_bundled_temurin_plugin");
+}
+
+export async function installBundledPythonPlugin(): Promise<PluginSummary> {
+  if (!isTauri()) {
+    throw new Error(
+      "Bundled Python plugin installation is available in the Tauri desktop runtime.",
+    );
+  }
+  return invoke<PluginSummary>("install_bundled_python_plugin");
+}
+
+export async function uninstallBundledPythonPlugin(): Promise<void> {
+  if (!isTauri()) {
+    throw new Error("Bundled Python plugin uninstall is available in the Tauri desktop runtime.");
+  }
+  await invoke("uninstall_bundled_python_plugin");
 }
 
 export async function installOfficialPlugin(

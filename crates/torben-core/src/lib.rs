@@ -88,6 +88,13 @@ const BUNDLED_NODE_PLUGIN_MANIFEST: &str =
     include_str!("../../../plugins/node/plugin.manifest.template.json");
 const BUNDLED_TEMURIN_PLUGIN_ID: &str = "app.torben.plugin.temurin";
 const BUNDLED_PYTHON_PLUGIN_ID: &str = "app.torben.plugin.python";
+const PYTHON_MANAGER_PACKAGE_FILENAME: &str = "python-manager-26.3.msi";
+#[cfg(not(test))]
+const PYTHON_MANAGER_PACKAGE_SHA256: &str =
+    "259af5272c8f798786c1109b7ad287da519c58d43d7250ead8ed20fa3277a511";
+#[cfg(test)]
+const PYTHON_MANAGER_PACKAGE_SHA256: &str =
+    "e92178eb19a56a2e86f4d52cd6aefef07c9524a5e698d906938ae0076ec120df";
 const BUNDLED_GIT_PLUGIN_ID: &str = "app.torben.plugin.git";
 const BUNDLED_VSCODE_PLUGIN_ID: &str = "app.torben.plugin.vscode";
 const BUNDLED_CODEX_PLUGIN_ID: &str = "app.torben.plugin.codex";
@@ -193,6 +200,21 @@ struct PreparedPluginInstall {
     destination: PathBuf,
     record: PluginRecord,
     summary: PluginSummary,
+}
+
+struct BundledPluginResource<'a> {
+    filename: &'static str,
+    contents: &'a [u8],
+    expected_sha256: &'static str,
+}
+
+struct BundledProviderPackage<'a> {
+    plugin_id: &'static str,
+    provider_name: &'static str,
+    binary_name: &'static str,
+    manifest_template: &'static str,
+    executable: &'a [u8],
+    resources: &'a [BundledPluginResource<'a>],
 }
 
 struct PreparedSourceOperation {
@@ -380,9 +402,16 @@ impl TorbenCore {
 
     pub fn applications(&self) -> TorbenResult<Vec<ApplicationDescriptor>> {
         let mut applications = self.store.list_applications()?;
-        if !cfg!(any(test, feature = "test-fixtures")) && !self.temurin_plugin_enabled()? {
+        if !cfg!(any(test, feature = "test-fixtures")) {
             for application in &mut applications {
-                if application.id.as_str() == "temurin" {
+                let plugin_id = match application.id.as_str() {
+                    "temurin" => Some(BUNDLED_TEMURIN_PLUGIN_ID),
+                    "python" => Some(BUNDLED_PYTHON_PLUGIN_ID),
+                    _ => None,
+                };
+                if let Some(plugin_id) = plugin_id
+                    && !self.bundled_plugin_enabled(plugin_id)?
+                {
                     application.capabilities.clear();
                     application.sources.clear();
                 }
@@ -584,8 +613,29 @@ impl TorbenCore {
                     .await
             }
             "python" => {
+                #[cfg(not(test))]
+                let manager_package = self
+                    .bundled_plugin_resource(
+                        BUNDLED_PYTHON_PLUGIN_ID,
+                        PYTHON_MANAGER_PACKAGE_FILENAME,
+                    )
+                    .map(Some)?;
+                #[cfg(test)]
+                let manager_package = self
+                    .bundled_plugin_resource(
+                        BUNDLED_PYTHON_PLUGIN_ID,
+                        PYTHON_MANAGER_PACKAGE_FILENAME,
+                    )
+                    .ok();
                 self.python
-                    .install(&self.paths, app_id, version, plan, journal)
+                    .install(
+                        &self.paths,
+                        app_id,
+                        version,
+                        plan,
+                        manager_package.as_deref(),
+                        journal,
+                    )
                     .await
             }
             "git" => {
@@ -2876,16 +2926,18 @@ impl TorbenCore {
                 message: plugin_message,
             });
         }
+        if cfg!(any(test, feature = "test-fixtures")) || self.python_plugin_enabled()? {
+            let (plugin_healthy, plugin_message) = self.python_plugin.diagnostic();
+            checks.push(DoctorCheck {
+                id: "bundled_plugin.python".to_owned(),
+                healthy: plugin_healthy,
+                message: plugin_message,
+            });
+        }
         if cfg!(any(test, feature = "test-fixtures")) {
             let (plugin_healthy, plugin_message) = self.node_plugin.diagnostic();
             checks.push(DoctorCheck {
                 id: "bundled_plugin.node".to_owned(),
-                healthy: plugin_healthy,
-                message: plugin_message,
-            });
-            let (plugin_healthy, plugin_message) = self.python_plugin.diagnostic();
-            checks.push(DoctorCheck {
-                id: "bundled_plugin.python".to_owned(),
                 healthy: plugin_healthy,
                 message: plugin_message,
             });
@@ -2968,22 +3020,37 @@ impl TorbenCore {
                     true,
                 )?,
             ]
-        } else if let Some(record) = stored
-            .iter()
-            .find(|record| record.id.as_str() == BUNDLED_TEMURIN_PLUGIN_ID)
-        {
-            vec![stored_plugin_summary(record)?]
         } else {
-            vec![bundled_plugin_summary(
-                include_str!("../../../plugins/temurin/plugin.manifest.template.json"),
-                BUNDLED_TEMURIN_PLUGIN_ID,
-                "Java",
-                false,
-            )?]
+            [
+                (
+                    BUNDLED_TEMURIN_PLUGIN_ID,
+                    "Java",
+                    include_str!("../../../plugins/temurin/plugin.manifest.template.json"),
+                ),
+                (
+                    BUNDLED_PYTHON_PLUGIN_ID,
+                    "Python",
+                    include_str!("../../../plugins/python/plugin.manifest.template.json"),
+                ),
+            ]
+            .into_iter()
+            .map(|(plugin_id, display_name, manifest)| {
+                stored
+                    .iter()
+                    .find(|record| record.id.as_str() == plugin_id)
+                    .map_or_else(
+                        || bundled_plugin_summary(manifest, plugin_id, display_name, false),
+                        stored_plugin_summary,
+                    )
+            })
+            .collect::<TorbenResult<Vec<_>>>()?
         };
         for record in stored {
             if !cfg!(any(test, feature = "test-fixtures"))
-                && record.id.as_str() == BUNDLED_TEMURIN_PLUGIN_ID
+                && matches!(
+                    record.id.as_str(),
+                    BUNDLED_TEMURIN_PLUGIN_ID | BUNDLED_PYTHON_PLUGIN_ID
+                )
             {
                 continue;
             }
@@ -2997,8 +3064,36 @@ impl TorbenCore {
         executable: &[u8],
         shim_executable: &[u8],
     ) -> TorbenResult<PluginSummary> {
+        self.install_bundled_provider(
+            BundledProviderPackage {
+                plugin_id: BUNDLED_TEMURIN_PLUGIN_ID,
+                provider_name: "Eclipse Temurin",
+                binary_name: "temurin",
+                manifest_template: include_str!(
+                    "../../../plugins/temurin/plugin.manifest.template.json"
+                ),
+                executable,
+                resources: &[],
+            },
+            shim_executable,
+        )
+    }
+
+    fn install_bundled_provider(
+        &self,
+        package: BundledProviderPackage<'_>,
+        shim_executable: &[u8],
+    ) -> TorbenResult<PluginSummary> {
+        let BundledProviderPackage {
+            plugin_id,
+            provider_name,
+            binary_name,
+            manifest_template,
+            executable,
+            resources,
+        } = package;
         let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
-        let plugin_id = PluginId::new(BUNDLED_TEMURIN_PLUGIN_ID)?;
+        let plugin_id = PluginId::new(plugin_id)?;
         provision_bundled_shim(&self.paths, shim_executable)?;
         if let Some(record) = self.store.get_plugin(&plugin_id)? {
             return stored_plugin_summary(&record);
@@ -3006,14 +3101,17 @@ impl TorbenCore {
         if executable.is_empty() {
             return Err(TorbenError::new(
                 "bundled_plugin_payload_missing",
-                "This Torben App build does not contain the Eclipse Temurin plugin payload.",
-            ));
+                format!(
+                    "This Torben App build does not contain the {provider_name} plugin payload."
+                ),
+            )
+            .with_detail("pluginId", plugin_id.to_string()));
         }
 
-        let source = self
-            .paths
-            .staging_dir()
-            .join(format!("bundled-temurin-source-{}", OperationId::new()));
+        let source = self.paths.staging_dir().join(format!(
+            "bundled-{binary_name}-source-{}",
+            OperationId::new()
+        ));
         std::fs::create_dir_all(&source).map_err(|error| {
             TorbenError::new(
                 "plugin_stage_failed",
@@ -3021,26 +3119,47 @@ impl TorbenCore {
             )
             .with_detail("reason", error.to_string())
         })?;
-        let executable_name = format!("torben-plugin-temurin{}", std::env::consts::EXE_SUFFIX);
+        let executable_name = format!(
+            "torben-plugin-{binary_name}{}",
+            std::env::consts::EXE_SUFFIX
+        );
         let executable_path = source.join(&executable_name);
         let manifest_path = source.join("plugin.json");
         let install_result = (|| {
             write_bundled_payload(&executable_path, executable)?;
-            let mut manifest: PluginManifest = serde_json::from_str(include_str!(
-                "../../../plugins/temurin/plugin.manifest.template.json"
-            ))
-            .map_err(|error| {
-                TorbenError::internal("The bundled Temurin manifest is invalid.")
+            for resource in resources {
+                let actual_sha256 = hex::encode(Sha256::digest(resource.contents));
+                if resource.contents.is_empty() || actual_sha256 != resource.expected_sha256 {
+                    return Err(TorbenError::new(
+                        "bundled_plugin_resource_invalid",
+                        format!(
+                            "The bundled {provider_name} resource is missing or does not match its pinned SHA-256."
+                        ),
+                    )
+                    .with_detail("pluginId", plugin_id.to_string())
+                    .with_detail("resource", resource.filename)
+                    .with_detail("expected", resource.expected_sha256)
+                    .with_detail("actual", actual_sha256));
+                }
+                write_bundled_payload(&source.join(resource.filename), resource.contents)?;
+            }
+            let mut manifest: PluginManifest =
+                serde_json::from_str(manifest_template).map_err(|error| {
+                    TorbenError::internal(format!(
+                        "The bundled {provider_name} manifest is invalid."
+                    ))
                     .with_detail("reason", error.to_string())
-            })?;
+                })?;
             manifest.targets = vec![PluginTarget {
                 target: node_plugin::current_target(),
                 executable: executable_name,
                 sha256: hex::encode(Sha256::digest(executable)),
             }];
             let manifest_json = serde_json::to_vec_pretty(&manifest).map_err(|error| {
-                TorbenError::internal("Could not serialize the bundled Temurin manifest.")
-                    .with_detail("reason", error.to_string())
+                TorbenError::internal(format!(
+                    "Could not serialize the bundled {provider_name} manifest."
+                ))
+                .with_detail("reason", error.to_string())
             })?;
             write_bundled_payload(&manifest_path, &manifest_json)?;
             let verified =
@@ -3052,7 +3171,7 @@ impl TorbenCore {
             (Ok(summary), Ok(())) => Ok(summary),
             (Ok(_), Err(error)) => Err(TorbenError::new(
                 "plugin_stage_cleanup_failed",
-                "The Temurin plugin was installed, but its source staging directory could not be removed.",
+                format!("The {provider_name} plugin was installed, but its source staging directory could not be removed."),
             )
             .with_detail("path", source.display().to_string())
             .with_detail("reason", error.to_string())),
@@ -3060,44 +3179,89 @@ impl TorbenCore {
         }
     }
 
+    pub fn install_bundled_python(
+        &self,
+        executable: &[u8],
+        python_manager_package: &[u8],
+        shim_executable: &[u8],
+    ) -> TorbenResult<PluginSummary> {
+        let resources = [BundledPluginResource {
+            filename: PYTHON_MANAGER_PACKAGE_FILENAME,
+            contents: python_manager_package,
+            expected_sha256: PYTHON_MANAGER_PACKAGE_SHA256,
+        }];
+        self.install_bundled_provider(
+            BundledProviderPackage {
+                plugin_id: BUNDLED_PYTHON_PLUGIN_ID,
+                provider_name: "Python",
+                binary_name: "python",
+                manifest_template: include_str!(
+                    "../../../plugins/python/plugin.manifest.template.json"
+                ),
+                executable,
+                resources: &resources,
+            },
+            shim_executable,
+        )
+    }
+
     pub fn uninstall_bundled_temurin(&self) -> TorbenResult<()> {
+        self.uninstall_bundled_provider(
+            BUNDLED_TEMURIN_PLUGIN_ID,
+            "Eclipse Temurin",
+            "temurin",
+            "JDK",
+        )
+    }
+
+    pub fn uninstall_bundled_python(&self) -> TorbenResult<()> {
+        self.uninstall_bundled_provider(
+            BUNDLED_PYTHON_PLUGIN_ID,
+            "Python",
+            "python",
+            "Python runtime",
+        )
+    }
+
+    fn uninstall_bundled_provider(
+        &self,
+        plugin_id: &str,
+        provider_name: &str,
+        app_id: &str,
+        managed_name: &str,
+    ) -> TorbenResult<()> {
         let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
-        let plugin_id = PluginId::new(BUNDLED_TEMURIN_PLUGIN_ID)?;
+        let plugin_id = PluginId::new(plugin_id)?;
         let Some(record) = self.store.get_plugin(&plugin_id)? else {
             return Err(TorbenError::new(
                 "plugin_not_found",
-                "The Eclipse Temurin plugin is not installed.",
+                format!("The {provider_name} plugin is not installed."),
             )
             .with_detail("pluginId", plugin_id.to_string()));
         };
         if record.origin != PluginOrigin::BuiltIn {
             return Err(TorbenError::new(
                 "plugin_origin_invalid",
-                "Only the bundled Eclipse Temurin plugin can be removed here.",
+                format!("Only the bundled {provider_name} plugin can be removed here."),
             )
             .with_detail("pluginId", plugin_id.to_string()));
         }
-        let has_managed_jdk = self
-            .store
-            .list_installations()?
-            .into_iter()
-            .any(|installation| {
-                installation.app_id.as_str() == "temurin"
-                    && installation.scope == InstallScope::Managed
-            });
-        if has_managed_jdk
-            || self
-                .store
-                .selected_version(&AppId::new("temurin")?)?
-                .is_some()
-        {
+        let has_managed_runtime =
+            self.store
+                .list_installations()?
+                .into_iter()
+                .any(|installation| {
+                    installation.app_id.as_str() == app_id
+                        && installation.scope == InstallScope::Managed
+                });
+        if has_managed_runtime || self.store.selected_version(&AppId::new(app_id)?)?.is_some() {
             return Err(TorbenError::new(
                 "plugin_in_use",
-                "Uninstall all managed Eclipse Temurin versions before removing its plugin.",
+                format!("Uninstall all managed {managed_name} versions before removing the {provider_name} plugin."),
             )
             .with_detail("pluginId", plugin_id.to_string())
             .with_remediation(
-                "Open the Eclipse Temurin page in the catalog and uninstall every managed JDK first.",
+                format!("Open the {provider_name} page and uninstall every managed {managed_name} first."),
             ));
         }
 
@@ -3359,7 +3523,10 @@ impl TorbenCore {
                 | BUNDLED_VSCODE_PLUGIN_ID
                 | BUNDLED_CODEX_PLUGIN_ID
         ) && !(origin == PluginOrigin::BuiltIn
-            && source_plugin.manifest.id.as_str() == BUNDLED_TEMURIN_PLUGIN_ID)
+            && matches!(
+                source_plugin.manifest.id.as_str(),
+                BUNDLED_TEMURIN_PLUGIN_ID | BUNDLED_PYTHON_PLUGIN_ID
+            ))
         {
             return Err(TorbenError::new(
                 "plugin_id_reserved",
@@ -3454,7 +3621,12 @@ impl TorbenCore {
     fn ensure_supported_app(&self, app_id: &AppId) -> TorbenResult<()> {
         let fixture_build = cfg!(any(test, feature = "test-fixtures"));
         if bundled_app_support_available(app_id, fixture_build)
-            && (app_id.as_str() != "temurin" || fixture_build || self.temurin_plugin_enabled()?)
+            && (fixture_build
+                || match app_id.as_str() {
+                    "temurin" => self.temurin_plugin_enabled()?,
+                    "python" => self.python_plugin_enabled()?,
+                    _ => true,
+                })
         {
             Ok(())
         } else {
@@ -3467,10 +3639,63 @@ impl TorbenCore {
     }
 
     fn temurin_plugin_enabled(&self) -> TorbenResult<bool> {
+        self.bundled_plugin_enabled(BUNDLED_TEMURIN_PLUGIN_ID)
+    }
+
+    fn python_plugin_enabled(&self) -> TorbenResult<bool> {
+        self.bundled_plugin_enabled(BUNDLED_PYTHON_PLUGIN_ID)
+    }
+
+    fn bundled_plugin_enabled(&self, plugin_id: &str) -> TorbenResult<bool> {
         Ok(self
             .store
-            .get_plugin(&PluginId::new(BUNDLED_TEMURIN_PLUGIN_ID)?)?
+            .get_plugin(&PluginId::new(plugin_id)?)?
             .is_some_and(|plugin| plugin.enabled))
+    }
+
+    fn bundled_plugin_resource(&self, plugin_id: &str, filename: &str) -> TorbenResult<PathBuf> {
+        if filename.is_empty()
+            || Path::new(filename).components().count() != 1
+            || matches!(filename, "." | "..")
+        {
+            return Err(TorbenError::new(
+                "bundled_plugin_resource_invalid",
+                "A bundled plugin resource name is invalid.",
+            )
+            .with_detail("resource", filename));
+        }
+        let plugin_id = PluginId::new(plugin_id)?;
+        let record = self.store.get_plugin(&plugin_id)?.ok_or_else(|| {
+            TorbenError::new(
+                "bundled_plugin_missing",
+                "The bundled plugin is not installed.",
+            )
+            .with_detail("pluginId", plugin_id.to_string())
+        })?;
+        if record.origin != PluginOrigin::BuiltIn || !record.enabled {
+            return Err(TorbenError::new(
+                "bundled_plugin_resource_invalid",
+                "A bundled plugin resource cannot be loaded from this plugin record.",
+            )
+            .with_detail("pluginId", plugin_id.to_string()));
+        }
+        let resource = validate_bundled_plugin_uninstall_path(&self.paths, &record)?.join(filename);
+        match resource.symlink_metadata() {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                Ok(resource)
+            }
+            Ok(_) => Err(TorbenError::new(
+                "bundled_plugin_resource_invalid",
+                "A bundled plugin resource is not a regular file.",
+            )
+            .with_detail("path", resource.display().to_string())),
+            Err(error) => Err(TorbenError::new(
+                "bundled_plugin_resource_missing",
+                "A required bundled plugin resource is unavailable.",
+            )
+            .with_detail("path", resource.display().to_string())
+            .with_detail("reason", error.to_string())),
+        }
     }
 
     fn bundled_plugin(&self, app_id: &AppId) -> TorbenResult<&node_plugin::BundledPlugin> {
@@ -3498,9 +3723,7 @@ impl TorbenCore {
                 Some(&self.node_plugin)
             }
             BUNDLED_TEMURIN_PLUGIN_ID => Some(&self.temurin_plugin),
-            BUNDLED_PYTHON_PLUGIN_ID if cfg!(any(test, feature = "test-fixtures")) => {
-                Some(&self.python_plugin)
-            }
+            BUNDLED_PYTHON_PLUGIN_ID => Some(&self.python_plugin),
             BUNDLED_GIT_PLUGIN_ID if cfg!(any(test, feature = "test-fixtures")) => {
                 Some(&self.git_plugin)
             }
@@ -3581,12 +3804,8 @@ impl TorbenCore {
 fn bundled_app_support_available(app_id: &AppId, fixture_build: bool) -> bool {
     // Provider behavior remains compiled for deterministic fixture coverage, but
     // release builds do not expose these applications until their data paths are constrained.
-    matches!(app_id.as_str(), "temurin")
-        || (fixture_build
-            && matches!(
-                app_id.as_str(),
-                "node" | "python" | "git" | "vscode" | "codex"
-            ))
+    matches!(app_id.as_str(), "temurin" | "python")
+        || (fixture_build && matches!(app_id.as_str(), "node" | "git" | "vscode" | "codex"))
 }
 
 #[cfg(feature = "test-fixtures")]
@@ -3788,7 +4007,7 @@ fn execute_bundled_plugin_uninstall(
     std::fs::rename(version_dir, &staged).map_err(|error| {
         TorbenError::new(
             "plugin_uninstall_stage_failed",
-            "Could not stage the bundled Eclipse Temurin plugin for removal.",
+            "Could not stage the bundled plugin for removal.",
         )
         .with_detail("path", version_dir.display().to_string())
         .with_detail("reason", error.to_string())
@@ -7358,12 +7577,13 @@ mod tests {
     };
 
     use super::{
-        BUNDLED_TEMURIN_PLUGIN_ID, PluginRecord, StateStore, TorbenCore, TorbenPaths,
-        bundled_app_support_available, commit_staged_shims, execute_plugin_install_transaction,
-        execute_uninstall_transaction, install_selection_shims_locked, install_shims_locked,
-        package_request_from_managed_plan, package_to_managed_token, shell_integration_is_healthy,
-        shim_destinations, source_adapter_is_healthy, source_migration_backup,
-        stage_and_commit_shims, stage_managed_source, stage_shim_copies, validate_uninstall_plan,
+        BUNDLED_PYTHON_PLUGIN_ID, BUNDLED_TEMURIN_PLUGIN_ID, PYTHON_MANAGER_PACKAGE_FILENAME,
+        PluginRecord, StateStore, TorbenCore, TorbenPaths, bundled_app_support_available,
+        commit_staged_shims, execute_plugin_install_transaction, execute_uninstall_transaction,
+        install_selection_shims_locked, install_shims_locked, package_request_from_managed_plan,
+        package_to_managed_token, shell_integration_is_healthy, shim_destinations,
+        source_adapter_is_healthy, source_migration_backup, stage_and_commit_shims,
+        stage_managed_source, stage_shim_copies, validate_uninstall_plan,
         write_managed_install_receipt, write_managed_uninstall_receipt,
         write_package_to_managed_receipt, write_plugin_install_receipt,
         write_selection_shim_receipt,
@@ -7371,7 +7591,7 @@ mod tests {
 
     #[test]
     fn release_build_gate_rejects_unsupported_software_plugins() {
-        for app_id in ["node", "python", "git", "vscode", "codex"] {
+        for app_id in ["node", "git", "vscode", "codex"] {
             assert!(!bundled_app_support_available(
                 &AppId::new(app_id).unwrap(),
                 false
@@ -7379,6 +7599,10 @@ mod tests {
         }
         assert!(bundled_app_support_available(
             &AppId::new("temurin").unwrap(),
+            false
+        ));
+        assert!(bundled_app_support_available(
+            &AppId::new("python").unwrap(),
             false
         ));
     }
@@ -8414,6 +8638,73 @@ mod tests {
                 .get_plugin(&PluginId::new(BUNDLED_TEMURIN_PLUGIN_ID).unwrap())
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn bundled_python_payload_installs_and_uninstalls_inside_the_data_root() {
+        let root = tempdir().unwrap();
+        let core = TorbenCore::open(TorbenPaths::for_test(root.path().to_path_buf())).unwrap();
+
+        let installed = core
+            .install_bundled_python(
+                b"fixture python plugin",
+                b"fixture python manager",
+                b"fixture shim executable",
+            )
+            .unwrap();
+
+        assert_eq!(installed.id.as_str(), BUNDLED_PYTHON_PLUGIN_ID);
+        assert_eq!(installed.origin, PluginOrigin::BuiltIn);
+        let plugin_root = core
+            .paths
+            .plugin_dir()
+            .join(BUNDLED_PYTHON_PLUGIN_ID)
+            .join("0.1.0");
+        assert!(plugin_root.join("plugin.json").is_file());
+        assert!(
+            plugin_root
+                .join(format!(
+                    "torben-plugin-python{}",
+                    std::env::consts::EXE_SUFFIX
+                ))
+                .is_file()
+        );
+        assert_eq!(
+            std::fs::read(plugin_root.join(PYTHON_MANAGER_PACKAGE_FILENAME)).unwrap(),
+            b"fixture python manager"
+        );
+
+        core.uninstall_bundled_python().unwrap();
+
+        assert!(!plugin_root.exists());
+        assert!(
+            core.store
+                .get_plugin(&PluginId::new(BUNDLED_PYTHON_PLUGIN_ID).unwrap())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn bundled_python_rejects_an_unpinned_install_manager_package() {
+        let root = tempdir().unwrap();
+        let core = TorbenCore::open(TorbenPaths::for_test(root.path().to_path_buf())).unwrap();
+
+        let error = core
+            .install_bundled_python(
+                b"fixture python plugin",
+                b"modified python manager",
+                b"fixture shim executable",
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, "bundled_plugin_resource_invalid");
+        assert!(
+            core.store
+                .get_plugin(&PluginId::new(BUNDLED_PYTHON_PLUGIN_ID).unwrap())
+                .unwrap()
+                .is_none()
         );
     }
 
