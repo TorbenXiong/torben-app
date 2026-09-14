@@ -7,8 +7,9 @@ publication gates. macOS, Linux, and ARM64 evidence is retained for future platf
 
 ## Offline development gates
 
-Java and Python are enabled in production on Windows x64 after their provider and managed-runtime
-paths were constrained below the selected data root. The other provider lifecycle tests below run
+Java, Python, Node.js, Rust, MySQL, Redis, and PostgreSQL are enabled in production on Windows x64 after their
+provider and managed-runtime paths were constrained below the selected data root. Node.js shims also prepare npm cache,
+global package/configuration, temporary, compile-cache, and REPL history paths under `userData/node`. The other provider lifecycle tests below run
 only through unit-test or the default-off `test-fixtures` paths; passing them does not advertise
 current application support.
 
@@ -80,10 +81,12 @@ The Node.js first-milestone behaviors are covered by these fixture-backed tests:
 | Desktop startup, task polling, and settings errors recover without stale, overlapping, or duplicate notices | `retries a failed initial snapshot without restarting the desktop`, `clears a recovered task polling error without affecting the main snapshot`, `does not overlap slow task polling requests`, and `shows one local alert when saving settings fails` in `apps/desktop/src/test/App.test.tsx` |
 | Java catalog discovery returns one newest release per LTS line, persists a daily cache below the selected data root, defers maintenance until after startup and while the application is unfocused, and groups old cache entries while exposing managed upgrade | Temurin metadata and version-cache tests in `crates/torben-core`, the scheduled-task registry and idle-gate tests in `apps/desktop/src-tauri`, and Java grouping, upgrade, empty-cache, and event subscription tests in `apps/desktop/src/test` |
 | Python is exposed only after its embedded provider is installed; the plugin package also carries a SHA-256-pinned Python Install Manager MSI, and official minor-line discovery, exact target installation, CPython/pip health checks, terminal selection, managed upgrades, and plugin removal remain inside Core transactions | Python provider and manager-package fixtures in `crates/torben-core/src/python.rs`, bundled plugin lifecycle and production capability-gate tests in `crates/torben-core/src/lib.rs`, pinned download/build assertions in `eng/windows-portable.test.mjs`, scheduled catalog coverage in `apps/desktop/src-tauri`, and Python route, install, selection, and plugin tests in `apps/desktop/src/test` |
+| Managed Python commands keep pip's cache, `--user` packages, configuration, and temporary files below `userData/python` | `managed_python_commands_keep_pip_state_below_torben_data_root` in `crates/torben-core/src/python.rs` |
+| PostgreSQL exposes only two pinned core versions, validates EDB installer identity and WinGet SHA-256 values, checks server/client/tool commands before commit, and keeps selection configuration below `userData/postgresql` without assigning a shared `PGDATA` | PostgreSQL provider tests in `crates/torben-core/src/postgresql.rs`, JSON-RPC protocol coverage in `plugins/postgresql/tests/protocol.rs`, shim mapping tests, and the workspace build gates |
 | Local diagnostic logs are bounded and exclude free-form operation messages | `diagnostic_log::tests::operation_log_excludes_free_form_message`, `diagnostic_log::tests::rotates_to_one_bounded_backup`, and `tests::doctor_reports_the_local_diagnostic_log` in `crates/torben-core/src` |
 | Doctor does not report optional terminal integration or package-manager absence as a broken first-run state, but still rejects outdated Shell ownership and validates shims after a terminal selection exists | `shell_integration_actions_are_idempotent_and_update_doctor`, `doctor_distinguishes_optional_configuration_from_broken_configuration`, and `doctor_detects_outdated_command_shims` in `crates/torben-core/src/lib.rs` |
 | Fresh SQLite state records every embedded migration, the previous bootstrap ledger gap is repaired, and an older Core rejects a future schema before creating or changing application tables | `fresh_database_records_every_embedded_migration`, `repairs_the_preexisting_schema_two_receipt_gap`, and `rejects_a_database_from_a_newer_schema_before_creating_application_tables` in `crates/torben-core/src/store.rs` |
-| SQLite persists the ordered six-application catalog, the Java and Python managed sources, and four package-manager sources; schema migration preserves existing installation state and mismatched persisted identities fail closed | Catalog availability/source tests in `crates/torben-core/src/catalog.rs`, plus `persists_the_ordered_application_and_complete_source_catalog`, `migration_four_adds_the_catalog_without_changing_existing_installations`, and `rejects_a_persisted_application_with_a_mismatched_row_identity` in `crates/torben-core/src/store.rs` |
+| SQLite persists the ordered ten-application catalog, seven managed sources, and four package-manager sources; schema migration preserves existing installation state and mismatched persisted identities fail closed | Catalog availability/source tests in `crates/torben-core/src/catalog.rs`, plus `persists_the_ordered_application_and_complete_source_catalog`, `migration_four_adds_the_catalog_without_changing_existing_installations`, and `rejects_a_persisted_application_with_a_mismatched_row_identity` in `crates/torben-core/src/store.rs` |
 
 The cross-process lock test starts a separate copy of the Rust test process, holds the real fs4
 workspace file lock there, and proves that a contender cannot enter until the holder exits. Its
@@ -113,7 +116,7 @@ for the corresponding native package workflow run.
 Signed desktop fixtures additionally prove that verified metadata activates Authenticode checks
 for one package plus all eight installed executables, and activates `codesign`, stapler, and
 Gatekeeper checks for macOS. A signature command failure stops the launch probe. The Windows
-fixture asserts the encoded PowerShell command and its nine-path JSON input; only native workflow
+fixture asserts the encoded PowerShell command and its complete package/executable path input; only native workflow
 runs with protected signing credentials can provide positive trust evidence.
 
 ## Live and official-only evidence

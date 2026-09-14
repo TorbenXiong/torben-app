@@ -42,7 +42,7 @@ const filesystemRoots = new Set([
   "staging",
   "plugin_data",
 ]);
-const packageManagers = new Set(["winget", "homebrew", "apt", "dnf"]);
+const packageManagers = new Set(["winget", "homebrew", "apt", "dnf", "cargo", "pip"]);
 const supportedTargets = new Set([
   "windows-x86_64",
   "windows-aarch64",

@@ -15,6 +15,7 @@ import i18n from "../i18n";
 import {
   DiagnosticsPage,
   LogsPage,
+  PluginDetailPage,
   PluginsPage,
   PythonDetailPage,
   SettingsPage,
@@ -26,7 +27,6 @@ import type {
   ManagedLibraryMigrationResult,
   ManagedToPackageMigrationPlan,
   ManagedToPackageMigrationResult,
-  ManagedUpdateResult,
   OperationEvent,
   PackageInstallationRecord,
   PackageToManagedMigrationPlan,
@@ -56,7 +56,7 @@ const bundledPlugin: PluginSummary = {
   permissions: {
     networkDomains: ["nodejs.org"],
     filesystemRoots: ["managed_app_library"],
-    externalCommands: ["node", "npm", "npx"],
+    externalCommands: ["node", "npm", "npx", "pnpm"],
     packageManagers: [],
   },
 };
@@ -135,6 +135,7 @@ const defaultUpdatePreferences: UpdatePreferences = {
 
 afterEach(async () => {
   cleanup();
+  window.localStorage.removeItem("torben.plugin-order");
   vi.useRealTimers();
   vi.restoreAllMocks();
   await i18n.changeLanguage("en");
@@ -230,10 +231,7 @@ describe("Torben App shell", () => {
     expect(screen.getByText("Installed")).toBeInTheDocument();
     expect(javaLink).toHaveClass("nav-item-child");
     expect(javaLink).toHaveAttribute("href", "#/java");
-    expect(javaLink.querySelector(".java-nav-icon")).toHaveAttribute(
-      "src",
-      "/icons/java-temurin.png",
-    );
+    expect(javaLink.querySelector(".java-nav-icon")).toHaveAttribute("src", "/icons/duke.png");
 
     fireEvent.click(javaLink);
     expect(await screen.findByRole("heading", { name: "Available versions" })).toBeInTheDocument();
@@ -441,7 +439,7 @@ describe("Torben App shell", () => {
     expect(screen.queryByText("Recommended")).not.toBeInTheDocument();
   });
 
-  it("groups Java releases by JDK line and upgrades an installed older release", async () => {
+  it("keeps Java releases independently installable within the same JDK line", async () => {
     vi.spyOn(api, "getVersions").mockResolvedValue([
       {
         version: "25.0.3+9.0.LTS",
@@ -471,28 +469,69 @@ describe("Torben App shell", () => {
       installedAt: "fixture",
       health: "healthy",
     };
-    const applyUpdate = vi
-      .spyOn(api, "applyManagedUpdate")
-      .mockResolvedValue({} as ManagedUpdateResult);
+    const install = vi.spyOn(api, "installApp").mockResolvedValue({} as InstallRecord);
     const onChanged = vi.fn(async () => undefined);
 
     render(<TemurinDetailPage installed={[record]} onChanged={onChanged} selected={[record]} />);
 
-    expect(await screen.findAllByText("JDK 25")).toHaveLength(1);
-    expect(screen.getByText("v25.0.3+9.0.LTS → v25.0.4+101.0.LTS")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Upgrade Java to 25.0.4+101.0.LTS" }));
+    expect(await screen.findAllByText("JDK 25")).toHaveLength(2);
+    expect(screen.getByText("v25.0.3+9.0.LTS")).toBeInTheDocument();
+    expect(screen.getByText("v25.0.4+101.0.LTS")).toBeInTheDocument();
+    const newestRow = screen.getByText("v25.0.4+101.0.LTS").closest(".version-row");
+    expect(newestRow).not.toBeNull();
+    fireEvent.click(within(newestRow as HTMLElement).getByRole("button", { name: "Install" }));
 
     await waitFor(() => {
-      expect(applyUpdate).toHaveBeenCalledWith({
-        appId: "temurin",
-        channel: "25",
-        installedVersion: "25.0.3+9.0.LTS",
-        availableVersion: "25.0.4+101.0.LTS",
-        selectedVersion: "25.0.3+9.0.LTS",
-        releasedAt: "2026-07-21T00:00:00Z",
+      expect(install).toHaveBeenCalledWith("temurin", "25.0.4+101.0.LTS");
+      expect(onChanged).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("sets an installed Java runtime as the primary terminal version", async () => {
+    vi.spyOn(api, "getVersions").mockResolvedValue([
+      {
+        version: "21.0.2+13.0.LTS",
+        ltsName: "Java 21 LTS",
+        releasedAt: "2026-01-20T00:00:00Z",
         recommended: false,
-        automatic: false,
-      });
+      },
+    ]);
+    const select = vi.spyOn(api, "selectVersion").mockResolvedValue(undefined);
+    const enableShell = vi.spyOn(api, "setShellIntegration").mockResolvedValue({
+      state: "managed",
+      shimPath: "C:/Torben/shims",
+      targets: ["powershell"],
+      newTerminalRequired: true,
+    });
+    const onChanged = vi.fn(async () => undefined);
+    const record: InstallRecord = {
+      appId: "temurin",
+      version: "21.0.2+13.0.LTS",
+      sourceId: "temurin.official",
+      scope: "managed",
+      installPath: "C:/Torben/temurin/21.0.2+13.0.LTS",
+      installedAt: "fixture",
+      health: "healthy",
+    };
+
+    render(
+      <TemurinDetailPage
+        installed={[record]}
+        onChanged={onChanged}
+        selected={[]}
+        shellIntegration={{
+          state: "disabled",
+          shimPath: "C:/Torben/shims",
+          targets: [],
+          newTerminalRequired: false,
+        }}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Set as primary version" }));
+
+    await waitFor(() => {
+      expect(select).toHaveBeenCalledWith("temurin", "21.0.2+13.0.LTS");
+      expect(enableShell).toHaveBeenCalledWith(true);
       expect(onChanged).toHaveBeenCalledOnce();
     });
   });
@@ -567,9 +606,38 @@ describe("Torben App shell", () => {
     };
     const select = vi.spyOn(api, "selectVersion").mockResolvedValue(undefined);
     rerender(<PythonDetailPage installed={[record]} onChanged={onChanged} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Use in terminal" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set as primary version" }));
 
     await waitFor(() => expect(select).toHaveBeenCalledWith("python", "3.14.7"));
+  });
+
+  it("keeps Python patch releases independently installable", async () => {
+    vi.spyOn(api, "getVersions").mockResolvedValue([
+      {
+        version: "3.14.8",
+        releasedAt: "2026-09-01T12:00:00Z",
+        recommended: true,
+      },
+    ]);
+    const installed: InstallRecord = {
+      appId: "python",
+      version: "3.14.7",
+      sourceId: "python.official",
+      scope: "managed",
+      installPath: "C:/Torben/python/3.14.7",
+      installedAt: "fixture",
+      health: "healthy",
+    };
+    const install = vi.spyOn(api, "installApp").mockResolvedValue(installed);
+
+    render(<PythonDetailPage installed={[installed]} onChanged={async () => undefined} />);
+
+    expect(await screen.findAllByText("Python 3.14")).toHaveLength(2);
+    expect(screen.getByText("v3.14.7")).toBeInTheDocument();
+    const availableRow = screen.getByText("v3.14.8").closest(".version-row");
+    expect(availableRow).not.toBeNull();
+    fireEvent.click(within(availableRow as HTMLElement).getByRole("button", { name: "Install" }));
+    await waitFor(() => expect(install).toHaveBeenCalledWith("python", "3.14.8"));
   });
 
   it("preserves structured Core error codes and remediation in the UI", () => {
@@ -1246,18 +1314,80 @@ describe("Torben App shell", () => {
     expect(screen.getByRole("button", { name: "Execute change" })).toBeEnabled();
   });
 
-  it("shows bundled plugin permissions and keeps its state immutable", () => {
-    render(<PluginsPage onChanged={async () => undefined} plugins={[bundledPlugin]} />);
+  it("shows a compact bundled Node.js card and an uninstall action", () => {
+    render(
+      <HashRouter>
+        <PluginsPage onChanged={async () => undefined} plugins={[bundledPlugin]} />
+      </HashRouter>,
+    );
 
-    expect(screen.getByText("nodejs.org")).toBeInTheDocument();
-    expect(screen.getByText("managed_app_library")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Node.js is a bundled plugin" })).toBeDisabled();
+    expect(screen.queryByText("nodejs.org")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View details for Node.js" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Uninstall Node.js" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Install plugin" }));
     expect(screen.getByText("Install a developer-mode plugin?")).toBeInTheDocument();
     expect(
       screen.getByText("Developer mode bypasses the signed official plugin registry."),
     ).toBeInTheDocument();
+  });
+
+  it("opens a separate plugin detail page with manifest information", async () => {
+    const page: SchemaPage = {
+      id: "runtime",
+      title: "Runtime status",
+      description: "Provider health",
+      sections: [
+        {
+          id: "health",
+          title: "Health",
+          description: null,
+          fields: [
+            {
+              id: "status",
+              label: "Status",
+              description: null,
+              kind: "status",
+              value: "Ready",
+              placeholder: null,
+              options: [],
+              readOnly: true,
+              required: false,
+            },
+          ],
+          actions: [],
+        },
+      ],
+    };
+    render(
+      <HashRouter>
+        <PluginDetailPage plugin={bundledPlugin} loadSchemaPages={async () => [page]} />
+      </HashRouter>,
+    );
+
+    expect(screen.getByRole("heading", { level: 1, name: "Node.js" })).toBeInTheDocument();
+    expect(screen.getByText("Torben App")).toBeInTheDocument();
+    expect(screen.getByText("nodejs.org")).toBeInTheDocument();
+    expect(await screen.findByText("Runtime status")).toBeInTheDocument();
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+  });
+
+  it("allows installed plugins to be reordered", () => {
+    const secondPlugin = {
+      ...bundledPlugin,
+      id: "app.torben.plugin.python",
+      displayName: "Python",
+    };
+    const { container } = render(
+      <HashRouter>
+        <PluginsPage onChanged={async () => undefined} plugins={[bundledPlugin, secondPlugin]} />
+      </HashRouter>,
+    );
+    const cards = () =>
+      [...container.querySelectorAll(".plugin-card h2")].map((heading) => heading.textContent);
+    expect(cards()).toEqual(["Node.js", "Python"]);
+    fireEvent.click(screen.getByRole("button", { name: "Move Node.js down" }));
+    expect(cards()).toEqual(["Python", "Node.js"]);
   });
 
   it("installs the available Eclipse Temurin plugin with an explicit install action", async () => {
@@ -1271,7 +1401,7 @@ describe("Torben App shell", () => {
       />,
     );
 
-    expect(screen.getByText(/Install the plugin, then open Manage JDK/)).toBeInTheDocument();
+    expect(screen.getByText("Manage Eclipse Temurin Java runtimes")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Install Java" }));
 
     await waitFor(() => {
@@ -1293,8 +1423,8 @@ describe("Torben App shell", () => {
       </HashRouter>,
     );
 
-    expect(screen.getByRole("link", { name: /Manage JDK/ })).toHaveAttribute("href", "#/java");
-    expect(screen.getByText(/install multiple JDKs/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute("href", "#/java");
+    expect(screen.getByText("Manage Eclipse Temurin Java runtimes")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Uninstall Java" }));
     expect(screen.getByText("Uninstall Java plugin?")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
@@ -1329,7 +1459,7 @@ describe("Torben App shell", () => {
         />
       </HashRouter>,
     );
-    expect(screen.getByRole("link", { name: /Manage Python/ })).toHaveAttribute("href", "#/python");
+    expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute("href", "#/python");
     fireEvent.click(screen.getByRole("button", { name: "Uninstall Python" }));
     expect(screen.getByText("Uninstall Python plugin?")).toBeInTheDocument();
     expect(
@@ -1337,6 +1467,112 @@ describe("Torben App shell", () => {
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
     await waitFor(() => expect(uninstallPython).toHaveBeenCalledOnce());
+  });
+
+  it("installs and uninstalls the bundled Node plugin", async () => {
+    const installNode = vi.fn(async () => bundledPlugin);
+    const uninstallNode = vi.fn(async () => undefined);
+    const onChanged = vi.fn(async () => undefined);
+    const { rerender } = render(
+      <PluginsPage
+        onChanged={onChanged}
+        onInstallBundledNode={installNode}
+        plugins={[{ ...bundledPlugin, enabled: false }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Install Node.js" }));
+    await waitFor(() => expect(installNode).toHaveBeenCalledOnce());
+
+    rerender(
+      <HashRouter>
+        <PluginsPage
+          onChanged={onChanged}
+          onUninstallBundledNode={uninstallNode}
+          plugins={[bundledPlugin]}
+        />
+      </HashRouter>,
+    );
+    expect(screen.getByRole("link", { name: "Open" })).toHaveAttribute("href", "#/node");
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall Node.js" }));
+    expect(screen.getByText("Uninstall Node.js plugin?")).toBeInTheDocument();
+    expect(screen.getByText(/Any managed Node.js must be uninstalled first/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
+    await waitFor(() => expect(uninstallNode).toHaveBeenCalledOnce());
+  });
+
+  it.each([
+    ["Rust", "rust", "/icons/rust.svg"],
+    ["MySQL", "mysql", "/icons/mysql-mark.png"],
+    ["Redis", "redis", "/icons/redis-mark.svg"],
+    ["PostgreSQL", "postgresql", "/icons/postgresql.svg"],
+  ])("opens the %s management page and renders its own icon", (displayName, appId, iconPath) => {
+    const plugin: PluginSummary = {
+      ...bundledPlugin,
+      id: `app.torben.plugin.${appId}`,
+      displayName,
+      capabilities: [...bundledPlugin.capabilities, "schema_ui"],
+    };
+    render(
+      <HashRouter>
+        <PluginsPage onChanged={async () => undefined} plugins={[plugin]} />
+      </HashRouter>,
+    );
+
+    const card = screen.getByRole("heading", { name: displayName }).closest(".plugin-card");
+    expect(card).not.toBeNull();
+    expect(within(card as HTMLElement).getByRole("link", { name: "Open" })).toHaveAttribute(
+      "href",
+      `#/${appId}`,
+    );
+    expect(card?.querySelector("img")).toHaveAttribute("src", iconPath);
+    expect(within(card as HTMLElement).queryByRole("button", { name: /pages$/ })).toBeNull();
+  });
+
+  it("installs bundled database and toolchain plugins instead of toggling immutable state", async () => {
+    const installRust = vi.fn(async () => ({ ...bundledPlugin, id: "app.torben.plugin.rust" }));
+    const installMysql = vi.fn(async () => ({ ...bundledPlugin, id: "app.torben.plugin.mysql" }));
+    const installRedis = vi.fn(async () => ({ ...bundledPlugin, id: "app.torben.plugin.redis" }));
+    const installPostgresql = vi.fn(async () => ({
+      ...bundledPlugin,
+      id: "app.torben.plugin.postgresql",
+    }));
+    const onChanged = vi.fn(async () => undefined);
+    const plugins = ["rust", "mysql", "redis", "postgresql"].map((appId) => ({
+      ...bundledPlugin,
+      id: `app.torben.plugin.${appId}`,
+      displayName:
+        appId === "postgresql"
+          ? "PostgreSQL"
+          : appId === "mysql"
+            ? "MySQL"
+            : appId[0].toUpperCase() + appId.slice(1),
+      enabled: false,
+    }));
+    render(
+      <HashRouter>
+        <PluginsPage
+          onChanged={onChanged}
+          onInstallBundledRust={installRust}
+          onInstallBundledMysql={installMysql}
+          onInstallBundledRedis={installRedis}
+          onInstallBundledPostgresql={installPostgresql}
+          plugins={plugins}
+        />
+      </HashRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Install Rust" }));
+    await waitFor(() => expect(installRust).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Install MySQL" }));
+    await waitFor(() => expect(installMysql).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Install Redis" }));
+    await waitFor(() => expect(installRedis).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Install PostgreSQL" }));
+    await waitFor(() => {
+      expect(installPostgresql).toHaveBeenCalledOnce();
+      expect(onChanged).toHaveBeenCalledTimes(4);
+    });
   });
 
   it("toggles sideloaded plugins through the shared Core action", async () => {
@@ -1358,7 +1594,7 @@ describe("Torben App shell", () => {
     });
   });
 
-  it("distinguishes an official registry plugin from a sideloaded plugin", () => {
+  it("shows details links for official and sideloaded plugins", () => {
     const officialPlugin: PluginSummary = {
       ...sideloadedPlugin,
       id: "app.example.official",
@@ -1373,8 +1609,10 @@ describe("Torben App shell", () => {
       />,
     );
 
-    expect(screen.getByText("Official registry")).toBeInTheDocument();
-    expect(screen.getByText("Sideloaded")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "View details for Official fixture" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View details for Fixture" })).toBeInTheDocument();
   });
 
   it("refreshes and installs through the configured official registry", async () => {
@@ -1388,19 +1626,21 @@ describe("Torben App shell", () => {
     const installRegistryPlugin = vi.fn(async () => sideloadedPlugin);
     const onChanged = vi.fn(async () => undefined);
     render(
-      <PluginsPage
-        installRegistryPlugin={installRegistryPlugin}
-        onChanged={onChanged}
-        plugins={[bundledPlugin]}
-        refreshRegistry={refreshRegistry}
-        registry={{
-          configured: true,
-          sourceUrl: "https://plugins.example/registry.json",
-          cachePath: "C:/Torben/cache/registry.json",
-          sequence: 7,
-          generatedAt: "2026-08-22T00:00:00Z",
-        }}
-      />,
+      <HashRouter>
+        <PluginsPage
+          installRegistryPlugin={installRegistryPlugin}
+          onChanged={onChanged}
+          plugins={[bundledPlugin]}
+          refreshRegistry={refreshRegistry}
+          registry={{
+            configured: true,
+            sourceUrl: "https://plugins.example/registry.json",
+            cachePath: "C:/Torben/cache/registry.json",
+            sequence: 7,
+            generatedAt: "2026-08-22T00:00:00Z",
+          }}
+        />
+      </HashRouter>,
     );
 
     expect(screen.getByText(/Trusted sequence 7/)).toHaveTextContent(
@@ -1529,12 +1769,14 @@ describe("Torben App shell", () => {
     const chooseManifest = vi.fn(async () => null);
     const installManifest = vi.fn(async () => sideloadedPlugin);
     render(
-      <PluginsPage
-        chooseManifest={chooseManifest}
-        installManifest={installManifest}
-        onChanged={async () => undefined}
-        plugins={[bundledPlugin]}
-      />,
+      <HashRouter>
+        <PluginsPage
+          chooseManifest={chooseManifest}
+          installManifest={installManifest}
+          onChanged={async () => undefined}
+          plugins={[bundledPlugin]}
+        />
+      </HashRouter>,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Install plugin" }));
@@ -1548,12 +1790,14 @@ describe("Torben App shell", () => {
     const installManifest = vi.fn(async () => sideloadedPlugin);
     const onChanged = vi.fn(async () => undefined);
     render(
-      <PluginsPage
-        chooseManifest={async () => "C:/fixture/plugin.json"}
-        installManifest={installManifest}
-        onChanged={onChanged}
-        plugins={[bundledPlugin]}
-      />,
+      <HashRouter>
+        <PluginsPage
+          chooseManifest={async () => "C:/fixture/plugin.json"}
+          installManifest={installManifest}
+          onChanged={onChanged}
+          plugins={[bundledPlugin]}
+        />
+      </HashRouter>,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Install plugin" }));

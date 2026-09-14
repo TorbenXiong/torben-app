@@ -76,7 +76,21 @@ fn query_command_emits_one_success_envelope_on_stdout() {
         .filter_map(|application| application["id"].as_str())
         .collect::<Vec<_>>();
     ids.sort_unstable();
-    assert_eq!(ids, ["codex", "git", "node", "python", "temurin", "vscode"]);
+    assert_eq!(
+        ids,
+        [
+            "codex",
+            "git",
+            "mysql",
+            "node",
+            "postgresql",
+            "python",
+            "redis",
+            "rust",
+            "temurin",
+            "vscode"
+        ]
+    );
 }
 
 #[test]

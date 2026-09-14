@@ -11,6 +11,10 @@ members = [
   "plugins/git",
   "plugins/node",
   "plugins/python",
+  "plugins/rust",
+  "plugins/mysql",
+  "plugins/postgresql",
+  "plugins/redis",
   "plugins/temurin",
   "plugins/vscode",
 ]

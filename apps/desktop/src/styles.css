@@ -756,14 +756,23 @@ a {
   letter-spacing: -0.03em;
 }
 .app-icon > img {
-  width: 100%;
-  height: 100%;
+  width: 32px;
+  height: 32px;
   border-radius: inherit;
-  object-fit: cover;
+  object-fit: contain;
+}
+.app-nav-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+.application-icon-rust {
+  filter: invert(1);
 }
 .java-nav-icon {
   border-radius: 4px;
-  object-fit: cover;
+  object-fit: contain;
 }
 .app-icon-node {
   color: #bdf295;
@@ -848,10 +857,27 @@ a {
   justify-content: flex-end;
   gap: 8px;
 }
-.java-version-row {
+.runtime-version-row {
   grid-template-columns: minmax(0, 1fr) 100px minmax(210px, auto);
 }
-.java-version-summary {
+.runtime-version-row:has(.runtime-operation-progress) {
+  padding-block: 8px;
+}
+.runtime-operation-progress {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 12px;
+  padding-bottom: 2px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.runtime-operation-progress .progress-track {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin-top: 0;
+}
+.runtime-version-summary {
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
@@ -1197,6 +1223,36 @@ a {
   justify-content: flex-end;
   gap: 8px;
 }
+.plugin-registry-disclosure {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.plugin-registry-disclosure summary {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  cursor: pointer;
+  list-style: none;
+}
+.plugin-registry-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+.plugin-registry-disclosure summary h2 {
+  margin: 0;
+  font-size: 13px;
+}
+.plugin-registry-disclosure[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+.plugin-registry-disclosure .registry-card-body {
+  padding: 10px 16px 0;
+}
+.plugin-registry-actions {
+  padding: 0 16px 14px;
+}
 
 .plugin-card {
   display: grid;
@@ -1207,6 +1263,7 @@ a {
 }
 .plugin-list {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 .plugin-card.is-disabled {
@@ -1221,6 +1278,87 @@ a {
 .plugin-card .plugin-metadata {
   min-height: 0;
   margin-bottom: 10px;
+}
+.plugin-summary {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.plugin-order-controls {
+  display: inline-flex;
+  gap: 2px;
+}
+.plugin-detail-page {
+  max-width: 1120px;
+}
+.plugin-detail-hero {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 22px;
+}
+.plugin-detail-hero h2 {
+  margin: 0;
+}
+.plugin-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.plugin-detail-section {
+  padding: 20px;
+}
+.plugin-detail-section h2 {
+  margin: 0 0 16px;
+  font-size: 15px;
+}
+.plugin-detail-facts {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+.plugin-detail-facts div {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 12px;
+}
+.plugin-detail-facts dt {
+  color: var(--muted);
+}
+.plugin-detail-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.plugin-detail-schema + .plugin-detail-schema {
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+.plugin-detail-schema h3,
+.plugin-detail-schema h4 {
+  margin: 0 0 8px;
+}
+.plugin-detail-schema p {
+  color: var(--muted);
+}
+.plugin-detail-schema ul {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.plugin-detail-schema li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.plugin-detail-schema li span {
+  color: var(--muted);
+  text-align: right;
 }
 .plugin-card-actions {
   display: flex;
@@ -1689,6 +1827,17 @@ a {
   }
   .settings-grid {
     grid-template-columns: 1fr;
+  }
+  .plugin-list,
+  .plugin-detail-grid {
+    grid-template-columns: 1fr;
+  }
+  .plugin-detail-hero {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+  .plugin-detail-hero > :last-child {
+    grid-column: 1 / -1;
+    justify-self: start;
   }
   .plugin-card,
   .registry-card {

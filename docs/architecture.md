@@ -24,11 +24,10 @@ camel-case payloads in one typed module.
 
 Plugins are native trusted processes that communicate through versioned JSON-RPC over stdio. A plugin describes applications, resolves aliases to exact versions, and produces application-specific plans. Core remains responsible for locking, durable operation state, download verification, staging, health checks, atomic commit, rollback, and SQLite state.
 
-The six bundled software providers are currently dormant. Production builds keep their application
-descriptors as unavailable catalog entries, omit their provider summaries and diagnostics, and
-reject application management calls. The implementation and fixture paths below are retained for
-one-at-a-time review; a provider returns to product support only after the managed application also
-keeps its own writable data under the selected Torben App installation root.
+Seven bundled software providers are available on Windows x64 after their embedded plugin payload is
+installed: Node.js, Temurin, Python, Rust, MySQL, Redis, and PostgreSQL. Git, Visual Studio Code, and
+Codex CLI remain unavailable catalog entries. A provider is exposed only after its managed commands
+and writable data paths have been constrained to the selected Torben App installation root.
 
 On Windows, Core starts provider plugins, package-source tools, health checks, and other managed
 background commands with `CREATE_NO_WINDOW`. The plugin host applies the same flag at its process
@@ -135,8 +134,8 @@ an unhealthy actionable check.
 
 SQLite is private to Core. The first migration creates installations, selections, sources, plugins,
 operations, settings, and schema migration tables. The fourth migration adds the ordered
-application catalog. On full Core startup, the six bundled application descriptors and their
-official sources plus winget, Homebrew, apt, and DNF are synchronized in one SQLite transaction;
+application catalog. On full Core startup, the ten bundled application descriptors and enabled
+managed sources plus winget, Homebrew, apt, and DNF are synchronized in one SQLite transaction;
 application list, search, and detail queries then read the persisted snapshot. Every journal update
 is projected into the operations table with its kind, latest state, complete event JSON, and update
 time; the desktop operation log reads this Core-owned projection rather than opening the database or
@@ -183,7 +182,8 @@ application version directory to delete.
 3. Verify official integrity metadata. For Node.js, Core first verifies the detached OpenPGP
    signature over the original `SHASUMS256.txt` bytes, then reads the archive SHA-256 from that
    authenticated manifest. A missing, malformed, untrusted, or invalid signature fails closed.
-4. Extract safely into a unique staging directory.
+4. Extract safely into a unique staging directory. PostgreSQL executes the verified EDB installer
+   only with unattended `extract-only` mode and disables Visual C++ runtime installation.
 5. Run the provider health check and verify the actual version. Node.js checks `node --version`
    against the exact requested version, then verifies that the co-located `npm` and `npx` commands
    start successfully and return semantic versions. The health-check child process receives the
@@ -508,7 +508,7 @@ background task or bypass an installation integrity check.
 
 ## Terminal selection
 
-One shim directory is the only Torben App PATH entry. `node`, `npm`, `npx`, `java`, `javac`,
+One shim directory is the only Torben App PATH entry. `node`, `npm`, `npx`, `pnpm`, `java`, `javac`,
 `python`, `python3`, `pip`, `pip3`, `git`, `code`, and `codex` aliases forward to the exact application
 installation selected in SQLite. The workspace and desktop package build
 `torben-shim` as a native tool shipped beside the host. Switching verifies the installation,
@@ -602,7 +602,32 @@ pins the official Windows index on the command line, and uses an exact tag and s
 Unix runs `configure`, parallel `make`, and `make install` with `DESTDIR` under
 staging, without a package manager or privilege elevation. Core validates the exact CPython version
 and a working pip before commit. Selection deploys `python`, `python3`, `pip`, and `pip3` shims; it
-does not set `PYTHONHOME`. External Python discovery remains read-only.
+does not set `PYTHONHOME`. The selected `pip` command receives provider-owned `PIP_CACHE_DIR`,
+`PYTHONUSERBASE`, `PIP_CONFIG_FILE`, and temporary directories below `userData/python`, so
+downloaded wheels and `pip install --user` files remain in Torben's managed data. Project virtual
+environments and project-local dependencies remain project-owned. External Python discovery remains
+read-only.
+
+## PostgreSQL installation strategy
+
+PostgreSQL Windows binaries are distributed by EDB. Torben pins two reviewed core versions to exact
+EDB installer revisions and to the corresponding SHA-256 values published in Microsoft WinGet
+manifests. Core accepts only the fixed `get.enterprisedb.com` HTTPS URLs, enforces a 1 GiB response
+limit, and verifies the installer before execution.
+
+The verified installer runs hidden and cancellable inside operation staging with `--mode
+unattended`, `--unattendedmodeui none`, `--extract-only yes`, `--install_runtimes no`, and a
+Core-owned `--prefix`. Core requires one extracted prefix containing `bin/postgres.exe`, verifies
+both `postgres --version` and `psql --version`, and checks the declared server, initialization,
+control, client, backup, restore, and maintenance commands before atomic commit. The workflow does
+not register or start a Windows service, create a database account or cluster, or install pgAdmin,
+StackBuilder, PostGIS, or drivers.
+
+Selection installs Torben shims for the managed PostgreSQL commands and sets `PGPASSFILE`,
+`PGSERVICEFILE`, and `PGSYSCONFDIR` below `userData/postgresql` for each launched command. Torben
+does not set `PGDATA` or call `initdb`: PostgreSQL major versions have incompatible cluster formats,
+so cluster creation and upgrade remain explicit user operations rather than an implicit consequence
+of switching the selected binary version.
 
 ## Git installation strategy
 

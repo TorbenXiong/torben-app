@@ -1,15 +1,15 @@
 # Torben App
 
 Torben App 是本地优先的 Windows x64 应用与运行时管理器。当前版本以单文件
-`TorbenApp.exe` 交付，通过插件逐个开放软件管理能力；目前支持 Java（Eclipse Temurin）和 Python。
+`TorbenApp.exe` 交付，通过插件逐个开放软件管理能力；目前支持 Java（Eclipse Temurin）、Python、Node.js、Rust、MySQL、Redis 和 PostgreSQL。
 
 项目为独立重写，不读取或复用 SoftPilot 的代码与状态格式。
 
 ## 当前范围
 
 - 支持平台：Windows x64。
-- 当前软件插件：Java（Eclipse Temurin）和 Python。
-- 暂不开放：Node.js、Git、Visual Studio Code 和 Codex CLI。
+- 当前软件插件：Java（Eclipse Temurin）、Python、Node.js、Rust、MySQL、Redis 和 PostgreSQL。
+- 暂不开放：Git、Visual Studio Code 和 Codex CLI。
 - 暂缓平台：Windows ARM64、macOS 和 Linux。
 - 不包含账号、云同步、遥测、常驻后台服务和项目级版本固定。
 
@@ -40,11 +40,41 @@ WebView2 数据。升级只需运行新的 `TorbenApp.exe`；应用会替换目�
 Release 可执行文件通过 Windows manifest 请求管理员权限。开发构建不会在每次启动时触发
 UAC。
 
-界面默认打开“插件”。安装 Java 或 Python 插件后，左侧出现对应的运行时管理入口；设置
+界面默认打开“插件”。安装 Java、Python、Node.js、Rust、MySQL、Redis 或 PostgreSQL 插件后，左侧出现对应的管理入口；设置
 固定在侧栏底部，日志和诊断集中在标题栏“帮助”菜单中。“帮助”菜单也提供版本和产品
 介绍。Python 插件内置固定版本且经过 SHA-256 校验的 python.org 官方 Python Install
 Manager；Torben App 使用其 `--target` 模式将运行时写入 `userData`，不依赖系统 `PATH`
 中的 `py`。
+
+Node.js 插件提供官方 LTS、Current 和精确版本安装，以及 `node`、`npm`、`npx`、`pnpm` 终端选择。
+通过 Torben shim 启动时，npm 缓存、全局包、配置、临时文件和 Node.js 历史默认保存在
+`userData/node`，切换或卸载 Node.js 版本会保留这些数据。项目依赖仍写入项目目录；
+显式命令行路径选项和用户运行的脚本可以选择其他位置，这不是文件系统沙箱。
+全局包可以通过 `npm exec --global -- <命令>` 调用，无需增加系统 PATH 条目。
+pnpm 本身通过受管 npm 全局前缀安装，例如 `npm install --global pnpm@11.19.0`；pnpm
+store 和状态目录也位于 `userData/node`。
+
+Rust 插件使用官方 Rust stable 发行版，为 Windows x64 安装 `rustc`、`cargo`、`rustdoc` 和
+`rustfmt`。每个版本独立安装并可设置主版本；Cargo registry/git 缓存和临时目录统一保存在
+`userData/rust`，项目的 `target` 与 `Cargo.lock` 仍由项目自身管理。
+
+MySQL 插件管理官方 MySQL Community Server Windows x64 ZIP，并提供 `mysql`、`mysqld`、
+`mysqladmin` 和 `mysqldump`。Redis 官方不提供原生 Windows Open Source 二进制，因此 Redis
+插件明确使用 `redis-windows` 社区项目从上游 Redis 源码构建的 Windows x64 ZIP，提供
+`redis-server`、`redis-cli` 和 `redis-benchmark`。两者均支持多版本并存和主版本切换；命令
+历史分别保存在 `userData/mysql` 和 `userData/redis`，Redis 默认工作目录也固定为后者。
+
+PostgreSQL 插件提供 EDB 分发的 Windows x64 PostgreSQL server 和命令行工具。Torben App
+按 Microsoft WinGet 清单固定 installer SHA-256，只调用 EDB installer 的 `extract-only`
+模式，不注册 Windows 服务、不安装 pgAdmin 或 StackBuilder，也不自动执行 `initdb`。18 和
+17 major 可并行安装并分别设为主版本；PostgreSQL 配置与凭据文件路径统一位于
+`userData/postgresql`。Torben 不自动设置共享 `PGDATA`，以免切换 major 时把不兼容的数据目录
+交给另一版本；数据库实例初始化和升级由用户显式执行。
+
+Python 的 `pip` 也通过 Torben shim 启动。pip 缓存、`--user` 安装目录、配置和临时文件
+默认保存在 `userData/python`，不会写入用户配置目录。项目虚拟环境和项目依赖仍属于项目，
+由项目自身的锁文件管理。当前插件集合没有 Maven 或 Gradle 插件；Java 插件只提供 JDK，
+安装计划不会启动 Maven、Gradle 或其他包管理器。
 
 ## 仓库结构
 

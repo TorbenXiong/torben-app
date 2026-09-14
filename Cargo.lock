@@ -6545,6 +6545,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "torben-plugin-mysql"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+ "torben-contracts",
+ "torben-core",
+]
+
+[[package]]
 name = "torben-plugin-node"
 version = "0.1.0"
 dependencies = [
@@ -6556,7 +6567,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "torben-plugin-postgresql"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+ "torben-contracts",
+ "torben-core",
+]
+
+[[package]]
 name = "torben-plugin-python"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+ "torben-contracts",
+ "torben-core",
+]
+
+[[package]]
+name = "torben-plugin-redis"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+ "torben-contracts",
+ "torben-core",
+]
+
+[[package]]
+name = "torben-plugin-rust"
 version = "0.1.0"
 dependencies = [
  "serde",

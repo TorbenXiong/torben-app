@@ -1,6 +1,6 @@
 #![allow(clippy::needless_pass_by_value)]
 
-use std::{ffi::OsString, path::Path, process::Command};
+use std::{ffi::OsString, path::Path};
 
 use torben_contracts::{AppId, TorbenError, TorbenResult};
 use torben_core::TorbenCore;
@@ -37,15 +37,13 @@ fn run() -> TorbenResult<i32> {
     let core = TorbenCore::open_default()?;
     let app_id = app_for_command(&command)?;
     apply_managed_arguments(&app_id, &mut arguments);
-    let target = core.executable_for(&app_id, &command)?;
-    let status = Command::new(&target)
-        .args(arguments)
-        .status()
-        .map_err(|error| {
-            TorbenError::new("shim_start_failed", "Could not start the selected command.")
-                .with_detail("path", target.display().to_string())
-                .with_detail("reason", error.to_string())
-        })?;
+    let mut process = core.command_for(&app_id, &command)?;
+    let target = process.get_program().to_owned();
+    let status = process.args(arguments).status().map_err(|error| {
+        TorbenError::new("shim_start_failed", "Could not start the selected command.")
+            .with_detail("path", Path::new(&target).display().to_string())
+            .with_detail("reason", error.to_string())
+    })?;
     Ok(status.code().unwrap_or(1))
 }
 
@@ -61,9 +59,15 @@ fn apply_managed_arguments(app_id: &AppId, arguments: &mut Vec<OsString>) {
 
 fn app_for_command(command: &str) -> TorbenResult<AppId> {
     match command {
-        "node" | "npm" | "npx" => AppId::new("node"),
+        "node" | "npm" | "npx" | "pnpm" => AppId::new("node"),
         "java" | "javac" => AppId::new("temurin"),
         "python" | "python3" | "pip" | "pip3" => AppId::new("python"),
+        "rustc" | "cargo" | "rustdoc" | "rustfmt" => AppId::new("rust"),
+        "mysql" | "mysqld" | "mysqladmin" | "mysqldump" => AppId::new("mysql"),
+        "redis-server" | "redis-cli" | "redis-benchmark" => AppId::new("redis"),
+        "postgres" | "psql" | "pg_ctl" | "initdb" | "pg_isready" | "createdb" | "dropdb"
+        | "createuser" | "dropuser" | "pg_dump" | "pg_dumpall" | "pg_restore" | "pg_basebackup"
+        | "pgbench" | "vacuumdb" | "reindexdb" => AppId::new("postgresql"),
         "git" => AppId::new("git"),
         "code" => AppId::new("vscode"),
         "codex" => AppId::new("codex"),
@@ -90,12 +94,40 @@ fn _is_safe_alias(path: &Path) -> bool {
             "node"
                 | "npm"
                 | "npx"
+                | "pnpm"
                 | "java"
                 | "javac"
                 | "python"
                 | "python3"
                 | "pip"
                 | "pip3"
+                | "rustc"
+                | "cargo"
+                | "rustdoc"
+                | "rustfmt"
+                | "mysql"
+                | "mysqld"
+                | "mysqladmin"
+                | "mysqldump"
+                | "redis-server"
+                | "redis-cli"
+                | "redis-benchmark"
+                | "postgres"
+                | "psql"
+                | "pg_ctl"
+                | "initdb"
+                | "pg_isready"
+                | "createdb"
+                | "dropdb"
+                | "createuser"
+                | "dropuser"
+                | "pg_dump"
+                | "pg_dumpall"
+                | "pg_restore"
+                | "pg_basebackup"
+                | "pgbench"
+                | "vacuumdb"
+                | "reindexdb"
                 | "git"
                 | "code"
                 | "codex"
@@ -118,6 +150,15 @@ mod tests {
         assert_eq!(app_for_command("javac").unwrap().as_str(), "temurin");
         assert_eq!(app_for_command("python").unwrap().as_str(), "python");
         assert_eq!(app_for_command("pip3").unwrap().as_str(), "python");
+        assert_eq!(app_for_command("pnpm").unwrap().as_str(), "node");
+        assert_eq!(app_for_command("cargo").unwrap().as_str(), "rust");
+        assert_eq!(app_for_command("mysql").unwrap().as_str(), "mysql");
+        assert_eq!(app_for_command("mysqldump").unwrap().as_str(), "mysql");
+        assert_eq!(app_for_command("redis-server").unwrap().as_str(), "redis");
+        assert_eq!(app_for_command("redis-cli").unwrap().as_str(), "redis");
+        assert_eq!(app_for_command("postgres").unwrap().as_str(), "postgresql");
+        assert_eq!(app_for_command("psql").unwrap().as_str(), "postgresql");
+        assert_eq!(app_for_command("pg_dump").unwrap().as_str(), "postgresql");
         assert_eq!(app_for_command("git").unwrap().as_str(), "git");
         assert_eq!(app_for_command("code").unwrap().as_str(), "vscode");
         assert_eq!(app_for_command("codex").unwrap().as_str(), "codex");

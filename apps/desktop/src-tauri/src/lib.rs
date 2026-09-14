@@ -29,6 +29,11 @@ const UPDATER_ENDPOINT: &str =
 const UPDATER_PUBLIC_KEY: Option<&str> = option_env!("TORBEN_UPDATER_PUBLIC_KEY");
 
 #[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_NODE_PLUGIN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../target/release/torben-plugin-node.exe"
+));
+#[cfg(all(windows, not(debug_assertions)))]
 const EMBEDDED_TEMURIN_PLUGIN: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../target/release/torben-plugin-temurin.exe"
@@ -37,6 +42,26 @@ const EMBEDDED_TEMURIN_PLUGIN: &[u8] = include_bytes!(concat!(
 const EMBEDDED_PYTHON_PLUGIN: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../target/release/torben-plugin-python.exe"
+));
+#[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_RUST_PLUGIN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../target/release/torben-plugin-rust.exe"
+));
+#[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_MYSQL_PLUGIN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../target/release/torben-plugin-mysql.exe"
+));
+#[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_REDIS_PLUGIN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../target/release/torben-plugin-redis.exe"
+));
+#[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_POSTGRESQL_PLUGIN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../target/release/torben-plugin-postgresql.exe"
 ));
 #[cfg(all(windows, not(debug_assertions)))]
 const EMBEDDED_PYTHON_MANAGER: &[u8] = include_bytes!(concat!(
@@ -49,9 +74,19 @@ const EMBEDDED_TORBEN_SHIM: &[u8] = include_bytes!(concat!(
     "/../../../target/release/torben-shim.exe"
 ));
 #[cfg(any(not(windows), debug_assertions))]
+const EMBEDDED_NODE_PLUGIN: &[u8] = &[];
+#[cfg(any(not(windows), debug_assertions))]
 const EMBEDDED_TEMURIN_PLUGIN: &[u8] = &[];
 #[cfg(any(not(windows), debug_assertions))]
 const EMBEDDED_PYTHON_PLUGIN: &[u8] = &[];
+#[cfg(any(not(windows), debug_assertions))]
+const EMBEDDED_MYSQL_PLUGIN: &[u8] = &[];
+#[cfg(any(not(windows), debug_assertions))]
+const EMBEDDED_REDIS_PLUGIN: &[u8] = &[];
+#[cfg(any(not(windows), debug_assertions))]
+const EMBEDDED_POSTGRESQL_PLUGIN: &[u8] = &[];
+#[cfg(any(not(windows), debug_assertions))]
+const EMBEDDED_RUST_PLUGIN: &[u8] = &[];
 #[cfg(any(not(windows), debug_assertions))]
 const EMBEDDED_PYTHON_MANAGER: &[u8] = &[];
 #[cfg(any(not(windows), debug_assertions))]
@@ -483,6 +518,42 @@ async fn install_plugin(
 }
 
 #[tauri::command]
+async fn install_bundled_node_plugin(
+    core: State<'_, Arc<TorbenCore>>,
+    app: tauri::AppHandle,
+) -> Result<PluginSummary, TorbenError> {
+    let core = Arc::clone(core.inner());
+    let install_core = Arc::clone(&core);
+    let summary = tauri::async_runtime::spawn_blocking(move || {
+        install_core.install_bundled_node(EMBEDDED_NODE_PLUGIN, EMBEDDED_TORBEN_SHIM)
+    })
+    .await
+    .map_err(|error| {
+        TorbenError::internal(
+            "The bundled Node.js plugin installation task could not be completed.",
+        )
+        .with_detail("reason", error.to_string())
+    })??;
+    scheduled_tasks::refresh_after_user_action(core, app, AppId::new("node")?);
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn uninstall_bundled_node_plugin(
+    core: State<'_, Arc<TorbenCore>>,
+) -> Result<(), TorbenError> {
+    let core = Arc::clone(core.inner());
+    tauri::async_runtime::spawn_blocking(move || core.uninstall_bundled_node())
+        .await
+        .map_err(|error| {
+            TorbenError::internal(
+                "The bundled Node.js plugin uninstall task could not be completed.",
+            )
+            .with_detail("reason", error.to_string())
+        })?
+}
+
+#[tauri::command]
 async fn install_bundled_temurin_plugin(
     core: State<'_, Arc<TorbenCore>>,
     app: tauri::AppHandle,
@@ -551,6 +622,138 @@ async fn uninstall_bundled_python_plugin(
         .map_err(|error| {
             TorbenError::internal(
                 "The bundled Python plugin uninstall task could not be completed.",
+            )
+            .with_detail("reason", error.to_string())
+        })?
+}
+
+#[tauri::command]
+async fn install_bundled_rust_plugin(
+    core: State<'_, Arc<TorbenCore>>,
+    app: tauri::AppHandle,
+) -> Result<PluginSummary, TorbenError> {
+    let core = Arc::clone(core.inner());
+    let install_core = Arc::clone(&core);
+    let summary = tauri::async_runtime::spawn_blocking(move || {
+        install_core.install_bundled_rust(EMBEDDED_RUST_PLUGIN, EMBEDDED_TORBEN_SHIM)
+    })
+    .await
+    .map_err(|error| {
+        TorbenError::internal("The bundled Rust plugin installation task could not be completed.")
+            .with_detail("reason", error.to_string())
+    })??;
+    scheduled_tasks::refresh_after_user_action(core, app, AppId::new("rust")?);
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn uninstall_bundled_rust_plugin(
+    core: State<'_, Arc<TorbenCore>>,
+) -> Result<(), TorbenError> {
+    let core = Arc::clone(core.inner());
+    tauri::async_runtime::spawn_blocking(move || core.uninstall_bundled_rust())
+        .await
+        .map_err(|error| {
+            TorbenError::internal("The bundled Rust plugin uninstall task could not be completed.")
+                .with_detail("reason", error.to_string())
+        })?
+}
+
+#[tauri::command]
+async fn install_bundled_mysql_plugin(
+    core: State<'_, Arc<TorbenCore>>,
+    app: tauri::AppHandle,
+) -> Result<PluginSummary, TorbenError> {
+    let core = Arc::clone(core.inner());
+    let install_core = Arc::clone(&core);
+    let summary = tauri::async_runtime::spawn_blocking(move || {
+        install_core.install_bundled_mysql(EMBEDDED_MYSQL_PLUGIN, EMBEDDED_TORBEN_SHIM)
+    })
+    .await
+    .map_err(|error| {
+        TorbenError::internal("The bundled MySQL plugin installation task could not be completed.")
+            .with_detail("reason", error.to_string())
+    })??;
+    scheduled_tasks::refresh_after_user_action(core, app, AppId::new("mysql")?);
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn uninstall_bundled_mysql_plugin(
+    core: State<'_, Arc<TorbenCore>>,
+) -> Result<(), TorbenError> {
+    let core = Arc::clone(core.inner());
+    tauri::async_runtime::spawn_blocking(move || core.uninstall_bundled_mysql())
+        .await
+        .map_err(|error| {
+            TorbenError::internal("The bundled MySQL plugin uninstall task could not be completed.")
+                .with_detail("reason", error.to_string())
+        })?
+}
+
+#[tauri::command]
+async fn install_bundled_redis_plugin(
+    core: tauri::State<'_, Arc<TorbenCore>>,
+    app: tauri::AppHandle,
+) -> Result<PluginSummary, TorbenError> {
+    let install_core = Arc::clone(core.inner());
+    let refresh_core = Arc::clone(core.inner());
+    let summary = tauri::async_runtime::spawn_blocking(move || {
+        install_core.install_bundled_redis(EMBEDDED_REDIS_PLUGIN, EMBEDDED_TORBEN_SHIM)
+    })
+    .await
+    .map_err(|error| {
+        TorbenError::internal("The bundled Redis plugin installation task could not be completed.")
+            .with_detail("reason", error.to_string())
+    })??;
+    scheduled_tasks::refresh_after_user_action(refresh_core, app, AppId::new("redis")?);
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn uninstall_bundled_redis_plugin(
+    core: tauri::State<'_, Arc<TorbenCore>>,
+) -> Result<(), TorbenError> {
+    let core = Arc::clone(core.inner());
+    tauri::async_runtime::spawn_blocking(move || core.uninstall_bundled_redis())
+        .await
+        .map_err(|error| {
+            TorbenError::internal("The bundled Redis plugin uninstall task could not be completed.")
+                .with_detail("reason", error.to_string())
+        })?
+}
+
+#[tauri::command]
+async fn install_bundled_postgresql_plugin(
+    core: tauri::State<'_, Arc<TorbenCore>>,
+    app: tauri::AppHandle,
+) -> Result<PluginSummary, TorbenError> {
+    let install_core = Arc::clone(core.inner());
+    let refresh_core = Arc::clone(core.inner());
+    let summary = tauri::async_runtime::spawn_blocking(move || {
+        install_core.install_bundled_postgresql(EMBEDDED_POSTGRESQL_PLUGIN, EMBEDDED_TORBEN_SHIM)
+    })
+    .await
+    .map_err(|error| {
+        TorbenError::internal(
+            "The bundled PostgreSQL plugin installation task could not be completed.",
+        )
+        .with_detail("reason", error.to_string())
+    })??;
+    scheduled_tasks::refresh_after_user_action(refresh_core, app, AppId::new("postgresql")?);
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn uninstall_bundled_postgresql_plugin(
+    core: tauri::State<'_, Arc<TorbenCore>>,
+) -> Result<(), TorbenError> {
+    let core = Arc::clone(core.inner());
+    tauri::async_runtime::spawn_blocking(move || core.uninstall_bundled_postgresql())
+        .await
+        .map_err(|error| {
+            TorbenError::internal(
+                "The bundled PostgreSQL plugin uninstall task could not be completed.",
             )
             .with_detail("reason", error.to_string())
         })?
@@ -1286,10 +1489,20 @@ fn configure_core_commands(
             official_plugin_registry_status,
             refresh_official_plugin_registry,
             install_plugin,
+            install_bundled_node_plugin,
+            uninstall_bundled_node_plugin,
             install_bundled_temurin_plugin,
             uninstall_bundled_temurin_plugin,
             install_bundled_python_plugin,
             uninstall_bundled_python_plugin,
+            install_bundled_rust_plugin,
+            uninstall_bundled_rust_plugin,
+            install_bundled_mysql_plugin,
+            uninstall_bundled_mysql_plugin,
+            install_bundled_redis_plugin,
+            uninstall_bundled_redis_plugin,
+            install_bundled_postgresql_plugin,
+            uninstall_bundled_postgresql_plugin,
             install_official_plugin,
             install_official_plugin_from_registry,
             set_plugin_enabled,
@@ -1672,7 +1885,7 @@ mod tests {
                             "arguments": ["--version"],
                             "expected_output": format!("v{VERSION}")
                         },
-                        { "type": "create_shims", "commands": ["node", "npm", "npx"] }
+                        { "type": "create_shims", "commands": ["node", "npm", "npx", "pnpm"] }
                     ],
                     "metadata": { "target": test_fixtures::node_plugin_target() }
                 }

@@ -29,6 +29,15 @@ import {
 import { useTranslation } from "react-i18next";
 import { NavLink, useNavigate } from "react-router";
 import type { ApplicationDescriptor, PluginSummary } from "../types";
+import {
+  JavaIcon,
+  MysqlIcon,
+  NodeIcon,
+  PostgresqlIcon,
+  PythonIcon,
+  RedisIcon,
+  RustIcon,
+} from "./ApplicationIcon";
 
 const primaryNavigation = [{ to: "/plugins", key: "plugins", icon: Boxes }] as const;
 
@@ -37,20 +46,18 @@ const diagnosticsNavigation = { to: "/diagnostics", key: "diagnostics", icon: Ch
 const settingsNavigation = { to: "/settings", key: "settings", icon: Settings };
 const appVersion = "0.1.0";
 
-function JavaIcon({ size = 17 }: { size?: number }) {
-  return (
-    <img
-      alt=""
-      aria-hidden="true"
-      className="java-nav-icon"
-      height={size}
-      src="/icons/java-temurin.png"
-      width={size}
-    />
-  );
-}
-
-const supportedApplicationRoutes = new Set(["node", "temurin", "python", "git", "vscode", "codex"]);
+const supportedApplicationRoutes = new Set([
+  "node",
+  "temurin",
+  "python",
+  "rust",
+  "mysql",
+  "redis",
+  "postgresql",
+  "git",
+  "vscode",
+  "codex",
+]);
 
 interface CommandItem {
   description: string;
@@ -141,19 +148,55 @@ export function Layout({
   const temurinEnabled = plugins.some(
     (plugin) => plugin.id === "app.torben.plugin.temurin" && plugin.enabled,
   );
+  const nodeEnabled = plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.node" && plugin.enabled,
+  );
   const pythonEnabled = plugins.some(
     (plugin) => plugin.id === "app.torben.plugin.python" && plugin.enabled,
   );
+  const rustEnabled = plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.rust" && plugin.enabled,
+  );
+  const mysqlEnabled = plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.mysql" && plugin.enabled,
+  );
+  const redisEnabled = plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.redis" && plugin.enabled,
+  );
+  const postgresqlEnabled = plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.postgresql" && plugin.enabled,
+  );
   const runtimePages = useMemo<NavigationItem[]>(() => {
     const runtimePages = [];
+    if (nodeEnabled) runtimePages.push({ to: "/node", key: "node", icon: NodeIcon });
     if (temurinEnabled) {
       runtimePages.push({ to: "/java", key: "java", icon: JavaIcon });
     }
     if (pythonEnabled) {
-      runtimePages.push({ to: "/python", key: "python", icon: Command });
+      runtimePages.push({ to: "/python", key: "python", icon: PythonIcon });
+    }
+    if (rustEnabled) {
+      runtimePages.push({ to: "/rust", key: "rust", icon: RustIcon });
+    }
+    if (mysqlEnabled) {
+      runtimePages.push({ to: "/mysql", key: "mysql", icon: MysqlIcon });
+    }
+    if (redisEnabled) {
+      runtimePages.push({ to: "/redis", key: "redis", icon: RedisIcon });
+    }
+    if (postgresqlEnabled) {
+      runtimePages.push({ to: "/postgresql", key: "postgresql", icon: PostgresqlIcon });
     }
     return runtimePages;
-  }, [pythonEnabled, temurinEnabled]);
+  }, [
+    mysqlEnabled,
+    nodeEnabled,
+    postgresqlEnabled,
+    pythonEnabled,
+    redisEnabled,
+    rustEnabled,
+    temurinEnabled,
+  ]);
   const navigation = useMemo(
     () => [
       ...primaryNavigation,
@@ -184,7 +227,12 @@ export function Layout({
           application.capabilities.length > 0 &&
           supportedApplicationRoutes.has(application.id) &&
           (application.id !== "temurin" || temurinEnabled) &&
-          (application.id !== "python" || pythonEnabled),
+          (application.id !== "python" || pythonEnabled) &&
+          (application.id !== "node" || nodeEnabled) &&
+          (application.id !== "rust" || rustEnabled) &&
+          (application.id !== "mysql" || mysqlEnabled) &&
+          (application.id !== "redis" || redisEnabled) &&
+          (application.id !== "postgresql" || postgresqlEnabled),
       )
       .map((application) => ({
         description: t("layout.applicationCommandDescription", {
@@ -207,10 +255,31 @@ export function Layout({
             ? "/java"
             : application.id === "python"
               ? "/python"
-              : "/plugins",
+              : application.id === "node"
+                ? "/node"
+                : application.id === "rust"
+                  ? "/rust"
+                  : application.id === "mysql"
+                    ? "/mysql"
+                    : application.id === "redis"
+                      ? "/redis"
+                      : application.id === "postgresql"
+                        ? "/postgresql"
+                        : "/plugins",
       }));
     return [...pages, ...applicationCommands];
-  }, [applications, navigation, pythonEnabled, t, temurinEnabled]);
+  }, [
+    applications,
+    mysqlEnabled,
+    navigation,
+    nodeEnabled,
+    postgresqlEnabled,
+    pythonEnabled,
+    redisEnabled,
+    rustEnabled,
+    t,
+    temurinEnabled,
+  ]);
   const filteredCommands = useMemo(() => {
     const query = commandQuery.trim().toLocaleLowerCase();
     return query ? commands.filter((command) => command.searchable.includes(query)) : commands;

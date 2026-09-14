@@ -29,9 +29,19 @@ execFileSync(
     "--release",
     "--locked",
     "-p",
+    "torben-plugin-node",
+    "-p",
     "torben-plugin-temurin",
     "-p",
     "torben-plugin-python",
+    "-p",
+    "torben-plugin-rust",
+    "-p",
+    "torben-plugin-mysql",
+    "-p",
+    "torben-plugin-redis",
+    "-p",
+    "torben-plugin-postgresql",
     "-p",
     "torben-shim",
   ],
@@ -63,6 +73,7 @@ rmSync(outputRoot, { recursive: true, force: true });
 mkdirSync(outputRoot, { recursive: true });
 copyFileSync(join(releaseRoot, "torben-desktop.exe"), join(outputRoot, "TorbenApp.exe"));
 // The providers, Python Install Manager package, and shim are embedded into TorbenApp.exe. The
-// first run therefore contains no plugin or runtime payload; enabling Temurin or Python installs
+// first run therefore contains no plugin or runtime payload; enabling Node.js, Temurin, Python,
+// Rust, MySQL, Redis, or PostgreSQL installs
 // the verified embedded package into userData.
 console.log(`Portable bundle written to ${outputRoot}`);

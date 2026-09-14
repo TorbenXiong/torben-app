@@ -69,6 +69,38 @@ const mockApplications: ApplicationDescriptor[] = [
     sources: [],
   },
   {
+    id: "rust",
+    displayName: "Rust",
+    summary: "The Rust programming language with rustc and Cargo.",
+    categories: ["Runtime", "Development"],
+    capabilities: [],
+    sources: [],
+  },
+  {
+    id: "mysql",
+    displayName: "MySQL",
+    summary: "MySQL Community Server with managed client and server binaries.",
+    categories: ["Database", "Development"],
+    capabilities: [],
+    sources: [],
+  },
+  {
+    id: "redis",
+    displayName: "Redis",
+    summary: "Redis Community Server packaged for Windows development.",
+    categories: ["Database", "Development"],
+    capabilities: [],
+    sources: [],
+  },
+  {
+    id: "postgresql",
+    displayName: "PostgreSQL",
+    summary: "PostgreSQL server and command-line tools for Windows development.",
+    categories: ["Database", "Development"],
+    capabilities: [],
+    sources: [],
+  },
+  {
     id: "git",
     displayName: "Git",
     summary: "Official Git command-line releases with managed terminal selection.",
@@ -95,6 +127,115 @@ const mockApplications: ApplicationDescriptor[] = [
 ];
 
 const mockAvailablePlugins: PluginSummary[] = [
+  {
+    id: "app.torben.plugin.rust",
+    displayName: "Rust",
+    version: "0.1.0",
+    enabled: false,
+    origin: "built_in",
+    publisher: "Torben App",
+    capabilities: [
+      "version_discovery",
+      "external_discovery",
+      "managed_install",
+      "global_selection",
+      "managed_uninstall",
+      "schema_ui",
+    ],
+    permissions: {
+      networkDomains: ["api.github.com", "static.rust-lang.org"],
+      filesystemRoots: ["managed_app_library", "download_cache", "staging", "plugin_data"],
+      externalCommands: ["rustc", "cargo", "rustdoc", "rustfmt"],
+      packageManagers: ["cargo"],
+    },
+  },
+  {
+    id: "app.torben.plugin.mysql",
+    displayName: "MySQL",
+    version: "0.1.0",
+    enabled: false,
+    origin: "built_in",
+    publisher: "Torben App",
+    capabilities: [
+      "version_discovery",
+      "external_discovery",
+      "managed_install",
+      "global_selection",
+      "managed_uninstall",
+      "schema_ui",
+    ],
+    permissions: {
+      networkDomains: ["dev.mysql.com", "cdn.mysql.com"],
+      filesystemRoots: ["managed_app_library", "download_cache", "staging", "plugin_data"],
+      externalCommands: ["mysql", "mysqld", "mysqladmin", "mysqldump"],
+      packageManagers: [],
+    },
+  },
+  {
+    id: "app.torben.plugin.redis",
+    displayName: "Redis",
+    version: "0.1.0",
+    enabled: false,
+    origin: "built_in",
+    publisher: "Torben App",
+    capabilities: [
+      "version_discovery",
+      "external_discovery",
+      "managed_install",
+      "global_selection",
+      "managed_uninstall",
+      "schema_ui",
+    ],
+    permissions: {
+      networkDomains: [
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+      ],
+      filesystemRoots: ["managed_app_library", "download_cache", "staging", "plugin_data"],
+      externalCommands: ["redis-server", "redis-cli", "redis-benchmark"],
+      packageManagers: [],
+    },
+  },
+  {
+    id: "app.torben.plugin.postgresql",
+    displayName: "PostgreSQL",
+    version: "0.1.0",
+    enabled: false,
+    origin: "built_in",
+    publisher: "Torben App",
+    capabilities: [
+      "version_discovery",
+      "external_discovery",
+      "managed_install",
+      "global_selection",
+      "managed_uninstall",
+      "schema_ui",
+    ],
+    permissions: {
+      networkDomains: ["get.enterprisedb.com"],
+      filesystemRoots: ["managed_app_library", "download_cache", "staging", "plugin_data"],
+      externalCommands: [
+        "postgres",
+        "psql",
+        "pg_ctl",
+        "initdb",
+        "pg_isready",
+        "createdb",
+        "dropdb",
+        "createuser",
+        "dropuser",
+        "pg_dump",
+        "pg_dumpall",
+        "pg_restore",
+        "pg_basebackup",
+        "pgbench",
+        "vacuumdb",
+        "reindexdb",
+      ],
+      packageManagers: [],
+    },
+  },
   {
     id: "app.torben.plugin.temurin",
     displayName: "Java",
@@ -141,6 +282,28 @@ const mockAvailablePlugins: PluginSummary[] = [
       networkDomains: ["www.python.org"],
       filesystemRoots: ["managed_app_library", "download_cache", "staging"],
       externalCommands: ["python", "python3", "pip", "pip3"],
+      packageManagers: ["pip"],
+    },
+  },
+  {
+    id: "app.torben.plugin.node",
+    displayName: "Node.js",
+    version: "0.1.0",
+    enabled: false,
+    origin: "built_in",
+    publisher: "Torben App",
+    capabilities: [
+      "version_discovery",
+      "external_discovery",
+      "managed_install",
+      "global_selection",
+      "managed_uninstall",
+      "schema_ui",
+    ],
+    permissions: {
+      networkDomains: ["nodejs.org"],
+      filesystemRoots: ["managed_app_library", "download_cache", "staging"],
+      externalCommands: ["node", "npm", "npx", "pnpm"],
       packageManagers: [],
     },
   },
@@ -266,6 +429,168 @@ const mockPythonSchemaPages: SchemaPage[] = [
             description: null,
             kind: "status",
             value: "Pinned Python Install Manager package or Sigstore + SHA-256",
+            placeholder: null,
+            options: [],
+            readOnly: true,
+            required: false,
+          },
+        ],
+        actions: [],
+      },
+    ],
+  },
+];
+
+const mockRustSchemaPages: SchemaPage[] = [
+  {
+    id: "rust",
+    title: "Rust provider",
+    description: "Official Rust stable toolchains and managed Cargo caches.",
+    sections: [
+      {
+        id: "trust",
+        title: "Supply-chain status",
+        description: "Values are declared by the bundled plugin and rendered by Torben App.",
+        fields: [
+          {
+            id: "source",
+            label: "Release source",
+            description: null,
+            kind: "status",
+            value: "Rust official distribution",
+            placeholder: null,
+            options: [],
+            readOnly: true,
+            required: false,
+          },
+          {
+            id: "integrity",
+            label: "Integrity",
+            description: null,
+            kind: "status",
+            value: "SHA-256 from the official channel manifest",
+            placeholder: null,
+            options: [],
+            readOnly: true,
+            required: false,
+          },
+        ],
+        actions: [],
+      },
+    ],
+  },
+];
+
+const mockMysqlSchemaPages: SchemaPage[] = [
+  {
+    id: "mysql",
+    title: "MySQL provider",
+    description: "Official MySQL Community Server archives for Windows x64.",
+    sections: [
+      {
+        id: "trust",
+        title: "Supply-chain status",
+        description: "Values are declared by the bundled plugin and rendered by Torben App.",
+        fields: [
+          {
+            id: "source",
+            label: "Release source",
+            description: null,
+            kind: "status",
+            value: "Oracle MySQL Community Server archive",
+            placeholder: null,
+            options: [],
+            readOnly: true,
+            required: false,
+          },
+          {
+            id: "integrity",
+            label: "Integrity",
+            description: null,
+            kind: "status",
+            value: "Pinned official SHA-256 checksum",
+            placeholder: null,
+            options: [],
+            readOnly: true,
+            required: false,
+          },
+        ],
+        actions: [],
+      },
+    ],
+  },
+];
+
+const mockRedisSchemaPages: SchemaPage[] = [
+  {
+    id: "redis",
+    title: "Redis provider",
+    description:
+      "Redis Community Server packaged for Windows x64 by the redis-windows community project.",
+    sections: [
+      {
+        id: "trust",
+        title: "Supply-chain status",
+        description: "Values are declared by the bundled plugin and rendered by Torben App.",
+        fields: [
+          {
+            id: "source",
+            label: "Release source",
+            description: null,
+            kind: "status",
+            value: "redis-windows community build from upstream Redis source",
+            placeholder: null,
+            options: [],
+            readOnly: true,
+            required: false,
+          },
+          {
+            id: "integrity",
+            label: "Integrity",
+            description: null,
+            kind: "status",
+            value: "SHA-256 pinned from the redis-windows release",
+            placeholder: null,
+            options: [],
+            readOnly: true,
+            required: false,
+          },
+        ],
+        actions: [],
+      },
+    ],
+  },
+];
+
+const mockPostgresqlSchemaPages: SchemaPage[] = [
+  {
+    id: "postgresql",
+    title: "PostgreSQL provider",
+    description:
+      "EDB Windows installer extracted without registering a service or initializing a database.",
+    sections: [
+      {
+        id: "trust",
+        title: "Supply-chain status",
+        description: "Values are declared by the bundled plugin and rendered by Torben App.",
+        fields: [
+          {
+            id: "source",
+            label: "Release source",
+            description: null,
+            kind: "status",
+            value: "PostgreSQL Windows installer distributed by EDB",
+            placeholder: null,
+            options: [],
+            readOnly: true,
+            required: false,
+          },
+          {
+            id: "integrity",
+            label: "Integrity",
+            description: null,
+            kind: "status",
+            value: "Installer SHA-256 pinned to the Microsoft WinGet manifest",
             placeholder: null,
             options: [],
             readOnly: true,
@@ -926,6 +1251,20 @@ export async function installPlugin(
   return invoke<PluginSummary>("install_plugin", { manifestPath, developerMode });
 }
 
+export async function installBundledNodePlugin(): Promise<PluginSummary> {
+  if (!isTauri()) {
+    throw new Error("Bundled Node plugin installation is available in the Tauri desktop runtime.");
+  }
+  return invoke<PluginSummary>("install_bundled_node_plugin");
+}
+
+export async function uninstallBundledNodePlugin(): Promise<void> {
+  if (!isTauri()) {
+    throw new Error("Bundled Node plugin uninstall is available in the Tauri desktop runtime.");
+  }
+  await invoke("uninstall_bundled_node_plugin");
+}
+
 export async function installBundledTemurinPlugin(): Promise<PluginSummary> {
   if (!isTauri()) {
     throw new Error(
@@ -956,6 +1295,66 @@ export async function uninstallBundledPythonPlugin(): Promise<void> {
     throw new Error("Bundled Python plugin uninstall is available in the Tauri desktop runtime.");
   }
   await invoke("uninstall_bundled_python_plugin");
+}
+
+export async function installBundledRustPlugin(): Promise<PluginSummary> {
+  if (!isTauri()) {
+    throw new Error("Bundled Rust plugin installation is available in the Tauri desktop runtime.");
+  }
+  return invoke<PluginSummary>("install_bundled_rust_plugin");
+}
+
+export async function uninstallBundledRustPlugin(): Promise<void> {
+  if (!isTauri()) {
+    throw new Error("Bundled Rust plugin uninstall is available in the Tauri desktop runtime.");
+  }
+  await invoke("uninstall_bundled_rust_plugin");
+}
+
+export async function installBundledMysqlPlugin(): Promise<PluginSummary> {
+  if (!isTauri()) {
+    throw new Error("Bundled MySQL plugin installation is available in the Tauri desktop runtime.");
+  }
+  return invoke<PluginSummary>("install_bundled_mysql_plugin");
+}
+
+export async function uninstallBundledMysqlPlugin(): Promise<void> {
+  if (!isTauri()) {
+    throw new Error("Bundled MySQL plugin uninstall is available in the Tauri desktop runtime.");
+  }
+  await invoke("uninstall_bundled_mysql_plugin");
+}
+
+export async function installBundledRedisPlugin(): Promise<PluginSummary> {
+  if (!isTauri()) {
+    throw new Error("Bundled Redis plugin installation is available in the Tauri desktop runtime.");
+  }
+  return invoke<PluginSummary>("install_bundled_redis_plugin");
+}
+
+export async function uninstallBundledRedisPlugin(): Promise<void> {
+  if (!isTauri()) {
+    throw new Error("Bundled Redis plugin uninstall is available in the Tauri desktop runtime.");
+  }
+  await invoke("uninstall_bundled_redis_plugin");
+}
+
+export async function installBundledPostgresqlPlugin(): Promise<PluginSummary> {
+  if (!isTauri()) {
+    throw new Error(
+      "Bundled PostgreSQL plugin installation is available in the Tauri desktop runtime.",
+    );
+  }
+  return invoke<PluginSummary>("install_bundled_postgresql_plugin");
+}
+
+export async function uninstallBundledPostgresqlPlugin(): Promise<void> {
+  if (!isTauri()) {
+    throw new Error(
+      "Bundled PostgreSQL plugin uninstall is available in the Tauri desktop runtime.",
+    );
+  }
+  await invoke("uninstall_bundled_postgresql_plugin");
 }
 
 export async function installOfficialPlugin(
@@ -1005,6 +1404,10 @@ export async function getPluginSchemaPages(pluginId: string): Promise<SchemaPage
     if (pluginId === "app.torben.plugin.node") return mockNodeSchemaPages;
     if (pluginId === "app.torben.plugin.temurin") return mockTemurinSchemaPages;
     if (pluginId === "app.torben.plugin.python") return mockPythonSchemaPages;
+    if (pluginId === "app.torben.plugin.rust") return mockRustSchemaPages;
+    if (pluginId === "app.torben.plugin.mysql") return mockMysqlSchemaPages;
+    if (pluginId === "app.torben.plugin.redis") return mockRedisSchemaPages;
+    if (pluginId === "app.torben.plugin.postgresql") return mockPostgresqlSchemaPages;
     if (pluginId === "app.torben.plugin.git") return mockGitSchemaPages;
     if (pluginId === "app.torben.plugin.vscode") return mockVsCodeSchemaPages;
     if (pluginId === "app.torben.plugin.codex") return mockCodexSchemaPages;

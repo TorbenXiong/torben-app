@@ -79,12 +79,17 @@ impl TorbenPaths {
                 "node"
                     | "npm"
                     | "npx"
+                    | "pnpm"
                     | "java"
                     | "javac"
                     | "python"
                     | "python3"
                     | "pip"
                     | "pip3"
+                    | "rustc"
+                    | "cargo"
+                    | "rustdoc"
+                    | "rustfmt"
                     | "git"
                     | "code"
                     | "codex"
@@ -300,6 +305,13 @@ impl TorbenPaths {
         self.data.join("workspace.lock")
     }
 
+    pub fn installation_lock(&self, app_id: &str, version: &str) -> PathBuf {
+        self.data
+            .join("installation-locks")
+            .join(app_id)
+            .join(format!("{version}.lock"))
+    }
+
     pub fn plugin_dir(&self) -> PathBuf {
         self.data.join("plugins")
     }
@@ -347,6 +359,7 @@ mod tests {
             "torben-shim.exe",
             "userData/tools/shims/node.exe",
             "userData/tools/shims/npm.exe",
+            "userData/tools/shims/pnpm.exe",
             "userData/tools/shims/codex.exe",
             "USERDATA/TOOLS/SHIMS/NODE.EXE",
         ] {

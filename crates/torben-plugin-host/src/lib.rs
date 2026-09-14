@@ -238,7 +238,12 @@ fn validate_manifest_declarations(manifest: &PluginManifest) -> TorbenResult<()>
     validate_permission_values(
         "packageManagers",
         &manifest.permissions.package_managers,
-        |value| matches!(value, "winget" | "homebrew" | "apt" | "dnf"),
+        |value| {
+            matches!(
+                value,
+                "winget" | "homebrew" | "apt" | "dnf" | "cargo" | "pip"
+            )
+        },
     )
 }
 
@@ -1186,7 +1191,7 @@ mod tests {
 
     use super::{
         PluginClient, PluginVerifier, RegistryVerifier, current_target, ensure_registry_unique,
-        safe_relative_path,
+        safe_relative_path, validate_manifest_declarations,
     };
 
     #[derive(Clone, Copy)]
@@ -1488,7 +1493,7 @@ mod tests {
             network_domains: vec!["api.example.com".to_owned()],
             filesystem_roots: vec!["staging".to_owned()],
             external_commands: vec!["example-tool".to_owned()],
-            package_managers: vec!["winget".to_owned()],
+            package_managers: vec!["winget".to_owned(), "cargo".to_owned(), "pip".to_owned()],
         };
         fs::write(&manifest_path, serde_json::to_vec(&valid).unwrap()).unwrap();
         PluginVerifier::developer_mode()
@@ -1547,6 +1552,38 @@ mod tests {
             .verify(&manifest_path)
             .unwrap_err();
         assert_eq!(error.code, "plugin_capability_duplicate");
+    }
+
+    #[test]
+    fn bundled_runtime_manifests_use_supported_permission_values() {
+        for (plugin, manifest_json) in [
+            (
+                "rust",
+                include_str!("../../../plugins/rust/plugin.manifest.template.json"),
+            ),
+            (
+                "mysql",
+                include_str!("../../../plugins/mysql/plugin.manifest.template.json"),
+            ),
+            (
+                "redis",
+                include_str!("../../../plugins/redis/plugin.manifest.template.json"),
+            ),
+            (
+                "postgresql",
+                include_str!("../../../plugins/postgresql/plugin.manifest.template.json"),
+            ),
+            (
+                "python",
+                include_str!("../../../plugins/python/plugin.manifest.template.json"),
+            ),
+        ] {
+            let manifest: PluginManifest = serde_json::from_str(manifest_json)
+                .unwrap_or_else(|error| panic!("{plugin} manifest should be valid JSON: {error}"));
+            validate_manifest_declarations(&manifest).unwrap_or_else(|error| {
+                panic!("{plugin} manifest permissions should be valid: {error:?}")
+            });
+        }
     }
 
     #[test]

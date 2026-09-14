@@ -1,0 +1,42 @@
+{
+  "id": "app.torben.plugin.postgresql",
+  "version": "0.1.0",
+  "protocolVersion": 1,
+  "minimumHostVersion": "0.1.0",
+  "publisher": "Torben App",
+  "displayName": "PostgreSQL",
+  "capabilities": [
+    "version_discovery",
+    "external_discovery",
+    "managed_install",
+    "global_selection",
+    "managed_uninstall",
+    "schema_ui"
+  ],
+  "permissions": {
+    "networkDomains": ["get.enterprisedb.com"],
+    "filesystemRoots": ["managed_app_library", "download_cache", "staging", "plugin_data"],
+    "packageManagers": [],
+    "externalCommands": [
+      "postgres",
+      "psql",
+      "pg_ctl",
+      "initdb",
+      "pg_isready",
+      "createdb",
+      "dropdb",
+      "createuser",
+      "dropuser",
+      "pg_dump",
+      "pg_dumpall",
+      "pg_restore",
+      "pg_basebackup",
+      "pgbench",
+      "vacuumdb",
+      "reindexdb"
+    ]
+  },
+  "targets": [],
+  "signature": null,
+  "revoked": false
+}

@@ -8,16 +8,20 @@ mod git;
 mod git_signature;
 mod library_migration;
 mod managed_updates;
+mod mysql;
 mod node;
 mod node_plugin;
 mod node_signature;
 mod operation;
 mod paths;
 mod plugin_registry;
+mod postgresql;
 mod process;
 mod python;
 #[cfg(any(unix, test))]
 mod python_sigstore;
+mod redis;
+mod rust;
 mod schema_ui;
 mod shell_integration;
 mod source_adapters;
@@ -41,9 +45,13 @@ use std::{
 
 pub use codex::{CodexDistribution, CodexProvider, CodexSigstoreBundle};
 pub use git::{GitDistribution, GitInstallKind, GitProvider};
+pub use mysql::{MysqlDistribution, MysqlProvider};
 pub use node::{NodeDistribution, NodeProvider};
 pub use paths::{TorbenPaths, WINDOWS_DATA_ROOT_POINTER_FILE};
+pub use postgresql::{PostgresqlDistribution, PostgresqlProvider};
 pub use python::{PythonDistribution, PythonInstallKind, PythonProvider, PythonSourceArchive};
+pub use redis::{RedisDistribution, RedisProvider};
+pub use rust::{RustDistribution, RustProvider};
 use sha2::{Digest, Sha256};
 pub use store::{PluginRecord, StateStore};
 pub use temurin::{TemurinDistribution, TemurinProvider};
@@ -88,6 +96,18 @@ const BUNDLED_NODE_PLUGIN_MANIFEST: &str =
     include_str!("../../../plugins/node/plugin.manifest.template.json");
 const BUNDLED_TEMURIN_PLUGIN_ID: &str = "app.torben.plugin.temurin";
 const BUNDLED_PYTHON_PLUGIN_ID: &str = "app.torben.plugin.python";
+const BUNDLED_RUST_PLUGIN_ID: &str = "app.torben.plugin.rust";
+const BUNDLED_MYSQL_PLUGIN_ID: &str = "app.torben.plugin.mysql";
+const BUNDLED_MYSQL_PLUGIN_MANIFEST: &str =
+    include_str!("../../../plugins/mysql/plugin.manifest.template.json");
+const BUNDLED_REDIS_PLUGIN_ID: &str = "app.torben.plugin.redis";
+const BUNDLED_REDIS_PLUGIN_MANIFEST: &str =
+    include_str!("../../../plugins/redis/plugin.manifest.template.json");
+const BUNDLED_POSTGRESQL_PLUGIN_ID: &str = "app.torben.plugin.postgresql";
+const BUNDLED_POSTGRESQL_PLUGIN_MANIFEST: &str =
+    include_str!("../../../plugins/postgresql/plugin.manifest.template.json");
+const BUNDLED_RUST_PLUGIN_MANIFEST: &str =
+    include_str!("../../../plugins/rust/plugin.manifest.template.json");
 const PYTHON_MANAGER_PACKAGE_FILENAME: &str = "python-manager-26.3.msi";
 #[cfg(not(test))]
 const PYTHON_MANAGER_PACKAGE_SHA256: &str =
@@ -172,12 +192,20 @@ pub struct TorbenCore {
     node: NodeProvider,
     temurin: TemurinProvider,
     python: PythonProvider,
+    rust: RustProvider,
+    mysql: MysqlProvider,
+    redis: RedisProvider,
+    postgresql: PostgresqlProvider,
     git: GitProvider,
     vscode: VsCodeProvider,
     codex: CodexProvider,
     node_plugin: node_plugin::BundledPlugin,
     temurin_plugin: node_plugin::BundledPlugin,
     python_plugin: node_plugin::BundledPlugin,
+    rust_plugin: node_plugin::BundledPlugin,
+    mysql_plugin: node_plugin::BundledPlugin,
+    redis_plugin: node_plugin::BundledPlugin,
+    postgresql_plugin: node_plugin::BundledPlugin,
     git_plugin: node_plugin::BundledPlugin,
     vscode_plugin: node_plugin::BundledPlugin,
     codex_plugin: node_plugin::BundledPlugin,
@@ -314,18 +342,27 @@ impl TorbenCore {
             recover_interrupted_operations(&paths, Arc::clone(&store))?;
         }
         let bundled_shim = BundledShim::discover(&paths)?;
+        let node_plugin = node_plugin::BundledPlugin::node()?.with_data_root(&paths);
         let core = Self {
             paths,
             store,
             node: NodeProvider::official()?,
             temurin: TemurinProvider::official()?,
             python: PythonProvider::official()?,
+            rust: RustProvider::official()?,
+            mysql: MysqlProvider::official()?,
+            redis: RedisProvider::windows_community()?,
+            postgresql: PostgresqlProvider::official()?,
             git: GitProvider::official()?,
             vscode: VsCodeProvider::official()?,
             codex: CodexProvider::official()?,
-            node_plugin: node_plugin::BundledPlugin::node()?,
+            node_plugin,
             temurin_plugin: node_plugin::BundledPlugin::temurin()?,
             python_plugin: node_plugin::BundledPlugin::python()?,
+            rust_plugin: node_plugin::BundledPlugin::rust()?,
+            mysql_plugin: node_plugin::BundledPlugin::mysql()?,
+            redis_plugin: node_plugin::BundledPlugin::redis()?,
+            postgresql_plugin: node_plugin::BundledPlugin::postgresql()?,
             git_plugin: node_plugin::BundledPlugin::git()?,
             vscode_plugin: node_plugin::BundledPlugin::vscode()?,
             codex_plugin: node_plugin::BundledPlugin::codex()?,
@@ -405,8 +442,13 @@ impl TorbenCore {
         if !cfg!(any(test, feature = "test-fixtures")) {
             for application in &mut applications {
                 let plugin_id = match application.id.as_str() {
+                    "node" => Some(BUNDLED_NODE_PLUGIN_ID),
                     "temurin" => Some(BUNDLED_TEMURIN_PLUGIN_ID),
                     "python" => Some(BUNDLED_PYTHON_PLUGIN_ID),
+                    "rust" => Some(BUNDLED_RUST_PLUGIN_ID),
+                    "mysql" => Some(BUNDLED_MYSQL_PLUGIN_ID),
+                    "redis" => Some(BUNDLED_REDIS_PLUGIN_ID),
+                    "postgresql" => Some(BUNDLED_POSTGRESQL_PLUGIN_ID),
                     _ => None,
                 };
                 if let Some(plugin_id) = plugin_id
@@ -523,7 +565,7 @@ impl TorbenCore {
         requested_version: &str,
     ) -> TorbenResult<InstallRecord> {
         self.ensure_supported_app(app_id)?;
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let _workspace_lock = WorkspaceLock::acquire_shared(self.paths.workspace_lock())?;
         let mut journal = OperationJournal::start(
             &self.paths,
             Arc::clone(&self.store),
@@ -553,16 +595,41 @@ impl TorbenCore {
             }
         };
         journal.set_version(&resolved)?;
+        let installation_lock_path = self
+            .paths
+            .installation_lock(app_id.as_str(), &resolved.to_string());
+        if let Some(parent) = installation_lock_path.parent()
+            && let Err(error) = std::fs::create_dir_all(parent).map_err(|error| {
+                TorbenError::new(
+                    "installation_lock_directory_failed",
+                    "Could not create the installation lock directory.",
+                )
+                .with_detail("path", parent.display().to_string())
+                .with_detail("reason", error.to_string())
+            })
+        {
+            let _ = plugin.shutdown().await;
+            journal.fail_and_rollback(&error)?;
+            return Err(error);
+        }
+        let _installation_lock = match WorkspaceLock::acquire(installation_lock_path) {
+            Ok(lock) => lock,
+            Err(error) => {
+                let _ = plugin.shutdown().await;
+                journal.fail_and_rollback(&error)?;
+                return Err(error);
+            }
+        };
+        if let Some(existing) = self.store.get_installation(app_id, &resolved)? {
+            plugin.shutdown().await?;
+            journal.succeed(format!("{app_id} {resolved} is already installed"))?;
+            return Ok(existing);
+        }
         if let Err(error) = journal.cancellation_probe().check() {
             let _ = plugin.shutdown().await;
             journal.acknowledge_cancellation()?;
             journal.fail_and_rollback(&error)?;
             return Err(error);
-        }
-        if let Some(existing) = self.store.get_installation(app_id, &resolved)? {
-            plugin.shutdown().await?;
-            journal.succeed(format!("{app_id} {resolved} is already installed"))?;
-            return Ok(existing);
         }
         let operation_id = journal.operation_id();
         let plan = match plugin
@@ -636,6 +703,26 @@ impl TorbenCore {
                         manager_package.as_deref(),
                         journal,
                     )
+                    .await
+            }
+            "rust" => {
+                self.rust
+                    .install(&self.paths, app_id, version, plan, journal)
+                    .await
+            }
+            "mysql" => {
+                self.mysql
+                    .install(&self.paths, app_id, version, plan, journal)
+                    .await
+            }
+            "redis" => {
+                self.redis
+                    .install(&self.paths, app_id, version, plan, journal)
+                    .await
+            }
+            "postgresql" => {
+                self.postgresql
+                    .install(&self.paths, app_id, version, plan, journal)
                     .await
             }
             "git" => {
@@ -2804,9 +2891,16 @@ impl TorbenCore {
             })?;
         let install_path = validate_selected_installation(&self.paths, &record)?;
         let command_path = match app_id.as_str() {
+            "node" if command == "pnpm" => self
+                .node
+                .pnpm_command_path(&self.paths.data_dir().join("node")),
             "node" => self.node.command_path(&install_path, command),
             "temurin" => self.temurin.command_path(&install_path, command),
             "python" => self.python.command_path(&install_path, command),
+            "rust" => self.rust.command_path(&install_path, command),
+            "mysql" => self.mysql.command_path(&install_path, command),
+            "redis" => self.redis.command_path(&install_path, command),
+            "postgresql" => self.postgresql.command_path(&install_path, command),
             "git" => self.git.command_path(&install_path, command),
             "vscode" => self.vscode.command_path(&install_path, command),
             "codex" => self.codex.command_path(&install_path, command),
@@ -2816,7 +2910,77 @@ impl TorbenCore {
             )
             .with_detail("appId", app_id.to_string())),
         }?;
-        validate_selected_command_path(&install_path, &command_path)
+        if app_id.as_str() == "node" && command == "pnpm" {
+            validate_managed_node_tool_path(&self.paths, &command_path)
+        } else {
+            validate_selected_command_path(&install_path, &command_path)
+        }
+    }
+
+    /// Prepare a selected command with provider-owned writable data paths.
+    pub fn command_for(
+        &self,
+        app_id: &AppId,
+        command: &str,
+    ) -> TorbenResult<std::process::Command> {
+        let executable = self.executable_for(app_id, command)?;
+        let mut process = std::process::Command::new(&executable);
+        if app_id.as_str() == "node" {
+            let bin = executable.parent().ok_or_else(|| {
+                TorbenError::internal("The Node.js executable has no parent directory.")
+            })?;
+            node::configure_command_environment(
+                &mut process,
+                &self.paths.data_dir().join("node"),
+                bin,
+            )?;
+        } else if app_id.as_str() == "python" {
+            let bin = executable.parent().ok_or_else(|| {
+                TorbenError::internal("The Python executable has no parent directory.")
+            })?;
+            python::configure_command_environment(
+                &mut process,
+                &self.paths.data_dir().join("python"),
+                bin,
+            )?;
+        } else if app_id.as_str() == "rust" {
+            let bin = executable.parent().ok_or_else(|| {
+                TorbenError::internal("The Rust executable has no parent directory.")
+            })?;
+            rust::configure_command_environment(
+                &mut process,
+                &self.paths.data_dir().join("rust"),
+                bin,
+            )?;
+        } else if app_id.as_str() == "mysql" {
+            let bin = executable.parent().ok_or_else(|| {
+                TorbenError::internal("The MySQL executable has no parent directory.")
+            })?;
+            mysql::configure_command_environment(
+                &mut process,
+                &self.paths.data_dir().join("mysql"),
+                bin,
+            )?;
+        } else if app_id.as_str() == "redis" {
+            let bin = executable.parent().ok_or_else(|| {
+                TorbenError::internal("The Redis executable has no parent directory.")
+            })?;
+            redis::configure_command_environment(
+                &mut process,
+                &self.paths.data_dir().join("redis"),
+                bin,
+            )?;
+        } else if app_id.as_str() == "postgresql" {
+            let bin = executable.parent().ok_or_else(|| {
+                TorbenError::internal("The PostgreSQL executable has no parent directory.")
+            })?;
+            postgresql::configure_command_environment(
+                &mut process,
+                &self.paths.data_dir().join("postgresql"),
+                bin,
+            )?;
+        }
+        Ok(process)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -2934,7 +3098,49 @@ impl TorbenCore {
                 message: plugin_message,
             });
         }
-        if cfg!(any(test, feature = "test-fixtures")) {
+        if cfg!(any(test, feature = "test-fixtures"))
+            || self.bundled_plugin_enabled(BUNDLED_RUST_PLUGIN_ID)?
+        {
+            let (plugin_healthy, plugin_message) = self.rust_plugin.diagnostic();
+            checks.push(DoctorCheck {
+                id: "bundled_plugin.rust".to_owned(),
+                healthy: plugin_healthy,
+                message: plugin_message,
+            });
+        }
+        if cfg!(any(test, feature = "test-fixtures"))
+            || self.bundled_plugin_enabled(BUNDLED_MYSQL_PLUGIN_ID)?
+        {
+            let (plugin_healthy, plugin_message) = self.mysql_plugin.diagnostic();
+            checks.push(DoctorCheck {
+                id: "bundled_plugin.mysql".to_owned(),
+                healthy: plugin_healthy,
+                message: plugin_message,
+            });
+        }
+        if cfg!(any(test, feature = "test-fixtures"))
+            || self.bundled_plugin_enabled(BUNDLED_REDIS_PLUGIN_ID)?
+        {
+            let (plugin_healthy, plugin_message) = self.redis_plugin.diagnostic();
+            checks.push(DoctorCheck {
+                id: "bundled_plugin.redis".to_owned(),
+                healthy: plugin_healthy,
+                message: plugin_message,
+            });
+        }
+        if cfg!(any(test, feature = "test-fixtures"))
+            || self.bundled_plugin_enabled(BUNDLED_POSTGRESQL_PLUGIN_ID)?
+        {
+            let (plugin_healthy, plugin_message) = self.postgresql_plugin.diagnostic();
+            checks.push(DoctorCheck {
+                id: "bundled_plugin.postgresql".to_owned(),
+                healthy: plugin_healthy,
+                message: plugin_message,
+            });
+        }
+        if cfg!(any(test, feature = "test-fixtures"))
+            || self.bundled_plugin_enabled(BUNDLED_NODE_PLUGIN_ID)?
+        {
             let (plugin_healthy, plugin_message) = self.node_plugin.diagnostic();
             checks.push(DoctorCheck {
                 id: "bundled_plugin.node".to_owned(),
@@ -2979,6 +3185,7 @@ impl TorbenCore {
         install_shims_locked(&self.paths, shim_binary)
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn plugins(&self) -> TorbenResult<Vec<PluginSummary>> {
         let stored = self.store.list_plugins()?;
         let mut plugins = if cfg!(any(test, feature = "test-fixtures")) {
@@ -2999,6 +3206,30 @@ impl TorbenCore {
                     include_str!("../../../plugins/python/plugin.manifest.template.json"),
                     BUNDLED_PYTHON_PLUGIN_ID,
                     "Python",
+                    true,
+                )?,
+                bundled_plugin_summary(
+                    BUNDLED_RUST_PLUGIN_MANIFEST,
+                    BUNDLED_RUST_PLUGIN_ID,
+                    "Rust",
+                    true,
+                )?,
+                bundled_plugin_summary(
+                    BUNDLED_MYSQL_PLUGIN_MANIFEST,
+                    BUNDLED_MYSQL_PLUGIN_ID,
+                    "MySQL",
+                    true,
+                )?,
+                bundled_plugin_summary(
+                    BUNDLED_REDIS_PLUGIN_MANIFEST,
+                    BUNDLED_REDIS_PLUGIN_ID,
+                    "Redis",
+                    true,
+                )?,
+                bundled_plugin_summary(
+                    BUNDLED_POSTGRESQL_PLUGIN_MANIFEST,
+                    BUNDLED_POSTGRESQL_PLUGIN_ID,
+                    "PostgreSQL",
                     true,
                 )?,
                 bundled_plugin_summary(
@@ -3023,6 +3254,11 @@ impl TorbenCore {
         } else {
             [
                 (
+                    BUNDLED_NODE_PLUGIN_ID,
+                    "Node.js",
+                    BUNDLED_NODE_PLUGIN_MANIFEST,
+                ),
+                (
                     BUNDLED_TEMURIN_PLUGIN_ID,
                     "Java",
                     include_str!("../../../plugins/temurin/plugin.manifest.template.json"),
@@ -3031,6 +3267,22 @@ impl TorbenCore {
                     BUNDLED_PYTHON_PLUGIN_ID,
                     "Python",
                     include_str!("../../../plugins/python/plugin.manifest.template.json"),
+                ),
+                (BUNDLED_RUST_PLUGIN_ID, "Rust", BUNDLED_RUST_PLUGIN_MANIFEST),
+                (
+                    BUNDLED_MYSQL_PLUGIN_ID,
+                    "MySQL",
+                    BUNDLED_MYSQL_PLUGIN_MANIFEST,
+                ),
+                (
+                    BUNDLED_REDIS_PLUGIN_ID,
+                    "Redis",
+                    BUNDLED_REDIS_PLUGIN_MANIFEST,
+                ),
+                (
+                    BUNDLED_POSTGRESQL_PLUGIN_ID,
+                    "PostgreSQL",
+                    BUNDLED_POSTGRESQL_PLUGIN_MANIFEST,
                 ),
             ]
             .into_iter()
@@ -3049,7 +3301,13 @@ impl TorbenCore {
             if !cfg!(any(test, feature = "test-fixtures"))
                 && matches!(
                     record.id.as_str(),
-                    BUNDLED_TEMURIN_PLUGIN_ID | BUNDLED_PYTHON_PLUGIN_ID
+                    BUNDLED_NODE_PLUGIN_ID
+                        | BUNDLED_TEMURIN_PLUGIN_ID
+                        | BUNDLED_PYTHON_PLUGIN_ID
+                        | BUNDLED_RUST_PLUGIN_ID
+                        | BUNDLED_MYSQL_PLUGIN_ID
+                        | BUNDLED_REDIS_PLUGIN_ID
+                        | BUNDLED_POSTGRESQL_PLUGIN_ID
                 )
             {
                 continue;
@@ -3057,6 +3315,26 @@ impl TorbenCore {
             plugins.push(stored_plugin_summary(&record)?);
         }
         Ok(plugins)
+    }
+
+    pub fn install_bundled_node(
+        &self,
+        executable: &[u8],
+        shim_executable: &[u8],
+    ) -> TorbenResult<PluginSummary> {
+        self.install_bundled_provider(
+            BundledProviderPackage {
+                plugin_id: BUNDLED_NODE_PLUGIN_ID,
+                provider_name: "Node.js",
+                binary_name: "node",
+                manifest_template: include_str!(
+                    "../../../plugins/node/plugin.manifest.template.json"
+                ),
+                executable,
+                resources: &[],
+            },
+            shim_executable,
+        )
     }
 
     pub fn install_bundled_temurin(
@@ -3205,6 +3483,15 @@ impl TorbenCore {
         )
     }
 
+    pub fn uninstall_bundled_node(&self) -> TorbenResult<()> {
+        self.uninstall_bundled_provider(
+            BUNDLED_NODE_PLUGIN_ID,
+            "Node.js",
+            "node",
+            "Node.js runtime",
+        )
+    }
+
     pub fn uninstall_bundled_temurin(&self) -> TorbenResult<()> {
         self.uninstall_bundled_provider(
             BUNDLED_TEMURIN_PLUGIN_ID,
@@ -3220,6 +3507,99 @@ impl TorbenCore {
             "Python",
             "python",
             "Python runtime",
+        )
+    }
+
+    pub fn install_bundled_rust(
+        &self,
+        executable: &[u8],
+        shim_executable: &[u8],
+    ) -> TorbenResult<PluginSummary> {
+        self.install_bundled_provider(
+            BundledProviderPackage {
+                plugin_id: BUNDLED_RUST_PLUGIN_ID,
+                provider_name: "Rust",
+                binary_name: "rust",
+                manifest_template: BUNDLED_RUST_PLUGIN_MANIFEST,
+                executable,
+                resources: &[],
+            },
+            shim_executable,
+        )
+    }
+
+    pub fn uninstall_bundled_rust(&self) -> TorbenResult<()> {
+        self.uninstall_bundled_provider(BUNDLED_RUST_PLUGIN_ID, "Rust", "rust", "Rust toolchain")
+    }
+
+    pub fn install_bundled_mysql(
+        &self,
+        executable: &[u8],
+        shim_executable: &[u8],
+    ) -> TorbenResult<PluginSummary> {
+        self.install_bundled_provider(
+            BundledProviderPackage {
+                plugin_id: BUNDLED_MYSQL_PLUGIN_ID,
+                provider_name: "MySQL",
+                binary_name: "mysql",
+                manifest_template: BUNDLED_MYSQL_PLUGIN_MANIFEST,
+                executable,
+                resources: &[],
+            },
+            shim_executable,
+        )
+    }
+
+    pub fn uninstall_bundled_mysql(&self) -> TorbenResult<()> {
+        self.uninstall_bundled_provider(BUNDLED_MYSQL_PLUGIN_ID, "MySQL", "mysql", "MySQL server")
+    }
+
+    pub fn install_bundled_redis(
+        &self,
+        executable: &[u8],
+        shim_executable: &[u8],
+    ) -> TorbenResult<PluginSummary> {
+        self.install_bundled_provider(
+            BundledProviderPackage {
+                plugin_id: BUNDLED_REDIS_PLUGIN_ID,
+                provider_name: "Redis",
+                binary_name: "redis",
+                manifest_template: BUNDLED_REDIS_PLUGIN_MANIFEST,
+                executable,
+                resources: &[],
+            },
+            shim_executable,
+        )
+    }
+
+    pub fn uninstall_bundled_redis(&self) -> TorbenResult<()> {
+        self.uninstall_bundled_provider(BUNDLED_REDIS_PLUGIN_ID, "Redis", "redis", "Redis server")
+    }
+
+    pub fn install_bundled_postgresql(
+        &self,
+        executable: &[u8],
+        shim_executable: &[u8],
+    ) -> TorbenResult<PluginSummary> {
+        self.install_bundled_provider(
+            BundledProviderPackage {
+                plugin_id: BUNDLED_POSTGRESQL_PLUGIN_ID,
+                provider_name: "PostgreSQL",
+                binary_name: "postgresql",
+                manifest_template: BUNDLED_POSTGRESQL_PLUGIN_MANIFEST,
+                executable,
+                resources: &[],
+            },
+            shim_executable,
+        )
+    }
+
+    pub fn uninstall_bundled_postgresql(&self) -> TorbenResult<()> {
+        self.uninstall_bundled_provider(
+            BUNDLED_POSTGRESQL_PLUGIN_ID,
+            "PostgreSQL",
+            "postgresql",
+            "PostgreSQL server",
         )
     }
 
@@ -3519,13 +3899,23 @@ impl TorbenCore {
             BUNDLED_NODE_PLUGIN_ID
                 | BUNDLED_TEMURIN_PLUGIN_ID
                 | BUNDLED_PYTHON_PLUGIN_ID
+                | BUNDLED_RUST_PLUGIN_ID
+                | BUNDLED_MYSQL_PLUGIN_ID
+                | BUNDLED_REDIS_PLUGIN_ID
+                | BUNDLED_POSTGRESQL_PLUGIN_ID
                 | BUNDLED_GIT_PLUGIN_ID
                 | BUNDLED_VSCODE_PLUGIN_ID
                 | BUNDLED_CODEX_PLUGIN_ID
         ) && !(origin == PluginOrigin::BuiltIn
             && matches!(
                 source_plugin.manifest.id.as_str(),
-                BUNDLED_TEMURIN_PLUGIN_ID | BUNDLED_PYTHON_PLUGIN_ID
+                BUNDLED_NODE_PLUGIN_ID
+                    | BUNDLED_TEMURIN_PLUGIN_ID
+                    | BUNDLED_PYTHON_PLUGIN_ID
+                    | BUNDLED_RUST_PLUGIN_ID
+                    | BUNDLED_MYSQL_PLUGIN_ID
+                    | BUNDLED_REDIS_PLUGIN_ID
+                    | BUNDLED_POSTGRESQL_PLUGIN_ID
             ))
         {
             return Err(TorbenError::new(
@@ -3605,6 +3995,10 @@ impl TorbenCore {
             BUNDLED_NODE_PLUGIN_ID
                 | BUNDLED_TEMURIN_PLUGIN_ID
                 | BUNDLED_PYTHON_PLUGIN_ID
+                | BUNDLED_RUST_PLUGIN_ID
+                | BUNDLED_MYSQL_PLUGIN_ID
+                | BUNDLED_REDIS_PLUGIN_ID
+                | BUNDLED_POSTGRESQL_PLUGIN_ID
                 | BUNDLED_GIT_PLUGIN_ID
                 | BUNDLED_VSCODE_PLUGIN_ID
                 | BUNDLED_CODEX_PLUGIN_ID
@@ -3623,8 +4017,13 @@ impl TorbenCore {
         if bundled_app_support_available(app_id, fixture_build)
             && (fixture_build
                 || match app_id.as_str() {
+                    "node" => self.bundled_plugin_enabled(BUNDLED_NODE_PLUGIN_ID)?,
                     "temurin" => self.temurin_plugin_enabled()?,
                     "python" => self.python_plugin_enabled()?,
+                    "rust" => self.bundled_plugin_enabled(BUNDLED_RUST_PLUGIN_ID)?,
+                    "mysql" => self.bundled_plugin_enabled(BUNDLED_MYSQL_PLUGIN_ID)?,
+                    "redis" => self.bundled_plugin_enabled(BUNDLED_REDIS_PLUGIN_ID)?,
+                    "postgresql" => self.bundled_plugin_enabled(BUNDLED_POSTGRESQL_PLUGIN_ID)?,
                     _ => true,
                 })
         {
@@ -3703,6 +4102,10 @@ impl TorbenCore {
             "node" => Ok(&self.node_plugin),
             "temurin" => Ok(&self.temurin_plugin),
             "python" => Ok(&self.python_plugin),
+            "rust" => Ok(&self.rust_plugin),
+            "mysql" => Ok(&self.mysql_plugin),
+            "redis" => Ok(&self.redis_plugin),
+            "postgresql" => Ok(&self.postgresql_plugin),
             "git" => Ok(&self.git_plugin),
             "vscode" => Ok(&self.vscode_plugin),
             "codex" => Ok(&self.codex_plugin),
@@ -3719,11 +4122,13 @@ impl TorbenCore {
         plugin_id: &PluginId,
     ) -> Option<&node_plugin::BundledPlugin> {
         match plugin_id.as_str() {
-            BUNDLED_NODE_PLUGIN_ID if cfg!(any(test, feature = "test-fixtures")) => {
-                Some(&self.node_plugin)
-            }
+            BUNDLED_NODE_PLUGIN_ID => Some(&self.node_plugin),
             BUNDLED_TEMURIN_PLUGIN_ID => Some(&self.temurin_plugin),
             BUNDLED_PYTHON_PLUGIN_ID => Some(&self.python_plugin),
+            BUNDLED_RUST_PLUGIN_ID => Some(&self.rust_plugin),
+            BUNDLED_MYSQL_PLUGIN_ID => Some(&self.mysql_plugin),
+            BUNDLED_REDIS_PLUGIN_ID => Some(&self.redis_plugin),
+            BUNDLED_POSTGRESQL_PLUGIN_ID => Some(&self.postgresql_plugin),
             BUNDLED_GIT_PLUGIN_ID if cfg!(any(test, feature = "test-fixtures")) => {
                 Some(&self.git_plugin)
             }
@@ -3804,8 +4209,10 @@ impl TorbenCore {
 fn bundled_app_support_available(app_id: &AppId, fixture_build: bool) -> bool {
     // Provider behavior remains compiled for deterministic fixture coverage, but
     // release builds do not expose these applications until their data paths are constrained.
-    matches!(app_id.as_str(), "temurin" | "python")
-        || (fixture_build && matches!(app_id.as_str(), "node" | "git" | "vscode" | "codex"))
+    matches!(
+        app_id.as_str(),
+        "node" | "temurin" | "python" | "rust" | "mysql" | "redis" | "postgresql"
+    ) || (fixture_build && matches!(app_id.as_str(), "git" | "vscode" | "codex"))
 }
 
 #[cfg(feature = "test-fixtures")]
@@ -4202,6 +4609,36 @@ fn validate_selected_command_path(
         .with_detail("commandPath", command_path.display().to_string())
         .with_detail("resolvedPath", canonical_command.display().to_string())
         .with_remediation("Reinstall the selected managed version from its official archive."));
+    }
+    Ok(command_path.to_path_buf())
+}
+
+fn validate_managed_node_tool_path(
+    paths: &TorbenPaths,
+    command_path: &Path,
+) -> TorbenResult<PathBuf> {
+    let managed_root = std::fs::canonicalize(paths.data_dir().join("node")).map_err(|error| {
+        TorbenError::new(
+            "selection_state_invalid",
+            "The managed Node.js data directory cannot be resolved.",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+    let canonical_command = std::fs::canonicalize(command_path).map_err(|error| {
+        TorbenError::new(
+            "managed_command_missing",
+            "The managed pnpm command cannot be resolved.",
+        )
+        .with_detail("path", command_path.display().to_string())
+        .with_detail("reason", error.to_string())
+    })?;
+    if !canonical_command.starts_with(&managed_root) || canonical_command == managed_root {
+        return Err(TorbenError::new(
+            "managed_command_outside_data",
+            "The managed pnpm command resolves outside Torben's Node.js data directory.",
+        )
+        .with_detail("commandPath", command_path.display().to_string())
+        .with_detail("resolvedPath", canonical_command.display().to_string()));
     }
     Ok(command_path.to_path_buf())
 }
@@ -5043,8 +5480,46 @@ fn shims_match_source(paths: &TorbenPaths, shim_binary: &Path) -> TorbenResult<b
 
 fn shim_destinations(paths: &TorbenPaths) -> Vec<PathBuf> {
     [
-        "node", "npm", "npx", "java", "javac", "python", "python3", "pip", "pip3", "git", "code",
+        "node",
+        "npm",
+        "npx",
+        "pnpm",
+        "java",
+        "javac",
+        "python",
+        "python3",
+        "pip",
+        "pip3",
+        "git",
+        "code",
         "codex",
+        "rustc",
+        "cargo",
+        "rustdoc",
+        "rustfmt",
+        "mysql",
+        "mysqld",
+        "mysqladmin",
+        "mysqldump",
+        "redis-server",
+        "redis-cli",
+        "redis-benchmark",
+        "postgres",
+        "psql",
+        "pg_ctl",
+        "initdb",
+        "pg_isready",
+        "createdb",
+        "dropdb",
+        "createuser",
+        "dropuser",
+        "pg_dump",
+        "pg_dumpall",
+        "pg_restore",
+        "pg_basebackup",
+        "pgbench",
+        "vacuumdb",
+        "reindexdb",
     ]
     .into_iter()
     .map(|command| {
@@ -7591,7 +8066,11 @@ mod tests {
 
     #[test]
     fn release_build_gate_rejects_unsupported_software_plugins() {
-        for app_id in ["node", "git", "vscode", "codex"] {
+        assert!(bundled_app_support_available(
+            &AppId::new("node").unwrap(),
+            false
+        ));
+        for app_id in ["git", "vscode", "codex"] {
             assert!(!bundled_app_support_available(
                 &AppId::new(app_id).unwrap(),
                 false
@@ -8371,7 +8850,7 @@ mod tests {
 
         let plugins = core.plugins().unwrap();
 
-        assert_eq!(plugins.len(), 8);
+        assert_eq!(plugins.len(), 12);
         assert_eq!(plugins[0].origin, PluginOrigin::BuiltIn);
         assert_eq!(plugins[0].id.as_str(), "app.torben.plugin.node");
         assert_eq!(plugins[1].origin, PluginOrigin::BuiltIn);
@@ -8379,16 +8858,24 @@ mod tests {
         assert_eq!(plugins[2].origin, PluginOrigin::BuiltIn);
         assert_eq!(plugins[2].id.as_str(), "app.torben.plugin.python");
         assert_eq!(plugins[3].origin, PluginOrigin::BuiltIn);
-        assert_eq!(plugins[3].id.as_str(), "app.torben.plugin.git");
+        assert_eq!(plugins[3].id.as_str(), "app.torben.plugin.rust");
         assert_eq!(plugins[4].origin, PluginOrigin::BuiltIn);
-        assert_eq!(plugins[4].id.as_str(), "app.torben.plugin.vscode");
+        assert_eq!(plugins[4].id.as_str(), "app.torben.plugin.mysql");
         assert_eq!(plugins[5].origin, PluginOrigin::BuiltIn);
-        assert_eq!(plugins[5].id.as_str(), "app.torben.plugin.codex");
-        assert_eq!(plugins[6].origin, PluginOrigin::OfficialRegistry);
-        assert_eq!(plugins[6].display_name, "Official fixture");
-        assert_eq!(plugins[7].origin, PluginOrigin::Sideloaded);
-        assert_eq!(plugins[7].display_name, "Fixture plugin");
-        assert_eq!(plugins[7].permissions.network_domains, ["example.invalid"]);
+        assert_eq!(plugins[5].id.as_str(), "app.torben.plugin.redis");
+        assert_eq!(plugins[6].origin, PluginOrigin::BuiltIn);
+        assert_eq!(plugins[6].id.as_str(), "app.torben.plugin.postgresql");
+        assert_eq!(plugins[7].origin, PluginOrigin::BuiltIn);
+        assert_eq!(plugins[7].id.as_str(), "app.torben.plugin.git");
+        assert_eq!(plugins[8].origin, PluginOrigin::BuiltIn);
+        assert_eq!(plugins[8].id.as_str(), "app.torben.plugin.vscode");
+        assert_eq!(plugins[9].origin, PluginOrigin::BuiltIn);
+        assert_eq!(plugins[9].id.as_str(), "app.torben.plugin.codex");
+        assert_eq!(plugins[10].origin, PluginOrigin::OfficialRegistry);
+        assert_eq!(plugins[10].display_name, "Official fixture");
+        assert_eq!(plugins[11].origin, PluginOrigin::Sideloaded);
+        assert_eq!(plugins[11].display_name, "Fixture plugin");
+        assert_eq!(plugins[11].permissions.network_domains, ["example.invalid"]);
     }
 
     #[test]
@@ -8924,7 +9411,7 @@ mod tests {
                 .join("fixture-plugin.bin")
                 .is_file()
         );
-        assert_eq!(core.plugins().unwrap().len(), 7);
+        assert_eq!(core.plugins().unwrap().len(), 11);
 
         let duplicate = core.install_plugin(&manifest_path, true).unwrap_err();
         assert_eq!(duplicate.code, "plugin_already_installed");
@@ -9246,7 +9733,7 @@ mod tests {
 
         let installed = install_shims_locked(&paths, &source).unwrap();
 
-        assert_eq!(installed.len(), 12);
+        assert_eq!(installed.len(), 40);
         for destination in shim_destinations(&paths) {
             assert_eq!(std::fs::read(destination).unwrap(), b"shim-v1");
         }

@@ -43,6 +43,17 @@ export interface OperationEvent {
   message: string;
   progress?: number;
   timestamp: string;
+  kind?:
+    | "install"
+    | "select"
+    | "uninstall"
+    | "source_install"
+    | "source_uninstall"
+    | "source_migrate"
+    | "migrate"
+    | "plugin_install";
+  appId?: string;
+  version?: string;
 }
 
 export interface DoctorCheck {

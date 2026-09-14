@@ -1,0 +1,29 @@
+{
+  "id": "app.torben.plugin.redis",
+  "displayName": "Redis",
+  "version": "0.1.0",
+  "protocolVersion": 1,
+  "minimumHostVersion": "0.1.0",
+  "publisher": "Torben App",
+  "capabilities": [
+    "version_discovery",
+    "external_discovery",
+    "managed_install",
+    "global_selection",
+    "managed_uninstall",
+    "schema_ui"
+  ],
+  "permissions": {
+    "networkDomains": [
+      "github.com",
+      "objects.githubusercontent.com",
+      "release-assets.githubusercontent.com"
+    ],
+    "filesystemRoots": ["managed_app_library", "download_cache", "staging", "plugin_data"],
+    "externalCommands": ["redis-server", "redis-cli", "redis-benchmark"],
+    "packageManagers": []
+  },
+  "targets": [],
+  "signature": null,
+  "revoked": false
+}

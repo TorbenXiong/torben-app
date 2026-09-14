@@ -9,6 +9,14 @@ pub struct WorkspaceLock {
 
 impl WorkspaceLock {
     pub fn acquire(path: impl AsRef<Path>) -> TorbenResult<Self> {
+        Self::acquire_with(path, false)
+    }
+
+    pub fn acquire_shared(path: impl AsRef<Path>) -> TorbenResult<Self> {
+        Self::acquire_with(path, true)
+    }
+
+    fn acquire_with(path: impl AsRef<Path>, shared: bool) -> TorbenResult<Self> {
         let path = path.as_ref();
         let file = OpenOptions::new()
             .create(true)
@@ -24,7 +32,12 @@ impl WorkspaceLock {
                 .with_detail("path", path.display().to_string())
                 .with_detail("reason", error.to_string())
             })?;
-        FileExt::lock(&file).map_err(|error| {
+        let lock_result = if shared {
+            FileExt::lock_shared(&file)
+        } else {
+            FileExt::lock(&file)
+        };
+        lock_result.map_err(|error| {
             TorbenError::new(
                 "workspace_locked",
                 "Another Torben App process is modifying the workspace.",
@@ -136,5 +149,36 @@ mod tests {
             .expect("contender acquires lock after helper exits");
         drop(acquired);
         contender.join().expect("join lock contender");
+    }
+
+    #[test]
+    fn shared_workspace_locks_allow_parallel_installation_lanes() {
+        let root = tempdir().expect("create isolated lock root");
+        let workspace_lock = root.path().join("workspace.lock");
+        let first_version_lock = root.path().join("node-24.20.1.lock");
+        let second_version_lock = root.path().join("node-22.22.3.lock");
+        let first_workspace = WorkspaceLock::acquire_shared(&workspace_lock)
+            .expect("first install acquires shared workspace lock");
+        let first_version = WorkspaceLock::acquire(&first_version_lock)
+            .expect("first install acquires its version lock");
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let second_workspace_path = workspace_lock.clone();
+        let contender = thread::spawn(move || {
+            let workspace = WorkspaceLock::acquire_shared(second_workspace_path)
+                .expect("second install acquires shared workspace lock");
+            let version = WorkspaceLock::acquire(second_version_lock)
+                .expect("second install acquires its own version lock");
+            ready_tx
+                .send((workspace, version))
+                .expect("report parallel installation lane");
+        });
+
+        let second = ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("different versions must not block each other");
+        drop(second);
+        drop(first_version);
+        drop(first_workspace);
+        contender.join().expect("join installation contender");
     }
 }

@@ -404,6 +404,9 @@ impl OperationJournal {
             message: message.into(),
             progress,
             timestamp: timestamp(),
+            kind: Some(self.journal.kind),
+            app_id: self.journal.app_id.clone(),
+            version: self.journal.version.clone(),
         };
         self.journal.events.push(event);
         self.persist()

@@ -30,6 +30,22 @@ pub(crate) struct BundledPlugin {
 }
 
 impl BundledPlugin {
+    pub(crate) fn with_data_root(mut self, paths: &crate::TorbenPaths) -> Self {
+        self.candidates.insert(
+            0,
+            paths
+                .plugin_dir()
+                .join(self.plugin_id.as_str())
+                .join(env!("CARGO_PKG_VERSION"))
+                .join(format!(
+                    "torben-plugin-{}{}",
+                    self.app_id,
+                    std::env::consts::EXE_SUFFIX
+                )),
+        );
+        self
+    }
+
     pub(crate) fn node() -> TorbenResult<Self> {
         Self::discover(
             "torben-plugin-node",
@@ -57,6 +73,46 @@ impl BundledPlugin {
             "python",
             "python.official",
             include_str!("../../../plugins/python/plugin.manifest.template.json"),
+        )
+    }
+
+    pub(crate) fn rust() -> TorbenResult<Self> {
+        Self::discover(
+            "torben-plugin-rust",
+            "app.torben.plugin.rust",
+            "rust",
+            "rust.official",
+            include_str!("../../../plugins/rust/plugin.manifest.template.json"),
+        )
+    }
+
+    pub(crate) fn mysql() -> TorbenResult<Self> {
+        Self::discover(
+            "torben-plugin-mysql",
+            "app.torben.plugin.mysql",
+            "mysql",
+            "mysql.official",
+            include_str!("../../../plugins/mysql/plugin.manifest.template.json"),
+        )
+    }
+
+    pub(crate) fn redis() -> TorbenResult<Self> {
+        Self::discover(
+            "torben-plugin-redis",
+            "app.torben.plugin.redis",
+            "redis",
+            "redis.windows",
+            include_str!("../../../plugins/redis/plugin.manifest.template.json"),
+        )
+    }
+
+    pub(crate) fn postgresql() -> TorbenResult<Self> {
+        Self::discover(
+            "torben-plugin-postgresql",
+            "app.torben.plugin.postgresql",
+            "postgresql",
+            "postgresql.edb",
+            include_str!("../../../plugins/postgresql/plugin.manifest.template.json"),
         )
     }
 
@@ -572,6 +628,10 @@ mod tests {
             BundledPlugin::node().unwrap(),
             BundledPlugin::temurin().unwrap(),
             BundledPlugin::python().unwrap(),
+            BundledPlugin::rust().unwrap(),
+            BundledPlugin::mysql().unwrap(),
+            BundledPlugin::redis().unwrap(),
+            BundledPlugin::postgresql().unwrap(),
             BundledPlugin::git().unwrap(),
             BundledPlugin::vscode().unwrap(),
             BundledPlugin::codex().unwrap(),

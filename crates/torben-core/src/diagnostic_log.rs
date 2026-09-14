@@ -184,6 +184,9 @@ mod tests {
             message: "secret-token-must-not-be-logged".to_owned(),
             progress: Some(0.8),
             timestamp: "123".to_owned(),
+            kind: Some(OperationKind::Install),
+            app_id: Some(app_id.clone()),
+            version: Some(version.clone()),
         };
 
         record_operation(

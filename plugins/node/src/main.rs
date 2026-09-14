@@ -166,7 +166,12 @@ async fn dispatch(
                         expected_output: format!("v{}", params.version),
                     },
                     InstallStep::CreateShims {
-                        commands: vec!["node".to_owned(), "npm".to_owned(), "npx".to_owned()],
+                        commands: vec![
+                            "node".to_owned(),
+                            "npm".to_owned(),
+                            "npx".to_owned(),
+                            "pnpm".to_owned(),
+                        ],
                     },
                 ],
                 metadata: BTreeMap::from([("target".to_owned(), params.target)]),
@@ -188,7 +193,7 @@ async fn dispatch(
             value(HealthCheckResult {
                 healthy: true,
                 actual_version: Some(params.version),
-                message: "Node.js, npm, and npx health checks passed.".to_owned(),
+                message: "Node.js, npm, and npx health checks passed; pnpm uses the managed global prefix.".to_owned(),
             })
         }
         method::EXTERNAL_DISCOVER => {

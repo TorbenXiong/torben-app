@@ -37,6 +37,84 @@ const PYTHON_WINDOWS_INDEX: &str = "https://www.python.org/ftp/python/index-wind
 const PYTHON_MANAGER_EXECUTABLE: &str = "pymanager.exe";
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Prepare writable Python and pip state below Torben's data root.
+///
+/// Runtime installations stay versioned under the managed app library, while
+/// pip's cache and user installs are mutable state. Keeping that state in a
+/// provider-owned directory makes it survive runtime switching and keeps
+/// downloads made by the managed `pip` shim out of the user's profile.
+pub(crate) fn configure_command_environment(
+    command: &mut std::process::Command,
+    data_root: &Path,
+    bin: &Path,
+) -> TorbenResult<()> {
+    for directory in ["cache", "user", "config", "temp"] {
+        std::fs::create_dir_all(data_root.join(directory)).map_err(|error| {
+            TorbenError::new(
+                "python_environment_failed",
+                "Could not prepare managed Python data.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+    }
+
+    let user_bin = if cfg!(windows) {
+        data_root.join("user").join("Scripts")
+    } else {
+        data_root.join("user").join("bin")
+    };
+    std::fs::create_dir_all(&user_bin).map_err(|error| {
+        TorbenError::new(
+            "python_environment_failed",
+            "Could not prepare the managed Python user script directory.",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+
+    let config_file =
+        data_root
+            .join("config")
+            .join(if cfg!(windows) { "pip.ini" } else { "pip.conf" });
+    if !config_file.exists() {
+        std::fs::write(&config_file, b"[global]\n").map_err(|error| {
+            TorbenError::new(
+                "python_environment_failed",
+                "Could not prepare the managed pip configuration.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+    }
+
+    for (name, value) in [
+        ("PIP_CACHE_DIR", data_root.join("cache")),
+        ("PIP_CONFIG_FILE", config_file),
+        ("PYTHONUSERBASE", data_root.join("user")),
+        ("TMP", data_root.join("temp")),
+        ("TEMP", data_root.join("temp")),
+        ("TMPDIR", data_root.join("temp")),
+    ] {
+        command.env(name, value);
+    }
+    // pip otherwise performs a periodic version-check request even when the
+    // user did not ask to install or query a package.
+    command.env("PIP_DISABLE_PIP_VERSION_CHECK", "1");
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        [bin.to_path_buf(), user_bin]
+            .into_iter()
+            .chain(std::env::split_paths(&inherited)),
+    )
+    .map_err(|error| {
+        TorbenError::new(
+            "python_environment_failed",
+            "Could not prepare the managed Python PATH.",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+    command.env("PATH", path);
+    Ok(())
+}
+
 pub trait PythonSigstoreVerifier: Send + Sync {
     fn verify(
         &self,
@@ -1534,6 +1612,43 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.code, "python_sigstore_verifier_unavailable");
+    }
+
+    #[test]
+    fn managed_python_commands_keep_pip_state_below_torben_data_root() {
+        let root = tempfile::tempdir().unwrap();
+        let data_root = root.path().join("userData/python");
+        let bin = root.path().join("apps/python/3.14.0");
+        let mut command = std::process::Command::new("python");
+
+        configure_command_environment(&mut command, &data_root, &bin).unwrap();
+
+        let env = command
+            .get_envs()
+            .filter_map(|(name, value)| {
+                value.map(|value| (name.to_string_lossy(), value.to_owned()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            env["PIP_CACHE_DIR"],
+            data_root.join("cache").into_os_string()
+        );
+        assert_eq!(
+            env["PYTHONUSERBASE"],
+            data_root.join("user").into_os_string()
+        );
+        assert_eq!(
+            env["PIP_CONFIG_FILE"],
+            data_root
+                .join("config")
+                .join(if cfg!(windows) { "pip.ini" } else { "pip.conf" })
+                .into_os_string()
+        );
+        assert_eq!(env["PIP_DISABLE_PIP_VERSION_CHECK"], "1");
+        assert!(data_root.join("cache").is_dir());
+        assert!(data_root.join("user").is_dir());
+        assert!(data_root.join("config").is_dir());
+        assert!(data_root.join("temp").is_dir());
     }
 
     #[cfg(windows)]

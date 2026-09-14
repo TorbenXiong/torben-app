@@ -1,0 +1,25 @@
+{
+  "id": "app.torben.plugin.mysql",
+  "version": "0.1.0",
+  "protocolVersion": 1,
+  "minimumHostVersion": "0.1.0",
+  "publisher": "Torben App",
+  "displayName": "MySQL",
+  "capabilities": [
+    "version_discovery",
+    "external_discovery",
+    "managed_install",
+    "global_selection",
+    "managed_uninstall",
+    "schema_ui"
+  ],
+  "permissions": {
+    "networkDomains": ["cdn.mysql.com"],
+    "filesystemRoots": ["managed_app_library", "download_cache", "staging", "plugin_data"],
+    "packageManagers": [],
+    "externalCommands": ["mysql", "mysqld", "mysqladmin", "mysqldump"]
+  },
+  "targets": [],
+  "signature": null,
+  "revoked": false
+}

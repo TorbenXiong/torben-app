@@ -28,6 +28,15 @@ const tools = [
   "torben-plugin-codex",
   "torben-shim",
 ];
+if (process.platform === "win32")
+  tools.splice(
+    3,
+    0,
+    "torben-plugin-rust",
+    "torben-plugin-mysql",
+    "torben-plugin-redis",
+    "torben-plugin-postgresql",
+  );
 const cargoArguments = ["build", "--locked"];
 for (const tool of tools) {
   cargoArguments.push("-p", tool);

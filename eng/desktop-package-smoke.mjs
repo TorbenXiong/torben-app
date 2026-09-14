@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { detectExecutableTarget } from "./collect-release-artifacts.mjs";
 import { verifyReleaseMetadata } from "./release-metadata.mjs";
 
-const sidecarNames = Object.freeze([
+const baseSidecarNames = Object.freeze([
   "torben-plugin-node",
   "torben-plugin-temurin",
   "torben-plugin-python",
@@ -23,6 +23,14 @@ const sidecarNames = Object.freeze([
   "torben-plugin-vscode",
   "torben-plugin-codex",
   "torben-shim",
+]);
+const windowsSidecarNames = Object.freeze([
+  ...baseSidecarNames.slice(0, 3),
+  "torben-plugin-rust",
+  "torben-plugin-mysql",
+  "torben-plugin-redis",
+  "torben-plugin-postgresql",
+  ...baseSidecarNames.slice(3),
 ]);
 const maximumEntries = 20_000;
 const maximumCommandOutput = 4 * 1024 * 1024;
@@ -176,7 +184,7 @@ function inspectWindowsInstallation(root, target) {
     "Installed desktop executable",
   );
   const executableDirectory = dirname(mainExecutable);
-  const sidecars = sidecarNames.map((name) => {
+  const sidecars = windowsSidecarNames.map((name) => {
     const accepted = new Set(
       [`${name}.exe`, `${name}-${target}.exe`].map((value) => value.toLowerCase()),
     );
@@ -236,7 +244,7 @@ function inspectMacosInstallation(root, target, expectedVersion, execute, enforc
     enforceExecutableMode,
   );
   const entries = readdirSync(executableDirectory, { withFileTypes: true });
-  const sidecars = sidecarNames.map((name) => {
+  const sidecars = baseSidecarNames.map((name) => {
     const accepted = new Set([name, `${name}-${target}`]);
     const matches = entries.filter((entry) => entry.isFile() && accepted.has(entry.name));
     if (matches.length !== 1) {
@@ -259,7 +267,7 @@ function verifySignedInstallation({ inspected, packageFile, platform, execute, e
     const signatureScript = [
       "$ErrorActionPreference = 'Stop'",
       "$SignatureTargets = ConvertFrom-Json -InputObject $env:TORBEN_SIGNATURE_PATHS",
-      "if ($SignatureTargets.Count -ne 9) { throw 'Expected one package and eight installed executables.' }",
+      `if ($SignatureTargets.Count -ne ${windowsSidecarNames.length + 2}) { throw 'Expected one package, one desktop executable, and ${windowsSidecarNames.length} sidecars.' }`,
       "$Thumbprints = @()",
       "foreach ($TargetPath in $SignatureTargets) {",
       "  $Signature = Get-AuthenticodeSignature -LiteralPath $TargetPath",

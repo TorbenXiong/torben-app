@@ -1417,6 +1417,9 @@ mod tests {
                 message: "Downloading".to_owned(),
                 progress: Some(0.3),
                 timestamp: "2".to_owned(),
+                kind: None,
+                app_id: None,
+                version: None,
             },
             OperationEvent {
                 operation_id,
@@ -1426,6 +1429,9 @@ mod tests {
                 message: "Started".to_owned(),
                 progress: Some(0.0),
                 timestamp: "1".to_owned(),
+                kind: None,
+                app_id: None,
+                version: None,
             },
         ]);
         assert_eq!(latest.len(), 1);

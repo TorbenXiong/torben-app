@@ -13,10 +13,12 @@ import {
   getOperationEvents,
   getVersions,
   installApp,
+  installBundledNodePlugin,
   installBundledPythonPlugin,
   onVersionCatalogUpdated,
   selectVersion,
   uninstallApp,
+  uninstallBundledNodePlugin,
   uninstallBundledPythonPlugin,
 } from "../api";
 
@@ -99,6 +101,19 @@ describe("Tauri application lifecycle command mapping", () => {
     expect(invokeMock.mock.calls).toEqual([
       ["install_bundled_python_plugin"],
       ["uninstall_bundled_python_plugin"],
+    ]);
+  });
+
+  it("maps bundled Node plugin lifecycle commands", async () => {
+    const plugin = { id: "app.torben.plugin.node" };
+    invokeMock.mockResolvedValueOnce(plugin).mockResolvedValueOnce(undefined);
+
+    await expect(installBundledNodePlugin()).resolves.toEqual(plugin);
+    await uninstallBundledNodePlugin();
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["install_bundled_node_plugin"],
+      ["uninstall_bundled_node_plugin"],
     ]);
   });
 });
