@@ -85,8 +85,7 @@ test("release workflows preserve Cargo arguments and native package prerequisite
     assert.doesNotMatch(release, /require\("\.\/package\.json"\)/u);
     assert.match(release, /join\(process\.env\.GITHUB_WORKSPACE, "package\.json"\)/u);
   }
-  assert.match(officialRelease, /working-directory: apps\/desktop/u);
-  assert.match(officialRelease, /build-windows-portable\.mjs --desktop-only/u);
+  assert.match(officialRelease, /run: node eng\/build-windows-portable\.mjs/u);
   assert.match(officialRelease, /cargo fetch --locked --target x86_64-pc-windows-msvc/u);
   assert.doesNotMatch(officialRelease, /(?:macos|aarch64|patchelf)/u);
   assert.match(officialRelease, /--target x86_64-pc-windows-msvc/u);

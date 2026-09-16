@@ -2,7 +2,7 @@
 
 Torben App distinguishes development artifacts from official releases. A successful build is not
 enough to call an artifact official: the portable executable must come from the exact tagged source
-revision and pass the applicable signing, launch, transfer, and hash gates. The current preview, CI,
+revision and pass the applicable build, launch, transfer, and hash gates. The current preview, CI,
 and official release target is Windows x64. The broader package matrix below is retained as future
 release-engineering design and is not a current support commitment.
 
@@ -194,16 +194,14 @@ node --test `
 The official deliverable is one Windows x64 file named `TorbenApp.exe`. The tag workflow requires:
 
 - the exact `refs/tags/v<workspace-version>` ref and a matching version-specific release-notes file;
-- Authenticode signatures from the configured publisher on all seven embedded providers, the shim,
-  and the final portable executable;
-- timestamped signatures, exact ProductVersion, Windows x64 PE target, and a single-file release
-  directory;
+- exact ProductVersion, Windows x64 PE target, and a single-file release directory;
 - a ten-second launch against a fresh isolated `userData`, creation of `state.db`, and no recursive
   `tools/shims/userData` directory;
-- byte-identical SHA-256 verification and publisher verification after GitHub Artifact transfer.
+- byte-identical SHA-256 verification after GitHub Artifact transfer.
 
-If any Windows signing credential is absent, the workflow must not create or update an official
-GitHub Release.
+The current portable release is intentionally not Authenticode-signed. Windows can therefore show
+an unknown-publisher or SmartScreen warning. The release notes must disclose that limitation; adding
+publisher signing later is a separate release-engineering decision.
 
 ## Current GitHub workflow
 
@@ -227,10 +225,9 @@ that the preview is an official release.
 `.github/workflows/official-release.yml` is the Windows x64 formal publishing path. It emits only
 `TorbenApp.exe`; installer packages, CLI archives, updater manifests, checksum files, and release
 metadata are not public assets. Cross-platform build and package-acceptance definitions remain in
-the manual development workflow for future work and are not part of the current support scope. A
-formal Windows release remains operationally unavailable until Windows signing and protected-
-environment review are configured. The preview workflow must not be renamed or treated as an
-official release.
+the manual development workflow for future work and are not part of the current support scope. The
+protected-environment review remains the manual publication approval gate. The preview workflow
+must not be renamed or treated as an official release.
 
 The application-side updater uses the fixed GitHub Release `latest.json` endpoint and accepts its
 Base64-encoded minisign verification key only through the compile-time
@@ -241,24 +238,14 @@ installer/update-channel milestone; the current portable release is upgraded by 
 `TorbenApp.exe` while preserving `userData`.
 
 `.github/workflows/official-release.yml` is the only publishing workflow. It runs only for an exact
-`v<workspace-version>` tag and is bound to the protected `official-release` GitHub environment. The
-environment must require review and provide all relevant secrets:
-
-- `WINDOWS_CERTIFICATE` (Base64 PFX);
-- `WINDOWS_CERTIFICATE_PASSWORD`;
-- the exact `WINDOWS_CERTIFICATE_SUBJECT`;
-- an HTTPS `WINDOWS_TIMESTAMP_URL`.
-
-The Windows x64 job verifies the tag, release-notes template, source, tests, and secrets before
-building. It imports the PFX into the ephemeral user store, requires its Subject to match the
-protected environment, builds and signs the embedded provider executables and shim, then embeds
-those exact signed bytes in the desktop and signs `TorbenApp.exe`. The job verifies every signature
-and timestamp, the executable version and target, the exact one-file inventory, and a sustained
-launch from a fresh `TorbenApp.exe` plus `userData` directory.
+`v<workspace-version>` tag. Its publishing job is bound to the protected `official-release` GitHub
+environment, which requires one review but no Windows signing secrets. The Windows x64 build job
+verifies the tag, release-notes template, source, and tests before building. It verifies the
+executable version and target, the exact one-file inventory, and a sustained launch from a fresh
+`TorbenApp.exe` plus `userData` directory.
 
 The publish job downloads only `TorbenApp.exe`, compares its SHA-256 with the build-job output,
-rechecks Authenticode publisher and ProductVersion, then generates the approved release-note format
-from `docs/releases/<version>.md`. It appends the verified SHA-256 and tag-specific changelog URL and
-creates the GitHub Release once with `--verify-tag`. Missing credentials, an unexpected file,
-signature or hash mismatch, failed launch, version mismatch, or an existing Release stops
-publication.
+rechecks ProductVersion, then generates the approved release-note format from
+`docs/releases/<version>.md`. It appends the verified SHA-256 and tag-specific changelog URL and
+creates the GitHub Release once with `--verify-tag`. An unexpected file, hash mismatch, failed
+launch, version mismatch, or an existing Release stops publication.

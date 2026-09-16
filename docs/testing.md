@@ -2,8 +2,8 @@
 
 Torben App separates deterministic fixture coverage, native package acceptance, and read-only live
 catalog monitoring. A configured workflow is not evidence that a particular remote run passed; the
-GitHub run and its artifacts remain the authoritative evidence for Windows x64 signing and
-publication gates. macOS, Linux, and ARM64 evidence is retained for future platform milestones.
+GitHub run and its artifacts remain the authoritative evidence for Windows x64 publication gates.
+macOS, Linux, and ARM64 evidence is retained for future platform milestones.
 
 ## Offline development gates
 
@@ -98,7 +98,7 @@ unexecuted acceptance scenario.
 
 ## Native package acceptance
 
-The official gate builds, signs, launches, transfers, and re-verifies the Windows x64 single-file
+The official gate builds, launches, transfers, and re-verifies the Windows x64 single-file
 `TorbenApp.exe`. NSIS/MSI and the broader workflows below are retained for explicit future-platform
 and packaging validation and do not block the Windows-first portable milestone:
 
@@ -134,10 +134,9 @@ validates their stable JSON results, and atomically uploads one complete snapsho
 performs no install, selection, package-manager, or system mutation. A successful manual preflight
 does not satisfy the milestone's scheduled-run evidence requirement.
 
-An official Windows x64 release additionally requires the protected `official-release` environment
-and Windows Authenticode credentials. The workflow signs every embedded native component before it
-is embedded, signs the final `TorbenApp.exe`, launches it against fresh isolated data, and repeats
-hash, signature, version, target, and single-file inventory checks after artifact transfer. Apple
-Developer ID, notarization, installers, and updater signing are deferred. Missing required Windows
-evidence or credentials means the release criterion remains unverified; an unsigned development
-artifact must never be described as an official release.
+An official Windows x64 release additionally requires the protected `official-release` environment.
+The workflow launches `TorbenApp.exe` against fresh isolated data and repeats hash, version, target,
+and single-file inventory checks after artifact transfer. The current portable executable is
+intentionally not Authenticode-signed, so the release notes disclose that Windows can show an
+unknown-publisher or SmartScreen warning. Apple Developer ID, notarization, installers, updater
+signing, and Windows publisher signing are deferred.
