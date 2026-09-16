@@ -317,22 +317,24 @@ test("development workflow pins approved Actions and cannot publish an official 
     /process\.env\.GITHUB_REF !== `refs\/tags\/v\$\{version\}`/,
     "official release must bind the tag to the exact workspace version",
   );
-  assert.equal((officialWorkflow.match(/^ {4}environment: official-release$/gm) ?? []).length, 2);
+  assert.equal((officialWorkflow.match(/^ {4}environment: official-release$/gm) ?? []).length, 1);
   assert.equal((officialWorkflow.match(/contents: write/g) ?? []).length, 1);
   assert.doesNotMatch(officialWorkflow, /^ {2}linux-package-acceptance:/m);
   assert.doesNotMatch(officialWorkflow, /^ {2}desktop-package-acceptance:/m);
   assert.match(
     officialWorkflow,
-    /^ {2}publish:\r?\n {4}name: Verify and publish signed portable release\r?\n {4}needs: build$/m,
+    /^ {2}publish:\r?\n {4}name: Verify and publish portable release\r?\n {4}needs: build$/m,
   );
-  assert.doesNotMatch(officialWorkflow, /TAURI_SIGNING_PRIVATE_KEY|TORBEN_UPDATER_PUBLIC_KEY/);
-  assert.match(officialWorkflow, /WINDOWS_CERTIFICATE_SUBJECT/);
-  assert.match(officialWorkflow, /Get-AuthenticodeSignature/);
-  assert.match(officialWorkflow, /TimeStamperCertificate/);
-  assert.doesNotMatch(officialWorkflow, /xcrun stapler validate|APPLE_CERTIFICATE/);
+  assert.doesNotMatch(
+    officialWorkflow,
+    /TAURI_SIGNING_PRIVATE_KEY|TORBEN_UPDATER_PUBLIC_KEY|WINDOWS_CERTIFICATE|WINDOWS_TIMESTAMP_URL/,
+  );
+  assert.doesNotMatch(
+    officialWorkflow,
+    /Get-AuthenticodeSignature|TimeStamperCertificate|signtool|xcrun stapler validate|APPLE_CERTIFICATE/,
+  );
   assert.doesNotMatch(officialWorkflow, /updater|latest\.json|\.msi|nsis|torben\.exe/i);
-  assert.match(officialWorkflow, /build-windows-portable\.mjs --prepare-only/);
-  assert.match(officialWorkflow, /build-windows-portable\.mjs --desktop-only/);
+  assert.match(officialWorkflow, /run: node eng\/build-windows-portable\.mjs/);
   assert.match(officialWorkflow, /verify-windows-portable-release\.mjs/);
   assert.match(officialWorkflow, /Launch portable executable with isolated data/);
   assert.match(officialWorkflow, /Copy-Item -LiteralPath \$source -Destination \$portable/);
@@ -356,7 +358,7 @@ test("development workflow pins approved Actions and cannot publish an official 
   assert.doesNotMatch(officialWorkflow, /(?:aarch64|apple-darwin|unknown-linux)/);
 
   const publicationGates = [
-    "Download signed portable executable",
+    "Download portable executable",
     "Re-verify downloaded portable executable",
     "Create release notes",
     "Create immutable GitHub Release",

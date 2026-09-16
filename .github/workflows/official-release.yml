@@ -1,4 +1,4 @@
-name: Official signed portable release
+name: Official portable release
 
 on:
   push:
@@ -13,8 +13,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build, sign, and accept Windows x64 portable executable
-    environment: official-release
+    name: Build and accept Windows x64 portable executable
     runs-on: windows-latest
     outputs:
       sha256: ${{ steps.portable.outputs.sha256 }}
@@ -73,92 +72,15 @@ jobs:
       - name: Prepare pinned Python Install Manager
         run: pnpm run prepare:python-manager
 
-      - name: Import Windows signing certificate
-        shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          WINDOWS_CERTIFICATE_SUBJECT: ${{ secrets.WINDOWS_CERTIFICATE_SUBJECT }}
-          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          foreach ($name in @('WINDOWS_CERTIFICATE', 'WINDOWS_CERTIFICATE_PASSWORD', 'WINDOWS_CERTIFICATE_SUBJECT', 'WINDOWS_TIMESTAMP_URL')) {
-            if ([string]::IsNullOrWhiteSpace((Get-Item "Env:$name").Value)) { throw "Official release secret is missing: $name" }
-          }
-          if (-not $env:WINDOWS_TIMESTAMP_URL.StartsWith('https://')) { throw 'Windows timestamp URL must use HTTPS.' }
-          $certificatePath = Join-Path $env:RUNNER_TEMP 'torben-signing.pfx'
-          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
-          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
-          $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $password
-          Remove-Item -LiteralPath $certificatePath
-          if (-not $certificate.HasPrivateKey) { throw 'Windows certificate has no private key.' }
-          if ($certificate.Subject -ne $env:WINDOWS_CERTIFICATE_SUBJECT) { throw "Windows certificate subject mismatch: $($certificate.Subject)" }
-          "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Build embedded native components
-        run: node eng/build-windows-portable.mjs --prepare-only
-
-      - name: Sign embedded native components
-        shell: pwsh
-        env:
-          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
-            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
-          if (-not $signtool) { throw 'signtool.exe was not found in the Windows SDK.' }
-          $names = @(
-            'torben-plugin-node',
-            'torben-plugin-temurin',
-            'torben-plugin-python',
-            'torben-plugin-rust',
-            'torben-plugin-mysql',
-            'torben-plugin-redis',
-            'torben-plugin-postgresql',
-            'torben-shim'
-          )
-          foreach ($name in $names) {
-            $file = Join-Path 'target\release' "$name.exe"
-            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Embedded component is missing: $file" }
-            & $signtool sign /sha1 $env:WINDOWS_CERTIFICATE_THUMBPRINT /fd sha256 /tr $env:WINDOWS_TIMESTAMP_URL /td sha256 $file
-            if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed: $file" }
-          }
-
       - name: Build portable desktop executable
-        working-directory: apps/desktop
-        run: node ../../eng/build-windows-portable.mjs --desktop-only
+        run: node eng/build-windows-portable.mjs
 
-      - name: Sign and verify portable executable
+      - name: Verify portable executable
         id: portable
         shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE_SUBJECT: ${{ secrets.WINDOWS_CERTIFICATE_SUBJECT }}
-          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
-            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
-          if (-not $signtool) { throw 'signtool.exe was not found in the Windows SDK.' }
           $portable = 'artifacts\torben-app-portable-windows-x64\TorbenApp.exe'
-          & $signtool sign /sha1 $env:WINDOWS_CERTIFICATE_THUMBPRINT /fd sha256 /tr $env:WINDOWS_TIMESTAMP_URL /td sha256 $portable
-          if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed: $portable" }
-          $signatureTargets = @($portable)
-          $signatureTargets += @(
-            'torben-plugin-node',
-            'torben-plugin-temurin',
-            'torben-plugin-python',
-            'torben-plugin-rust',
-            'torben-plugin-mysql',
-            'torben-plugin-redis',
-            'torben-plugin-postgresql',
-            'torben-shim'
-          ) | ForEach-Object { if ($_ -eq $portable) { $_ } else { "target\release\$_.exe" } }
-          foreach ($file in $signatureTargets) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $file
-            if ($signature.Status -ne 'Valid') { throw "Invalid Authenticode signature: $file ($($signature.Status))" }
-            if ($signature.SignerCertificate.Subject -ne $env:WINDOWS_CERTIFICATE_SUBJECT) { throw "Unexpected Authenticode publisher: $file" }
-            if (-not $signature.TimeStamperCertificate) { throw "Authenticode timestamp is missing: $file" }
-          }
           $version = (Get-Item -LiteralPath $portable).VersionInfo.ProductVersion
           if ($version -ne '${{ steps.identity.outputs.version }}') { throw "Portable version mismatch: $version" }
           node eng/verify-windows-portable-release.mjs --directory artifacts/torben-app-portable-windows-x64
@@ -192,7 +114,7 @@ jobs:
             if ($cleanupError) { throw $cleanupError }
           }
 
-      - name: Upload signed portable executable
+      - name: Upload portable executable
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: official-windows-x64-portable
@@ -200,13 +122,8 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Remove imported Windows certificate
-        if: always() && env.WINDOWS_CERTIFICATE_THUMBPRINT != ''
-        shell: pwsh
-        run: Remove-Item -LiteralPath "Cert:\CurrentUser\My\$env:WINDOWS_CERTIFICATE_THUMBPRINT"
-
   publish:
-    name: Verify and publish signed portable release
+    name: Verify and publish portable release
     needs: build
     environment: official-release
     runs-on: windows-latest
@@ -214,7 +131,6 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      WINDOWS_CERTIFICATE_SUBJECT: ${{ secrets.WINDOWS_CERTIFICATE_SUBJECT }}
     steps:
       - name: Check out exact tagged revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -224,7 +140,7 @@ jobs:
         with:
           node-version: 24.19.0
 
-      - name: Download signed portable executable
+      - name: Download portable executable
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: official-windows-x64-portable
@@ -236,10 +152,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           node eng/verify-windows-portable-release.mjs --directory artifacts/publishing --expected-sha256 '${{ needs.build.outputs.sha256 }}'
           $portable = 'artifacts\publishing\TorbenApp.exe'
-          $signature = Get-AuthenticodeSignature -LiteralPath $portable
-          if ($signature.Status -ne 'Valid') { throw "Invalid Authenticode signature: $($signature.Status)" }
-          if ($signature.SignerCertificate.Subject -ne $env:WINDOWS_CERTIFICATE_SUBJECT) { throw 'Unexpected Authenticode publisher.' }
-          if (-not $signature.TimeStamperCertificate) { throw 'Authenticode timestamp is missing.' }
           $version = (Get-Item -LiteralPath $portable).VersionInfo.ProductVersion
           if ($version -ne '${{ needs.build.outputs.version }}') { throw "Portable version mismatch: $version" }
 

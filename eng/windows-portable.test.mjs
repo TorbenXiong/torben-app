@@ -69,8 +69,7 @@ test("Windows portable builder emits only the desktop executable with embedded p
   assert.match(managerPreparation, /redirect: "error"/u);
   assert.doesNotMatch(script, /torben-plugin-(?:git|vscode|codex)/u);
   assert.doesNotMatch(script, /copyFileSync\(join\(releaseRoot, "torben\.exe"/u);
-  assert.match(script, /--prepare-only/u);
-  assert.match(script, /--desktop-only/u);
+  assert.doesNotMatch(script, /--prepare-only|--desktop-only/u);
 });
 
 test("official portable verifier accepts exactly one Windows x64 TorbenApp executable", () => {
