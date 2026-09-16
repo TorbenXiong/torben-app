@@ -72,22 +72,22 @@ test("official catalog checks allow scheduled evidence and an equivalent manual 
 });
 
 test("release workflows preserve Cargo arguments and native package prerequisites", () => {
-  for (const name of ["release.yml", "official-release.yml"]) {
-    const release = readFileSync(join(workflowDirectory, name), "utf8");
-
-    assert.match(release, /working-directory: apps\/desktop/u, name);
-    assert.match(
-      release,
-      /node node_modules\/@tauri-apps\/cli\/tauri\.js build[\s\S]*?-- --locked/u,
-      name,
-    );
-    assert.doesNotMatch(release, /pnpm[^\n]*exec tauri build/u, name);
-    assert.doesNotMatch(release, /require\("\.\/package\.json"\)/u, name);
-    assert.match(release, /join\(process\.env\.GITHUB_WORKSPACE, "package\.json"\)/u, name);
-  }
   const crossPlatformRelease = readFileSync(join(workflowDirectory, "release.yml"), "utf8");
+  assert.match(crossPlatformRelease, /working-directory: apps\/desktop/u);
+  assert.match(
+    crossPlatformRelease,
+    /node node_modules\/@tauri-apps\/cli\/tauri\.js build[\s\S]*?-- --locked/u,
+  );
   assert.match(crossPlatformRelease, /patchelf xdg-utils/u);
   const officialRelease = readFileSync(join(workflowDirectory, "official-release.yml"), "utf8");
+  for (const release of [crossPlatformRelease, officialRelease]) {
+    assert.doesNotMatch(release, /pnpm[^\n]*exec tauri build/u);
+    assert.doesNotMatch(release, /require\("\.\/package\.json"\)/u);
+    assert.match(release, /join\(process\.env\.GITHUB_WORKSPACE, "package\.json"\)/u);
+  }
+  assert.match(officialRelease, /working-directory: apps\/desktop/u);
+  assert.match(officialRelease, /build-windows-portable\.mjs --desktop-only/u);
+  assert.match(officialRelease, /cargo fetch --locked --target x86_64-pc-windows-msvc/u);
   assert.doesNotMatch(officialRelease, /(?:macos|aarch64|patchelf)/u);
   assert.match(officialRelease, /--target x86_64-pc-windows-msvc/u);
 });

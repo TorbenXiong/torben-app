@@ -1,19 +1,21 @@
 # Release engineering
 
-Torben App distinguishes development artifacts from official releases. A successful package build
-is not enough to call an artifact official: every required package, update artifact, and checksum
-must come from the same exact version and source revision, and the applicable signing gates must
-pass. The current preview, CI, and official release target is Windows x64. The broader matrix below
-is retained as future release-engineering design and is not a current support commitment.
+Torben App distinguishes development artifacts from official releases. A successful build is not
+enough to call an artifact official: the portable executable must come from the exact tagged source
+revision and pass the applicable signing, launch, transfer, and hash gates. The current preview, CI,
+and official release target is Windows x64. The broader package matrix below is retained as future
+release-engineering design and is not a current support commitment.
 
 ## Native build matrix
 
-Each target is built on a native GitHub-hosted runner so that desktop packages and every
-target-supported native sidecar share one architecture. Windows x64 currently bundles ten provider
-plugins plus the command shim; deferred Unix targets retain the original six providers plus the
-shim. `eng/prepare-bundled-tools.mjs` validates the executable header of every selected plugin and
-shim against the Rust host target before copying it into Tauri's sidecar directory; the workflow
-also passes the same explicit target to Tauri and forwards `--locked` to Cargo.
+Each deferred package target is built on a native GitHub-hosted runner so that desktop packages and
+every target-supported native sidecar share one architecture. The package matrix includes ten
+Windows providers plus the command shim; deferred Unix targets retain the original six providers
+plus the shim. The official portable executable instead embeds the seven currently supported
+Windows providers and the shim. `eng/prepare-bundled-tools.mjs` validates the executable header of
+every selected package sidecar against the Rust host target before copying it into Tauri's sidecar
+directory; the package workflow also passes the same explicit target to Tauri and forwards
+`--locked` to Cargo.
 
 | Platform | Rust target | Expected packages |
 | --- | --- | --- |
@@ -49,8 +51,8 @@ probe tools are `timeout`, plus `xvfb-run` or `weston`, and `dpkg-deb` for deb o
 `rpm2cpio`, and `cpio` for rpm. AppImage extraction uses `--appimage-extract` and does not require
 FUSE.
 
-The default `--mode extract` never invokes a package manager. The reusable acceptance workflow is
-called by both development and official releases and uses the explicit `--mode install`: AppImage
+The default `--mode extract` never invokes a package manager. The reusable development acceptance
+workflow uses the explicit `--mode install`: AppImage
 runs the verified portable package with
 `APPIMAGE_EXTRACT_AND_RUN=1`, deb invokes `apt-get`, and rpm invokes `dnf`. System package modes
 require root and are intended only for a disposable container. After the package manager succeeds,
@@ -82,8 +84,8 @@ installer silently, discovers the registered installation, runs the probe, and u
 `finally` block. macOS mounts the DMG read-only, copies its sole `.app` into a temporary
 `Applications` directory to model the documented drag-to-install flow, detaches the image, and runs
 the probe against the copy. The manual cross-platform development aggregate depends on these six
-jobs and the eight Linux jobs. The official workflow supplies a reduced matrix containing only the
-Windows x64 NSIS and MSI jobs.
+jobs and the eight Linux jobs. The official portable workflow does not invoke this deferred package
+matrix.
 
 When verified release metadata declares `signingStatus=signed`, the desktop probe also repeats the
 platform trust checks after artifact transfer and installation. Windows requires valid
@@ -155,9 +157,10 @@ node .\eng\release-metadata.mjs verify `
   --artifacts .\artifacts\windows-x64
 ```
 
-`eng/verify-release-set.mjs` re-verifies target directories and applies a release-kind-specific
-inventory: development sets retain all six known targets, while official sets currently require
-only Windows x64. Every included target must share one version, Git revision/ref, and release kind.
+`eng/verify-release-set.mjs` re-verifies deferred package/update target directories and applies a
+release-kind-specific inventory: development sets retain all six known targets, while its legacy
+official mode requires only Windows x64. Every included target must share one version, Git
+revision/ref, and release kind.
 The tool produces a
 deterministic `release-index.json` plus a top-level `SHA256SUMS` covering every target payload,
 target manifest, target checksum file, and the aggregate index. Both aggregate files are completely
@@ -165,8 +168,9 @@ calculated and fsynced as `.next` files before either final name is exposed; a n
 rename failure removes temporary and partially committed aggregate metadata. Official sets must
 contain a semantically valid `latest.json` whose two Windows x64 installer records exactly reproduce
 the signed mapping files, local signatures, version, and fixed GitHub URLs. Development sets must not contain
-`latest.json`. The final publishing job must run `verify` after artifact download and before
-creating a GitHub Release.
+`latest.json`. A future package/update publishing job must run `verify` after artifact download and
+before creating a GitHub Release. The current portable workflow uses the stricter one-file verifier
+instead.
 
 ```powershell
 node .\eng\verify-release-set.mjs create --releases .\artifacts\release-set
@@ -187,16 +191,19 @@ node --test `
 
 ## Official-release gates
 
-The metadata tool accepts `official` only for the exact `refs/tags/v<version>` ref and only when
-the signing status is `signed`. The release workflow must independently prove that declaration:
+The official deliverable is one Windows x64 file named `TorbenApp.exe`. The tag workflow requires:
 
-- Windows packages have a valid configured publisher signature.
-- update artifacts and metadata are signed with the configured Tauri updater key.
-- Windows x64 target metadata verifies after artifact transfer and before GitHub Release creation.
-- desktop, CLI, sidecars, package metadata, tag, and update metadata all report the same version.
+- the exact `refs/tags/v<workspace-version>` ref and a matching version-specific release-notes file;
+- Authenticode signatures from the configured publisher on all seven embedded providers, the shim,
+  and the final portable executable;
+- timestamped signatures, exact ProductVersion, Windows x64 PE target, and a single-file release
+  directory;
+- a ten-second launch against a fresh isolated `userData`, creation of `state.db`, and no recursive
+  `tools/shims/userData` directory;
+- byte-identical SHA-256 verification and publisher verification after GitHub Artifact transfer.
 
-If any signing credential is absent, the workflow may publish a clearly named development artifact
-for manual testing, but it must not create or update an official GitHub Release.
+If any Windows signing credential is absent, the workflow must not create or update an official
+GitHub Release.
 
 ## Current GitHub workflow
 
@@ -217,51 +224,41 @@ a SHA-256 checksum, so users do not need to download duplicate installer formats
 not enter a protected Environment, read signing credentials, create a tag or GitHub Release, or claim
 that the preview is an official release.
 
-`.github/workflows/official-release.yml` is the Windows x64 formal publishing path. Cross-platform
-build and acceptance definitions remain in the manual development workflow for future work and are
-not part of the current support scope. A formal Windows release remains operationally unavailable
-until Windows signing, the Tauri updater signing path, and protected-environment review are
-configured. The preview workflow must not be renamed or treated as an official release.
+`.github/workflows/official-release.yml` is the Windows x64 formal publishing path. It emits only
+`TorbenApp.exe`; installer packages, CLI archives, updater manifests, checksum files, and release
+metadata are not public assets. Cross-platform build and package-acceptance definitions remain in
+the manual development workflow for future work and are not part of the current support scope. A
+formal Windows release remains operationally unavailable until Windows signing and protected-
+environment review are configured. The preview workflow must not be renamed or treated as an
+official release.
 
 The application-side updater uses the fixed GitHub Release `latest.json` endpoint and accepts its
 Base64-encoded minisign verification key only through the compile-time
 `TORBEN_UPDATER_PUBLIC_KEY` environment
-variable. Development builds omit the variable and therefore never query the endpoint. The official
-workflow generates Tauri updater artifacts, signs them with the matching private key, embeds only
-the public key, verifies every `.sig`, and includes the signed `latest.json` in the Windows x64
-publication transaction.
+variable. Development and official portable builds omit the variable and therefore never query the
+endpoint. The updater implementation and its signed metadata tooling remain for a future explicit
+installer/update-channel milestone; the current portable release is upgraded by replacing
+`TorbenApp.exe` while preserving `userData`.
 
 `.github/workflows/official-release.yml` is the only publishing workflow. It runs only for an exact
 `v<workspace-version>` tag and is bound to the protected `official-release` GitHub environment. The
 environment must require review and provide all relevant secrets:
 
-- updater: `TORBEN_UPDATER_PUBLIC_KEY` (Base64-encoded minisign public-key text),
-  `TAURI_SIGNING_PRIVATE_KEY`, and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`;
-- Windows: `WINDOWS_CERTIFICATE` (Base64 PFX), `WINDOWS_CERTIFICATE_PASSWORD`, the exact
-  `WINDOWS_CERTIFICATE_SUBJECT`, and an HTTPS `WINDOWS_TIMESTAMP_URL`;
+- `WINDOWS_CERTIFICATE` (Base64 PFX);
+- `WINDOWS_CERTIFICATE_PASSWORD`;
+- the exact `WINDOWS_CERTIFICATE_SUBJECT`;
+- an HTTPS `WINDOWS_TIMESTAMP_URL`.
 
-The Windows x64 job verifies the tag and secrets before building. It imports the PFX into the
-ephemeral user store, requires its Subject to match the protected environment, Authenticode-signs
-the CLI and sidecars, lets Tauri sign MSI/NSIS, and then requires every signature to report `Valid`
-from the same publisher. Tauri produces minisign updater signatures for both Windows installers.
-Both signed Windows x64 packages must then pass installation and sustained GUI launch before the
-publishing job can receive write permission.
+The Windows x64 job verifies the tag, release-notes template, source, tests, and secrets before
+building. It imports the PFX into the ephemeral user store, requires its Subject to match the
+protected environment, builds and signs the embedded provider executables and shim, then embeds
+those exact signed bytes in the desktop and signs `TorbenApp.exe`. The job verifies every signature
+and timestamp, the executable version and target, the exact one-file inventory, and a sustained
+launch from a fresh `TorbenApp.exe` plus `userData` directory.
 
-`torben-release-tools` streams each downloaded artifact through `minisign-verify` using the public
-key compiled into the application. The publish job repeats those checks after artifact transfer,
-requires the exact two-installer Windows x64 updater mapping, generates `latest.json`, re-verifies the complete
-release set, flattens only unique public assets, and creates the GitHub Release once with
-`--verify-tag`. Mapping records accept only the fixed target/platform pairs, safe basenames, exact
-package suffixes, matching `.sig` names, and files already covered by signed target metadata.
-Deferred macOS updater tarballs retain a deterministic Rust-target suffix so Intel and Apple Silicon
-cannot resolve to the same GitHub asset URL when that milestone resumes. Existing target packages must be byte-identical to the
-Tauri updater input; they are not silently reused by name alone. The same structural validator
-resolves every verifier path before `torben-release-tools` reads an artifact, both in the native
-build job and after artifact transfer. Manifest and mapping files are atomically written, while
-flattened assets are staged in a sibling directory and renamed only after every copy and checksum
-succeeds. A separate upload gate then re-enumerates the flat directory, rejects links and nested or
-extra entries, compares every public asset with its verified release-set source, and validates the
-exact publishing `SHA256SUMS` before `gh release create` can run. Missing credentials, duplicate
-asset names, signature mismatch, notarization failure, partial target matrices, unsafe mappings,
-source divergence, or an existing Release stop publication without leaving a publishable partial
-directory.
+The publish job downloads only `TorbenApp.exe`, compares its SHA-256 with the build-job output,
+rechecks Authenticode publisher and ProductVersion, then generates the approved release-note format
+from `docs/releases/<version>.md`. It appends the verified SHA-256 and tag-specific changelog URL and
+creates the GitHub Release once with `--verify-tag`. Missing credentials, an unexpected file,
+signature or hash mismatch, failed launch, version mismatch, or an existing Release stops
+publication.

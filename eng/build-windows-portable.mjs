@@ -14,6 +14,12 @@ const nodeExecutable = process.execPath;
 const tauriCli = join(desktopRoot, "node_modules", "@tauri-apps", "cli", "tauri.js");
 const typescriptCli = join(desktopRoot, "node_modules", "typescript", "bin", "tsc");
 const viteCli = join(desktopRoot, "node_modules", "vite", "bin", "vite.js");
+const prepareOnly = process.argv.includes("--prepare-only");
+const desktopOnly = process.argv.includes("--desktop-only");
+
+if (prepareOnly && desktopOnly) {
+  throw new Error("--prepare-only and --desktop-only are mutually exclusive.");
+}
 
 if (process.platform !== "win32") {
   throw new Error("The Windows portable bundle can only be built on Windows.");
@@ -21,35 +27,43 @@ if (process.platform !== "win32") {
 
 verifyPythonManagerPackage();
 
-execFileSync(
-  "cargo",
-  [
-    "build",
-    "--release",
-    "--locked",
-    "--offline",
-    "-p",
-    "torben-plugin-node",
-    "-p",
-    "torben-plugin-temurin",
-    "-p",
-    "torben-plugin-python",
-    "-p",
-    "torben-plugin-rust",
-    "-p",
-    "torben-plugin-mysql",
-    "-p",
-    "torben-plugin-redis",
-    "-p",
-    "torben-plugin-postgresql",
-    "-p",
-    "torben-shim",
-  ],
-  {
-    cwd: repositoryRoot,
-    stdio: "inherit",
-  },
-);
+if (!desktopOnly) {
+  execFileSync(
+    "cargo",
+    [
+      "build",
+      "--release",
+      "--locked",
+      "--offline",
+      "-p",
+      "torben-plugin-node",
+      "-p",
+      "torben-plugin-temurin",
+      "-p",
+      "torben-plugin-python",
+      "-p",
+      "torben-plugin-rust",
+      "-p",
+      "torben-plugin-mysql",
+      "-p",
+      "torben-plugin-redis",
+      "-p",
+      "torben-plugin-postgresql",
+      "-p",
+      "torben-shim",
+    ],
+    {
+      cwd: repositoryRoot,
+      stdio: "inherit",
+    },
+  );
+}
+
+if (prepareOnly) {
+  console.log("Portable embedded tools are ready for signing.");
+  process.exit(0);
+}
+
 execFileSync(nodeExecutable, [typescriptCli, "--noEmit"], {
   cwd: desktopRoot,
   stdio: "inherit",

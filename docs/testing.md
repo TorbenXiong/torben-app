@@ -98,9 +98,9 @@ unexecuted acceptance scenario.
 
 ## Native package acceptance
 
-Windows x64 NSIS and MSI installation plus sustained launch are the current required native package
-gates. The broader workflows below are retained for explicit future-platform validation and do not
-block the Windows-first milestone:
+The official gate builds, signs, launches, transfers, and re-verifies the Windows x64 single-file
+`TorbenApp.exe`. NSIS/MSI and the broader workflows below are retained for explicit future-platform
+and packaging validation and do not block the Windows-first portable milestone:
 
 - `.github/workflows/desktop-package-acceptance.yml` installs NSIS/MSI on Windows x64 and ARM64,
   copies the application from DMG on macOS Intel and Apple Silicon, validates the application and
@@ -112,7 +112,8 @@ block the Windows-first milestone:
   same content and launch checks.
 
 The manual cross-platform development aggregate depends on all fourteen jobs. The official Windows
-x64 publishing job supplies a reduced acceptance matrix containing only the NSIS and MSI jobs.
+x64 publishing job does not invoke the installer matrix; it performs a dedicated isolated-data
+portable launch before uploading the single executable.
 Local fixture coverage for the probes lives in `eng/desktop-package-smoke.test.mjs` and
 `eng/linux-package-smoke.test.mjs`; those tests validate fail-closed behavior but do not substitute
 for the corresponding native package workflow run.
@@ -133,8 +134,10 @@ validates their stable JSON results, and atomically uploads one complete snapsho
 performs no install, selection, package-manager, or system mutation. A successful manual preflight
 does not satisfy the milestone's scheduled-run evidence requirement.
 
-An official Windows x64 release additionally requires the protected `official-release` environment,
-Windows Authenticode credentials, and the matching Tauri updater signing key. Apple Developer ID and
-notarization credentials are deferred with the macOS milestone. Missing required Windows evidence or
-credentials means the release criterion remains unverified; an unsigned development artifact must
-never be described as an official release.
+An official Windows x64 release additionally requires the protected `official-release` environment
+and Windows Authenticode credentials. The workflow signs every embedded native component before it
+is embedded, signs the final `TorbenApp.exe`, launches it against fresh isolated data, and repeats
+hash, signature, version, target, and single-file inventory checks after artifact transfer. Apple
+Developer ID, notarization, installers, and updater signing are deferred. Missing required Windows
+evidence or credentials means the release criterion remains unverified; an unsigned development
+artifact must never be described as an official release.

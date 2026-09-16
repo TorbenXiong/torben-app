@@ -474,9 +474,10 @@ while automatic installation and every per-application automatic-update list rem
 timer, resident process, scheduled task, login item, or system service is created.
 
 The desktop updater endpoint is fixed to the repository's HTTPS GitHub Release `latest.json` asset.
-The Base64-encoded minisign public key is compiled from `TORBEN_UPDATER_PUBLIC_KEY`; it is never loaded from user
-settings, an update response, or a plugin. A build without that key is explicitly unconfigured and
-does not perform its startup check. Invalid Base64, invalid minisign, oversized, or control-character input
+The Base64-encoded minisign public key is compiled from `TORBEN_UPDATER_PUBLIC_KEY`; it is never
+loaded from user settings, an update response, or a plugin. A build without that key is explicitly
+unconfigured and does not perform its startup check. Development builds and the current official
+portable build omit the key. Invalid Base64, invalid minisign, oversized, or control-character input
 fails desktop startup instead of silently disabling verification.
 
 When configured, the desktop checks once after startup only if the local notify preference is
@@ -484,8 +485,9 @@ enabled, or when the user presses **Check now**. Finding an update does not down
 installation require a separate explicit action. Tauri's updater downloads the selected platform
 artifact and verifies the response signature with the compiled public key before invoking the
 installer; only after a successful install does the process plugin relaunch the application. The
-development release workflow neither embeds a key nor generates updater artifacts, so it cannot be
-used as an update channel.
+development and official portable release workflows neither embed a key nor generate updater
+artifacts, so they cannot be used as an update channel. Portable upgrades replace `TorbenApp.exe`
+and preserve the adjacent `userData` directory.
 
 Managed application discovery is a separate Core path over the built-in provider catalogs. It
 examines only `InstallScope::Managed` records and groups versions by safe release line: Node/Temurin
