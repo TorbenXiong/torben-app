@@ -1,6 +1,6 @@
 {
   "name": "@torben-app/desktop",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "check": "tsc --noEmit",
     "prepare:bundled-tools": "node ../../eng/prepare-bundled-tools.mjs",
     "prepare:bundled-tools:release": "node ../../eng/prepare-bundled-tools.mjs --release",
-    "tauri:build": "pnpm run prepare:bundled-tools:release && tauri build --ci --config src-tauri/tauri.bundle.conf.json -- --locked",
+    "tauri:build": "node ../../eng/build-windows-portable.mjs",
     "tauri:build:portable": "node ../../eng/build-windows-portable.mjs",
     "test": "vitest run",
     "tauri": "tauri"

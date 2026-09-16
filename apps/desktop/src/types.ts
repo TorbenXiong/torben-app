@@ -30,6 +30,39 @@ export interface InstallRecord {
   health: string;
 }
 
+export type DatabaseEngine = "mysql" | "redis" | "postgresql";
+export type DatabaseInstanceState = "stopped" | "running" | "stale";
+
+export interface DatabaseInstance {
+  engine: DatabaseEngine;
+  name: string;
+  runtimeVersion: string;
+  port: number;
+  dataPath: string;
+  createdAt: string;
+  state: DatabaseInstanceState;
+  pid: number | null;
+}
+
+export interface CreateDatabaseInstanceRequest {
+  engine: DatabaseEngine;
+  name: string;
+  runtimeVersion: string | null;
+  port: number | null;
+}
+
+export interface DatabaseInstanceTarget {
+  engine: DatabaseEngine;
+  name: string;
+}
+
+export interface DatabaseBackup {
+  engine: DatabaseEngine;
+  instanceName: string;
+  path: string;
+  createdAt: string;
+}
+
 export interface SelectionRecord {
   appId: string;
   version: string;
@@ -43,6 +76,17 @@ export interface OperationEvent {
   message: string;
   progress?: number;
   timestamp: string;
+  kind?:
+    | "install"
+    | "select"
+    | "uninstall"
+    | "source_install"
+    | "source_uninstall"
+    | "source_migrate"
+    | "migrate"
+    | "plugin_install";
+  appId?: string;
+  version?: string;
 }
 
 export interface DoctorCheck {
@@ -312,6 +356,8 @@ export interface UserSettings {
   theme: "system" | "light" | "dark";
   language: "system" | "en" | "zh-CN";
   updates: UpdatePreferences;
+  pluginOrder: string[];
+  applicationEnvironments: Record<string, Record<string, string>>;
 }
 
 export interface UpdatePreferences {

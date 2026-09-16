@@ -129,7 +129,13 @@ fn compile_fixture_node_tools(install_path: &Path, version: &ExactVersion) {
     let source = install_path.join("fixture-node.rs");
     std::fs::write(
         &source,
-        format!("fn main() {{ println!(\"v{version}\"); }}\n"),
+        format!(r#"fn main() {{
+            if std::env::args().nth(1).as_deref() == Some("--fixture-environment") {{
+                for name in ["npm_config_cache", "npm_config_prefix", "npm_config_userconfig", "npm_config_globalconfig", "NODE_REPL_HISTORY", "NODE_COMPILE_CACHE", "TEMP", "PATH"] {{
+                    println!("{{name}}={{}}", std::env::var(name).unwrap());
+                }}
+            }} else {{ println!("v{version}"); }}
+        }}"#),
     )
     .expect("write fixture Node.js source");
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
@@ -164,11 +170,29 @@ fn compile_fixture_node_tools(install_path: &Path, version: &ExactVersion) {
             )
             .expect("write fixture Node.js companion command");
         }
+        let data_root = install_path
+            .ancestors()
+            .nth(3)
+            .expect("resolve fixture data root");
+        let global = data_root.join("package-managers/node/npm/global");
+        std::fs::create_dir_all(&global).expect("create fixture Node.js global directory");
+        std::fs::write(
+            global.join("pnpm.cmd"),
+            format!("@echo off\r\necho v{version}\r\n"),
+        )
+        .expect("write fixture pnpm command");
     } else {
         for command in ["npm", "npx"] {
             std::fs::copy(&node, install_path.join("bin").join(command))
                 .expect("copy fixture Node.js companion command");
         }
+        let data_root = install_path
+            .ancestors()
+            .nth(3)
+            .expect("resolve fixture data root");
+        let global = data_root.join("package-managers/node/npm/global/bin");
+        std::fs::create_dir_all(&global).expect("create fixture Node.js global bin directory");
+        std::fs::copy(&node, global.join("pnpm")).expect("write fixture pnpm command");
     }
 }
 
@@ -195,6 +219,47 @@ fn run_from_new_terminal(command: &str, shim_directory: &Path, root: &Path) -> O
 }
 
 fn assert_new_terminal_commands(shim_directory: &Path, root: &Path, expected: &ExactVersion) {
+    let output = Command::new(shim_directory.join(format!("node{}", std::env::consts::EXE_SUFFIX)))
+        .arg("--fixture-environment")
+        .env("TORBEN_DATA_DIR", root)
+        .env("npm_config_cache", root.join("outside-cache"))
+        .env("npm_config_prefix", root.join("outside-global"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let environment = String::from_utf8(output.stdout).unwrap();
+    let data = root.join("data/package-managers/node/npm");
+    for (name, relative) in [
+        ("npm_config_cache", "cache"),
+        ("npm_config_prefix", "global"),
+        ("npm_config_userconfig", "config/npmrc"),
+        ("npm_config_globalconfig", "config/global-npmrc"),
+        ("NODE_REPL_HISTORY", "repl-history"),
+        ("NODE_COMPILE_CACHE", "compile-cache"),
+        ("TEMP", "temp"),
+    ] {
+        let actual = environment
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .find_map(|(key, value)| (key == name).then_some(value))
+            .unwrap();
+        assert_eq!(Path::new(actual), data.join(relative), "{name}");
+    }
+    let path = environment
+        .lines()
+        .find_map(|line| line.strip_prefix("PATH="))
+        .unwrap();
+    let bin = root.join("data/apps/node").join(expected.to_string());
+    assert_eq!(
+        std::env::split_paths(path).next().unwrap(),
+        if cfg!(windows) { bin } else { bin.join("bin") }
+    );
+    assert!(!root.join("outside-cache").exists());
+    assert!(!root.join("outside-global").exists());
     for command in ["node", "npm", "npx"] {
         assert_successful_version(
             &run_from_new_terminal(command, shim_directory, root),
@@ -211,6 +276,12 @@ fn assert_new_terminal_commands(shim_directory: &Path, root: &Path, expected: &E
             assert!(!shim_directory.join("data").exists());
         }
     }
+    let pnpm = run_from_new_terminal("pnpm", shim_directory, root);
+    assert!(
+        pnpm.status.success(),
+        "pnpm shim failed: {}",
+        String::from_utf8_lossy(&pnpm.stderr)
+    );
 }
 
 fn assert_successful_version(output: &Output, expected: &ExactVersion) {

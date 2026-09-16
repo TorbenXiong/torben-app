@@ -24,11 +24,10 @@ camel-case payloads in one typed module.
 
 Plugins are native trusted processes that communicate through versioned JSON-RPC over stdio. A plugin describes applications, resolves aliases to exact versions, and produces application-specific plans. Core remains responsible for locking, durable operation state, download verification, staging, health checks, atomic commit, rollback, and SQLite state.
 
-The six bundled software providers are currently dormant. Production builds keep their application
-descriptors as unavailable catalog entries, omit their provider summaries and diagnostics, and
-reject application management calls. The implementation and fixture paths below are retained for
-one-at-a-time review; a provider returns to product support only after the managed application also
-keeps its own writable data under the selected Torben App installation root.
+Seven bundled software providers are available on Windows x64 after their embedded plugin payload is
+installed: Node.js, Temurin, Python, Rust, MySQL, Redis, and PostgreSQL. Git, Visual Studio Code, and
+Codex CLI remain unavailable catalog entries. A provider is exposed only after its managed commands
+and writable data paths have been constrained to the selected Torben App installation root.
 
 On Windows, Core starts provider plugins, package-source tools, health checks, and other managed
 background commands with `CREATE_NO_WINDOW`. The plugin host applies the same flag at its process
@@ -101,7 +100,11 @@ loading animations.
 
 Platform-standard directories contain four independent areas:
 
-- Data: SQLite, managed applications, staging, operation journals, and shims.
+- Data: SQLite, managed applications, package-manager state, application data, staging, operation
+  journals, and shims. Package-manager state is grouped below `package-managers/<ecosystem>/<manager>`;
+  mutable database client and instance data is grouped below `application-data/<application>`.
+  Each managed database instance owns `data`, `config`, `logs`, `temp`, `run`, and `backups`
+  subdirectories under `application-data/<engine>/instances/<name>`.
 - Config: local preferences and trusted registry configuration.
 - Cache: downloaded archives and read-through metadata.
 - Logs: structured local diagnostics.
@@ -135,8 +138,8 @@ an unhealthy actionable check.
 
 SQLite is private to Core. The first migration creates installations, selections, sources, plugins,
 operations, settings, and schema migration tables. The fourth migration adds the ordered
-application catalog. On full Core startup, the six bundled application descriptors and their
-official sources plus winget, Homebrew, apt, and DNF are synchronized in one SQLite transaction;
+application catalog. On full Core startup, the ten bundled application descriptors and enabled
+managed sources plus winget, Homebrew, apt, and DNF are synchronized in one SQLite transaction;
 application list, search, and detail queries then read the persisted snapshot. Every journal update
 is projected into the operations table with its kind, latest state, complete event JSON, and update
 time; the desktop operation log reads this Core-owned projection rather than opening the database or
@@ -145,10 +148,12 @@ Every embedded migration records its exact version, including migrations whose s
 was already present in a newly created database. Core checks the migration ledger before creating
 or changing application tables and refuses a database containing a version newer than the running
 binary supports, preventing an older Torben App from modifying newer state.
-Theme and language preferences use a versioned shared contract and one Core-owned JSON row in the
-settings table. The desktop receives preferences through its snapshot and writes them through a
-Tauri command; React and plugins never open SQLite directly. Invalid persisted enum values fail with
-a structured error instead of silently changing the user's preference.
+Theme, language, plugin display order, and supported application process environments use a
+versioned shared contract and one Core-owned JSON row in the settings table. The desktop receives
+settings through its snapshot and writes them through a Tauri command; React and plugins never open
+SQLite directly. Invalid persisted enum values, duplicate plugin identifiers, unsupported
+environment targets, unsafe names, reserved Torben variables, and oversized values fail with a
+structured error instead of silently changing runtime behavior.
 External installations are discovered read-only and are never inserted as managed installations,
 selected through managed shims, or uninstalled by Torben.
 The desktop snapshot starts every built-in discovery concurrently, then merges results in catalog
@@ -183,7 +188,8 @@ application version directory to delete.
 3. Verify official integrity metadata. For Node.js, Core first verifies the detached OpenPGP
    signature over the original `SHASUMS256.txt` bytes, then reads the archive SHA-256 from that
    authenticated manifest. A missing, malformed, untrusted, or invalid signature fails closed.
-4. Extract safely into a unique staging directory.
+4. Extract safely into a unique staging directory. PostgreSQL executes the verified EDB installer
+   only with unattended `extract-only` mode and disables Visual C++ runtime installation.
 5. Run the provider health check and verify the actual version. Node.js checks `node --version`
    against the exact requested version, then verifies that the co-located `npm` and `npx` commands
    start successfully and return semantic versions. The health-check child process receives the
@@ -508,7 +514,7 @@ background task or bypass an installation integrity check.
 
 ## Terminal selection
 
-One shim directory is the only Torben App PATH entry. `node`, `npm`, `npx`, `java`, `javac`,
+One shim directory is the only Torben App PATH entry. `node`, `npm`, `npx`, `pnpm`, `java`, `javac`,
 `python`, `python3`, `pip`, `pip3`, `git`, `code`, and `codex` aliases forward to the exact application
 installation selected in SQLite. The workspace and desktop package build
 `torben-shim` as a native tool shipped beside the host. Switching verifies the installation,
@@ -536,6 +542,13 @@ recorded state and all required backups validate. A missing, malformed, linked, 
 mismatched, or externally changed target or receipt fails closed and remains available for manual
 inspection. Profile replacement writes and syncs a pending file before atomic rename. PATH changes
 affect newly opened terminals and never mutate the desktop process environment.
+
+Node.js, Temurin, Python, and Rust may define non-secret process-scoped environment variables in
+their plugin details. Core validates and persists these values, then applies them only after its own
+provider-managed environment has been prepared by `command_for`; reserved `PATH`, package-manager
+state, cache, temporary-directory, and `TORBEN_*` variables cannot be overridden. The selected
+command and all of its descendants inherit the custom values. Torben App does not write these values
+to the Windows registry or shell profiles.
 
 ## Node.js release trust roots
 
@@ -602,7 +615,59 @@ pins the official Windows index on the command line, and uses an exact tag and s
 Unix runs `configure`, parallel `make`, and `make install` with `DESTDIR` under
 staging, without a package manager or privilege elevation. Core validates the exact CPython version
 and a working pip before commit. Selection deploys `python`, `python3`, `pip`, and `pip3` shims; it
-does not set `PYTHONHOME`. External Python discovery remains read-only.
+does not set `PYTHONHOME`. The selected `pip` command receives provider-owned `PIP_CACHE_DIR`,
+`PYTHONUSERBASE`, `PIP_CONFIG_FILE`, and temporary directories below
+`userData/package-managers/python/pip`, so
+downloaded wheels and `pip install --user` files remain in Torben's managed data. Project virtual
+environments and project-local dependencies remain project-owned. External Python discovery remains
+read-only.
+
+## PostgreSQL installation strategy
+
+PostgreSQL Windows binaries are distributed by EDB. Torben pins two reviewed core versions to exact
+EDB installer revisions and to the corresponding SHA-256 values published in Microsoft WinGet
+manifests. Core accepts only the fixed `get.enterprisedb.com` HTTPS URLs, enforces a 1 GiB response
+limit, and verifies the installer before execution.
+
+The verified installer runs hidden and cancellable inside operation staging with `--mode
+unattended`, `--unattendedmodeui none`, `--extract-only yes`, `--install_runtimes no`, and a
+Core-owned `--prefix`. Core requires one extracted prefix containing `bin/postgres.exe`, verifies
+both `postgres --version` and `psql --version`, and checks the declared server, initialization,
+control, client, backup, restore, and maintenance commands before atomic commit. Runtime installation
+does not register or start a Windows service, create a database account or cluster, or install
+pgAdmin, StackBuilder, PostGIS, or drivers.
+
+Selection installs Torben shims for the managed PostgreSQL commands and sets `PGPASSFILE`,
+`PGSERVICEFILE`, and `PGSYSCONFDIR` below `userData/application-data/postgresql/client` for each launched command. Torben
+does not set a shared `PGDATA`. An explicit managed-instance creation operation runs `initdb` in a
+new staged instance directory and pins that cluster to the chosen runtime version. PostgreSQL major
+versions have incompatible cluster formats, so installing, selecting, or upgrading a runtime never
+retargets an existing cluster.
+
+## Managed database instance lifecycle
+
+MySQL, Redis, and PostgreSQL expose one versioned instance lifecycle through `torben-core`; the
+desktop and CLI are adapters over the same requests, states, and error codes. SQLite stores the
+immutable engine/name, runtime version, port, managed data path, and creation timestamp. Runtime
+state is not trusted from SQLite: Core uses the engine health command for the configured loopback
+endpoint and treats a PID file without a healthy endpoint as `stale`, never as permission to kill a
+possibly reused PID.
+
+Create and delete acquire the cross-process workspace lock. Creation initializes a unique staging
+layout before committing the directory and state record. Servers are started only by an explicit
+user action, listen on `127.0.0.1`, remain independent of the Torben UI process, and are never
+registered as Windows services. Stop uses `mysqladmin`, `redis-cli`, or `pg_ctl`; it does not perform
+blind process termination. Logical MySQL/PostgreSQL backups use `mysqldump`/`pg_dumpall`, while Redis
+uses `SAVE` followed by a non-overwriting RDB copy. SQL restore first creates a recovery backup and
+imports through `mysql`/`psql`; Redis restore requires a stopped instance and replaces the RDB with a
+local rollback file. Delete requires explicit confirmation and a verified stopped state. Plugin
+removal and ordinary runtime upgrades preserve instances, and SQLite foreign-key ownership prevents
+removing a runtime version while an instance pins it.
+
+The desktop database pages expose separate `Version management` and `Instance management` tabs so
+runtime binaries and mutable local data have distinct workflows. MySQL includes the pinned 5.7.44
+archive, while `stable`/`latest` still select 8.4.6. Rust's default catalog is intentionally limited to the three newest stable toolchains while
+exact-version resolution remains available.
 
 ## Git installation strategy
 

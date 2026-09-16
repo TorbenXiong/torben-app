@@ -227,6 +227,12 @@ pub struct OperationEvent {
     pub message: String,
     pub progress: Option<f32>,
     pub timestamp: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<OperationKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<AppId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<ExactVersion>,
 }
 
 #[cfg(test)]

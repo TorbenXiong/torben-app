@@ -1,0 +1,25 @@
+{
+  "id": "app.torben.plugin.rust",
+  "displayName": "Rust",
+  "version": "0.0.1",
+  "protocolVersion": 1,
+  "minimumHostVersion": "0.0.1",
+  "publisher": "Torben App",
+  "capabilities": [
+    "version_discovery",
+    "external_discovery",
+    "managed_install",
+    "global_selection",
+    "managed_uninstall",
+    "schema_ui"
+  ],
+  "permissions": {
+    "networkDomains": ["api.github.com", "static.rust-lang.org"],
+    "filesystemRoots": ["managed_app_library", "download_cache", "staging", "plugin_data"],
+    "externalCommands": ["rustc", "cargo", "rustdoc", "rustfmt"],
+    "packageManagers": ["cargo"]
+  },
+  "targets": [],
+  "signature": null,
+  "revoked": false
+}

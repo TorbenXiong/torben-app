@@ -1,11 +1,11 @@
 {
   "name": "torben-app",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "dev": "pnpm --filter @torben-app/desktop tauri dev",
-    "build": "pnpm --filter @torben-app/desktop run tauri:build",
+    "build": "pnpm --filter @torben-app/desktop run tauri:build:portable",
     "check": "pnpm -r run check && biome check .",
     "format": "biome check --write .",
     "prepare:python-manager": "node eng/prepare-python-manager.mjs",

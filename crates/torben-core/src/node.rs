@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fs::File,
     future::Future,
@@ -31,6 +31,7 @@ use crate::{
 };
 
 const NODE_BASE_URL: &str = "https://nodejs.org/dist/";
+const ACTIVE_LTS_LINES: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct NodeProvider {
@@ -106,22 +107,12 @@ impl NodeProvider {
 
     pub async fn list_versions(&self) -> TorbenResult<Vec<VersionDescriptor>> {
         let releases = self.fetch_index().await?;
-        releases
-            .into_iter()
-            .map(|release| {
-                Ok(VersionDescriptor {
-                    version: ExactVersion::from_str(&release.version)?,
-                    lts_name: release.lts.as_str().map(ToOwned::to_owned),
-                    released_at: release.date,
-                    recommended: release.lts.is_string(),
-                })
-            })
-            .collect()
+        core_versions(releases)
     }
 
     pub async fn resolve_version(&self, requested: &str) -> TorbenResult<ExactVersion> {
-        let versions = self.list_versions().await?;
-        resolve_from_versions(requested, versions)
+        let releases = self.fetch_index().await?;
+        resolve_from_releases(requested, releases)
     }
 
     pub fn distribution(&self, version: &ExactVersion) -> TorbenResult<NodeDistribution> {
@@ -399,7 +390,7 @@ impl NodeProvider {
                 "The Node.js health check is not the required exact-version check.",
             ));
         }
-        if commands.as_slice() != ["node", "npm", "npx"] {
+        if commands.as_slice() != ["node", "npm", "npx", "pnpm"] {
             return Err(invalid_install_plan(
                 "The Node.js plan exposes an unexpected set of terminal commands.",
             ));
@@ -499,6 +490,31 @@ impl NodeProvider {
                 TorbenError::new("managed_command_missing", "A managed command is missing.")
                     .with_detail("path", path.display().to_string()),
             )
+        }
+    }
+
+    /// Resolve pnpm from the managed Node.js global package directory.
+    ///
+    /// pnpm is intentionally installed as a user-selected package (`npm
+    /// install --global pnpm@<version>`), while the global prefix itself is
+    /// owned by Torben and shared by selected Node.js versions.
+    pub fn pnpm_command_path(&self, npm_data_root: &Path) -> TorbenResult<PathBuf> {
+        let path = if cfg!(windows) {
+            npm_data_root.join("global").join("pnpm.cmd")
+        } else {
+            npm_data_root.join("global/bin/pnpm")
+        };
+        if path.is_file() {
+            Ok(path)
+        } else {
+            Err(TorbenError::new(
+                "managed_command_missing",
+                "pnpm is not installed in the managed Node.js environment.",
+            )
+            .with_detail("path", path.display().to_string())
+            .with_remediation(
+                "Run `npm install --global pnpm@11.19.0` through the Torben-managed npm command.",
+            ))
         }
     }
 
@@ -684,6 +700,96 @@ where
     }
 }
 
+pub(crate) fn configure_command_environment(
+    command: &mut std::process::Command,
+    npm_data_root: &Path,
+    pnpm_data_root: &Path,
+    bin: &Path,
+) -> TorbenResult<()> {
+    let global = if cfg!(windows) {
+        npm_data_root.join("global")
+    } else {
+        npm_data_root.join("global/bin")
+    };
+    // Keep mutable npm state separate from versioned installations so switching or
+    // uninstalling a runtime preserves packages and configuration.
+    for directory in [
+        "cache",
+        "global",
+        "config",
+        "temp",
+        "compile-cache",
+        "node-gyp",
+    ] {
+        std::fs::create_dir_all(npm_data_root.join(directory)).map_err(|error| {
+            TorbenError::new(
+                "node_environment_failed",
+                "Could not prepare managed Node.js data.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+    }
+    std::fs::create_dir_all(&global).map_err(|error| {
+        TorbenError::new(
+            "node_environment_failed",
+            "Could not prepare the managed Node.js global bin directory.",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+    for directory in ["store", "state", "cache"] {
+        std::fs::create_dir_all(pnpm_data_root.join(directory)).map_err(|error| {
+            TorbenError::new(
+                "node_environment_failed",
+                "Could not prepare managed pnpm data.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+    }
+    for (name, relative) in [
+        ("npm_config_cache", npm_data_root.join("cache")),
+        ("npm_config_prefix", npm_data_root.join("global")),
+        ("npm_config_userconfig", npm_data_root.join("config/npmrc")),
+        (
+            "npm_config_globalconfig",
+            npm_data_root.join("config/global-npmrc"),
+        ),
+        (
+            "npm_package_config_node_gyp_devdir",
+            npm_data_root.join("node-gyp"),
+        ),
+        ("NODE_REPL_HISTORY", npm_data_root.join("repl-history")),
+        ("NODE_COMPILE_CACHE", npm_data_root.join("compile-cache")),
+        ("TEMP", npm_data_root.join("temp")),
+        ("TMP", npm_data_root.join("temp")),
+        ("TMPDIR", npm_data_root.join("temp")),
+    ] {
+        command.env(name, relative);
+    }
+    // npm's update notifier performs an unsolicited registry request. Package
+    // downloads should be initiated by the user's command and use the managed
+    // cache above.
+    command.env("npm_config_update_notifier", "false");
+    command.env("pnpm_config_store_dir", pnpm_data_root.join("store"));
+    command.env("pnpm_config_global_bin_dir", &global);
+    command.env("pnpm_config_state_dir", pnpm_data_root.join("state"));
+    command.env("pnpm_config_cache_dir", pnpm_data_root.join("cache"));
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        [bin.to_path_buf(), global]
+            .into_iter()
+            .chain(std::env::split_paths(&inherited)),
+    )
+    .map_err(|error| {
+        TorbenError::new(
+            "node_environment_failed",
+            "Could not prepare the managed Node.js PATH.",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+    command.env("PATH", path);
+    Ok(())
+}
+
 fn managed_command_path(install_path: &Path) -> TorbenResult<OsString> {
     let managed_bin = if cfg!(windows) {
         install_path.to_path_buf()
@@ -702,19 +808,33 @@ fn managed_command_path(install_path: &Path) -> TorbenResult<OsString> {
 }
 
 fn run_health_command(command: &str, executable: &Path, path: &OsString) -> TorbenResult<String> {
-    let output = process::command(executable)
-        .arg("--version")
-        .env("PATH", path)
-        .output()
-        .map_err(|error| {
-            TorbenError::new(
-                "health_check_start_failed",
-                "Could not start a managed Node.js command.",
-            )
-            .with_detail("command", command)
-            .with_detail("path", executable.display().to_string())
-            .with_detail("reason", error.to_string())
-        })?;
+    let bin = std::env::split_paths(path)
+        .next()
+        .ok_or_else(|| TorbenError::internal("The Node.js health-check PATH is empty."))?;
+    let data = bin.join(format!(
+        ".torben-health-{}",
+        torben_contracts::OperationId::new()
+    ));
+    let mut process = process::command(executable);
+    let result = (|| {
+        configure_command_environment(&mut process, &data.join("npm"), &data.join("pnpm"), &bin)?;
+        process
+            .arg("--version")
+            .env("PATH", path)
+            .output()
+            .map_err(|error| {
+                TorbenError::new(
+                    "health_check_start_failed",
+                    "Could not start a managed Node.js command.",
+                )
+                .with_detail("command", command)
+                .with_detail("path", executable.display().to_string())
+                .with_detail("reason", error.to_string())
+            })
+    })();
+    let cleanup = std::fs::remove_dir_all(&data).map_err(io_error);
+    let output = result?;
+    cleanup?;
     if !output.status.success() {
         return Err(TorbenError::new(
             "health_check_failed",
@@ -776,6 +896,7 @@ fn checksum_for(manifest: &str, archive_name: &str) -> TorbenResult<String> {
         })
 }
 
+#[cfg(test)]
 fn resolve_from_versions(
     requested: &str,
     versions: Vec<VersionDescriptor>,
@@ -809,6 +930,105 @@ fn resolve_from_versions(
         )
         .with_detail("requested", requested)
     })
+}
+
+fn release_descriptor(release: NodeRelease) -> TorbenResult<VersionDescriptor> {
+    Ok(VersionDescriptor {
+        version: ExactVersion::from_str(&release.version)?,
+        lts_name: release.lts.as_str().map(ToOwned::to_owned),
+        released_at: release.date,
+        recommended: release.lts.is_string(),
+    })
+}
+
+fn core_versions(releases: Vec<NodeRelease>) -> TorbenResult<Vec<VersionDescriptor>> {
+    let mut latest_lts_by_major = BTreeMap::<u64, VersionDescriptor>::new();
+    let mut latest_current = None;
+    for release in releases {
+        let descriptor = release_descriptor(release)?;
+        if descriptor.lts_name.is_some() {
+            let major = descriptor.version.as_semver().major;
+            match latest_lts_by_major.get(&major) {
+                Some(current) if current.version >= descriptor.version => {}
+                _ => {
+                    latest_lts_by_major.insert(major, descriptor);
+                }
+            }
+        } else if latest_current
+            .as_ref()
+            .is_none_or(|current: &VersionDescriptor| current.version < descriptor.version)
+        {
+            latest_current = Some(descriptor);
+        }
+    }
+
+    let mut versions = latest_current.into_iter().collect::<Vec<_>>();
+    let mut lts_versions = latest_lts_by_major.into_values().collect::<Vec<_>>();
+    lts_versions.sort_by(|left, right| right.version.cmp(&left.version));
+    lts_versions.truncate(ACTIVE_LTS_LINES);
+    versions.extend(lts_versions);
+    if versions.is_empty() {
+        return Err(TorbenError::new(
+            "node_metadata_invalid",
+            "The official Node.js index contains no valid releases.",
+        ));
+    }
+    Ok(versions)
+}
+
+fn resolve_from_releases(
+    requested: &str,
+    releases: Vec<NodeRelease>,
+) -> TorbenResult<ExactVersion> {
+    let descriptors = releases
+        .into_iter()
+        .map(release_descriptor)
+        .collect::<TorbenResult<Vec<_>>>()?;
+    if let Ok(exact) = ExactVersion::from_str(requested) {
+        return descriptors
+            .into_iter()
+            .find(|item| item.version == exact)
+            .map(|item| item.version)
+            .ok_or_else(|| version_not_found(requested));
+    }
+    let normalized = requested.trim().to_ascii_lowercase();
+    let latest_lts = descriptors
+        .iter()
+        .filter(|item| item.lts_name.is_some())
+        .max_by(|left, right| left.version.cmp(&right.version))
+        .map(|item| item.version.clone());
+    let latest_current = descriptors
+        .iter()
+        .filter(|item| item.lts_name.is_none())
+        .max_by(|left, right| left.version.cmp(&right.version))
+        .map(|item| item.version.clone());
+    match normalized.as_str() {
+        "lts" => latest_lts,
+        "current" | "latest" => latest_current.or_else(|| {
+            descriptors
+                .iter()
+                .max_by(|left, right| left.version.cmp(&right.version))
+                .map(|item| item.version.clone())
+        }),
+        _ => None,
+    }
+    .ok_or_else(|| version_alias_not_found(requested))
+}
+
+fn version_not_found(requested: &str) -> TorbenError {
+    TorbenError::new(
+        "version_not_found",
+        "The requested Node.js version was not found in the official index.",
+    )
+    .with_detail("requested", requested)
+}
+
+fn version_alias_not_found(requested: &str) -> TorbenError {
+    TorbenError::new(
+        "version_alias_not_found",
+        "Use an exact Node.js version, 'lts', or 'current'.",
+    )
+    .with_detail("requested", requested)
 }
 
 #[cfg(test)]
@@ -1064,8 +1284,8 @@ mod tests {
     };
 
     use super::{
-        ArchiveKind, NodeProvider, checksum_for, resolve_from_versions, sha256_file,
-        validate_package_manager_version,
+        ArchiveKind, NodeProvider, checksum_for, configure_command_environment,
+        resolve_from_versions, sha256_file, validate_package_manager_version,
     };
     use crate::{
         StateStore, TorbenCore, TorbenPaths,
@@ -1090,6 +1310,46 @@ mod tests {
             error.details.get("command").map(String::as_str),
             Some("npm")
         );
+    }
+
+    #[test]
+    fn separates_npm_and_pnpm_state_directories() {
+        let root = tempdir().unwrap();
+        let npm = root.path().join("package-managers/node/npm");
+        let pnpm = root.path().join("package-managers/node/pnpm");
+        let bin = root.path().join("apps/node/current");
+        let mut command = std::process::Command::new("node");
+
+        configure_command_environment(&mut command, &npm, &pnpm, &bin).unwrap();
+
+        let env = command
+            .get_envs()
+            .filter_map(|(name, value)| {
+                value.map(|value| (name.to_string_lossy().into_owned(), value.to_owned()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(env["npm_config_cache"], npm.join("cache").into_os_string());
+        assert_eq!(
+            env["npm_config_prefix"],
+            npm.join("global").into_os_string()
+        );
+        assert_eq!(
+            env["pnpm_config_store_dir"],
+            pnpm.join("store").into_os_string()
+        );
+        assert_eq!(
+            env["pnpm_config_state_dir"],
+            pnpm.join("state").into_os_string()
+        );
+        assert_eq!(
+            env["pnpm_config_cache_dir"],
+            pnpm.join("cache").into_os_string()
+        );
+        assert!(npm.join("cache").is_dir());
+        assert!(npm.join("global").is_dir());
+        assert!(pnpm.join("store").is_dir());
+        assert!(pnpm.join("state").is_dir());
+        assert!(pnpm.join("cache").is_dir());
     }
 
     #[test]
@@ -1202,7 +1462,12 @@ mod tests {
                     expected_output: "v24.19.0".to_owned(),
                 },
                 InstallStep::CreateShims {
-                    commands: vec!["node".to_owned(), "npm".to_owned(), "npx".to_owned()],
+                    commands: vec![
+                        "node".to_owned(),
+                        "npm".to_owned(),
+                        "npx".to_owned(),
+                        "pnpm".to_owned(),
+                    ],
                 },
             ],
             metadata: BTreeMap::from([("target".to_owned(), crate::node_plugin::current_target())]),
@@ -1254,6 +1519,45 @@ mod tests {
         assert_eq!(
             provider.resolve_version("lts").await.unwrap().to_string(),
             "24.19.0"
+        );
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn keeps_only_latest_current_and_lts_line_versions_but_resolves_old_exact_versions() {
+        let index = serde_json::json!([
+            { "version": "v26.7.0", "date": "2026-08-05", "lts": false },
+            { "version": "v26.6.0", "date": "2026-07-01", "lts": false },
+            { "version": "v24.19.0", "date": "2026-08-03", "lts": "Krypton" },
+            { "version": "v24.18.0", "date": "2026-07-15", "lts": "Krypton" },
+            { "version": "v22.20.0", "date": "2026-08-01", "lts": "Jod" },
+            { "version": "v20.19.4", "date": "2026-07-20", "lts": "Iron" }
+        ]);
+        let (base_url, server) = fixture_server(
+            BTreeMap::from([(
+                "/dist/index.json".to_owned(),
+                serde_json::to_vec(&index).unwrap(),
+            )]),
+            2,
+        );
+        let provider = NodeProvider::with_base_url(base_url).unwrap();
+
+        let versions = provider.list_versions().await.unwrap();
+
+        assert_eq!(
+            versions
+                .iter()
+                .map(|version| version.version.to_string())
+                .collect::<Vec<_>>(),
+            ["26.7.0", "24.19.0", "22.20.0", "20.19.4"]
+        );
+        assert_eq!(
+            provider
+                .resolve_version("24.18.0")
+                .await
+                .unwrap()
+                .to_string(),
+            "24.18.0"
         );
         server.join().unwrap();
     }
@@ -1409,7 +1713,12 @@ mod tests {
                     expected_output: format!("v{version}"),
                 },
                 InstallStep::CreateShims {
-                    commands: vec!["node".to_owned(), "npm".to_owned(), "npx".to_owned()],
+                    commands: vec![
+                        "node".to_owned(),
+                        "npm".to_owned(),
+                        "npx".to_owned(),
+                        "pnpm".to_owned(),
+                    ],
                 },
             ],
             metadata: BTreeMap::from([("target".to_owned(), current_target())]),
@@ -1434,6 +1743,22 @@ mod tests {
         install_journal
             .succeed("Fixture installation committed")
             .unwrap();
+        assert!(
+            store
+                .list_operation_journals()
+                .unwrap()
+                .iter()
+                .any(|content| {
+                    let events = serde_json::from_str::<serde_json::Value>(content).unwrap();
+                    events["events"].as_array().is_some_and(|items| {
+                        items.iter().any(|event| {
+                            event["kind"] == "install"
+                                && event["appId"] == "node"
+                                && event["version"] == version.to_string()
+                        })
+                    })
+                })
+        );
         server.join().unwrap();
 
         assert_eq!(
@@ -1997,7 +2322,7 @@ mod tests {
                         "arguments": ["--version"],
                         "expected_output": format!("v{available_version}")
                     },
-                    { "type": "create_shims", "commands": ["node", "npm", "npx"] }
+                    { "type": "create_shims", "commands": ["node", "npm", "npx", "pnpm"] }
                 ],
                 "metadata": { "target": current_target() }
             }

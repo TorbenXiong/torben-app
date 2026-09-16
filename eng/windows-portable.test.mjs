@@ -48,8 +48,13 @@ test("Windows portable builder emits only the desktop executable with embedded p
   assert.match(script, /torben-desktop\.exe/u);
   assert.match(script, /embedded/u);
   assert.doesNotMatch(script, /userData[\\/]+plugins/u);
+  assert.match(script, /torben-plugin-node/u);
   assert.match(script, /torben-plugin-temurin/u);
   assert.match(script, /torben-plugin-python/u);
+  assert.match(script, /torben-plugin-rust/u);
+  assert.match(script, /torben-plugin-mysql/u);
+  assert.match(script, /torben-plugin-redis/u);
+  assert.match(script, /torben-plugin-postgresql/u);
   assert.match(script, /verifyPythonManagerPackage/u);
   assert.match(managerPreparation, /prepare:python-manager/u);
   assert.match(managerPreparation, /python-manager-\$\{PYTHON_MANAGER_VERSION\}\.msi/u);
@@ -59,7 +64,7 @@ test("Windows portable builder emits only the desktop executable with embedded p
   );
   assert.match(managerPreparation, /www\.python\.org\/ftp\/python\/pymanager/u);
   assert.match(managerPreparation, /redirect: "error"/u);
-  assert.doesNotMatch(script, /torben-plugin-(?:node|git|vscode|codex)/u);
+  assert.doesNotMatch(script, /torben-plugin-(?:git|vscode|codex)/u);
   assert.doesNotMatch(script, /copyFileSync\(join\(releaseRoot, "torben\.exe"/u);
 });
 

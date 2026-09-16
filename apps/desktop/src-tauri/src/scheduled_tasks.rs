@@ -20,6 +20,11 @@ struct ScheduledTaskDefinition {
 
 const TASKS: &[ScheduledTaskDefinition] = &[
     ScheduledTaskDefinition {
+        id: "refresh-node-version-catalog",
+        app_id: "node",
+        interval: VERSION_CATALOG_REFRESH_INTERVAL,
+    },
+    ScheduledTaskDefinition {
         id: "refresh-temurin-version-catalog",
         app_id: "temurin",
         interval: VERSION_CATALOG_REFRESH_INTERVAL,
@@ -27,6 +32,26 @@ const TASKS: &[ScheduledTaskDefinition] = &[
     ScheduledTaskDefinition {
         id: "refresh-python-version-catalog",
         app_id: "python",
+        interval: VERSION_CATALOG_REFRESH_INTERVAL,
+    },
+    ScheduledTaskDefinition {
+        id: "refresh-rust-version-catalog",
+        app_id: "rust",
+        interval: VERSION_CATALOG_REFRESH_INTERVAL,
+    },
+    ScheduledTaskDefinition {
+        id: "refresh-mysql-version-catalog",
+        app_id: "mysql",
+        interval: VERSION_CATALOG_REFRESH_INTERVAL,
+    },
+    ScheduledTaskDefinition {
+        id: "refresh-redis-version-catalog",
+        app_id: "redis",
+        interval: VERSION_CATALOG_REFRESH_INTERVAL,
+    },
+    ScheduledTaskDefinition {
+        id: "refresh-postgresql-version-catalog",
+        app_id: "postgresql",
         interval: VERSION_CATALOG_REFRESH_INTERVAL,
     },
 ];
@@ -160,6 +185,37 @@ mod tests {
         let task = TASKS.iter().find(|task| task.app_id == "python").unwrap();
 
         assert_eq!(task.id, "refresh-python-version-catalog");
+        assert_eq!(task.interval.as_secs(), 86_400);
+    }
+
+    #[test]
+    fn rust_catalog_refreshes_daily() {
+        let task = TASKS.iter().find(|task| task.app_id == "rust").unwrap();
+        assert_eq!(task.id, "refresh-rust-version-catalog");
+        assert_eq!(task.interval.as_secs(), 86_400);
+    }
+
+    #[test]
+    fn mysql_catalog_refreshes_daily() {
+        let task = TASKS.iter().find(|task| task.app_id == "mysql").unwrap();
+        assert_eq!(task.id, "refresh-mysql-version-catalog");
+        assert_eq!(task.interval.as_secs(), 86_400);
+    }
+
+    #[test]
+    fn redis_catalog_refreshes_daily() {
+        let task = TASKS.iter().find(|task| task.app_id == "redis").unwrap();
+        assert_eq!(task.id, "refresh-redis-version-catalog");
+        assert_eq!(task.interval.as_secs(), 86_400);
+    }
+
+    #[test]
+    fn postgresql_catalog_refreshes_daily() {
+        let task = TASKS
+            .iter()
+            .find(|task| task.app_id == "postgresql")
+            .unwrap();
+        assert_eq!(task.id, "refresh-postgresql-version-catalog");
         assert_eq!(task.interval.as_secs(), 86_400);
     }
 

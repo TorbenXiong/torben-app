@@ -96,7 +96,7 @@ async function createOfficialReleaseFixture(root) {
       artifacts: output,
       target,
       revision: "e".repeat(40),
-      sourceRef: "refs/tags/v0.1.0",
+      sourceRef: "refs/tags/v0.0.1",
       releaseKind: "official",
       signingStatus: "signed",
       repositoryRoot,
@@ -125,8 +125,8 @@ test("collects every updater package/signature pair and creates latest.json", as
       notes: "Official updater fixture",
     });
     assert.equal(Object.keys(manifest.platforms).length, 2);
-    assert.equal(manifest.version, "0.1.0");
-    assert.match(manifest.platforms["windows-x86_64-nsis"].url, /v0\.1\.0/);
+    assert.equal(manifest.version, "0.0.1");
+    assert.match(manifest.platforms["windows-x86_64-nsis"].url, /v0\.0\.1/);
     assert.equal(
       JSON.parse(readFileSync(join(releases, "latest.json"), "utf8")).pub_date,
       "2026-08-24T13:00:00Z",
@@ -266,7 +266,7 @@ test("official release sets reject deferred platform targets", async () => {
       artifacts: deferredDirectory,
       target: deferredTarget,
       revision: "e".repeat(40),
-      sourceRef: "refs/tags/v0.1.0",
+      sourceRef: "refs/tags/v0.0.1",
       releaseKind: "official",
       signingStatus: "signed",
       repositoryRoot,

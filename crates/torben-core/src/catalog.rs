@@ -1,5 +1,6 @@
 use torben_contracts::{AppId, ApplicationDescriptor, InstallSource, SourceId, TorbenResult};
 
+#[allow(clippy::too_many_lines)]
 pub fn applications() -> TorbenResult<Vec<ApplicationDescriptor>> {
     Ok(vec![
         app(
@@ -14,7 +15,7 @@ pub fn applications() -> TorbenResult<Vec<ApplicationDescriptor>> {
                 "uninstall",
                 "external-detection",
             ],
-            false,
+            true,
         )?,
         app(
             "temurin",
@@ -35,6 +36,62 @@ pub fn applications() -> TorbenResult<Vec<ApplicationDescriptor>> {
             "Python",
             "The Python programming language.",
             &["runtime", "development"],
+            &[
+                "versions",
+                "install",
+                "select",
+                "uninstall",
+                "external-detection",
+            ],
+            true,
+        )?,
+        app(
+            "rust",
+            "Rust",
+            "The Rust programming language with rustc and Cargo.",
+            &["runtime", "development"],
+            &[
+                "versions",
+                "install",
+                "select",
+                "uninstall",
+                "external-detection",
+            ],
+            true,
+        )?,
+        app(
+            "mysql",
+            "MySQL",
+            "MySQL Community Server with managed client and server binaries.",
+            &["database", "development"],
+            &[
+                "versions",
+                "install",
+                "select",
+                "uninstall",
+                "external-detection",
+            ],
+            true,
+        )?,
+        app(
+            "redis",
+            "Redis",
+            "Redis-compatible in-memory datastore for Windows development.",
+            &["database", "development"],
+            &[
+                "versions",
+                "install",
+                "select",
+                "uninstall",
+                "external-detection",
+            ],
+            true,
+        )?,
+        app(
+            "postgresql",
+            "PostgreSQL",
+            "PostgreSQL server and command-line tools for Windows development.",
+            &["database", "development"],
             &[
                 "versions",
                 "install",
@@ -129,8 +186,16 @@ fn app(
         },
         sources: if available {
             vec![InstallSource {
-                id: SourceId::new(format!("{id}.official"))?,
-                display_name: "Official archive".to_owned(),
+                id: SourceId::new(match id {
+                    "redis" => "redis.windows".to_owned(),
+                    "postgresql" => "postgresql.edb".to_owned(),
+                    _ => format!("{id}.official"),
+                })?,
+                display_name: match id {
+                    "redis" => "Redis for Windows community build".to_owned(),
+                    "postgresql" => "EDB PostgreSQL Windows distribution".to_owned(),
+                    _ => "Official archive".to_owned(),
+                },
                 managed: true,
             }]
         } else {
@@ -142,11 +207,19 @@ fn app(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn temurin_and_python_are_available() {
+    fn node_temurin_and_python_are_available() {
         let applications = super::applications().unwrap();
 
-        assert_eq!(applications.len(), 6);
-        for app_id in ["temurin", "python"] {
+        assert_eq!(applications.len(), 10);
+        for app_id in [
+            "node",
+            "temurin",
+            "python",
+            "rust",
+            "mysql",
+            "redis",
+            "postgresql",
+        ] {
             let application = applications
                 .iter()
                 .find(|application| application.id.as_str() == app_id)
@@ -157,7 +230,10 @@ mod tests {
         assert!(
             applications
                 .iter()
-                .filter(|application| !matches!(application.id.as_str(), "temurin" | "python"))
+                .filter(|application| !matches!(
+                    application.id.as_str(),
+                    "node" | "temurin" | "python" | "rust" | "mysql" | "redis" | "postgresql"
+                ))
                 .all(|application| {
                     application.capabilities.is_empty() && application.sources.is_empty()
                 })
@@ -169,8 +245,8 @@ mod tests {
         let applications = super::applications().unwrap();
         let sources = super::sources(&applications).unwrap();
 
-        assert_eq!(sources.len(), 6);
-        assert_eq!(sources.iter().filter(|source| source.managed).count(), 2);
+        assert_eq!(sources.len(), 11);
+        assert_eq!(sources.iter().filter(|source| source.managed).count(), 7);
         assert!(
             sources
                 .iter()

@@ -11,6 +11,9 @@ use torben_contracts::{AppId, TorbenError, TorbenResult, VersionDescriptor};
 
 const CACHE_SCHEMA_VERSION: u32 = 1;
 const MAX_CACHE_BYTES: u64 = 256 * 1024;
+// Providers reduce upstream history to the versions useful in the UI before
+// writing the cache. Keep a bounded count as a second line of defence in
+// addition to the serialized byte limit shared by all providers.
 const MAX_CACHED_VERSIONS: usize = 128;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,7 +29,20 @@ pub(crate) fn load(
     path: &Path,
     expected_app_id: &AppId,
 ) -> TorbenResult<Option<Vec<VersionDescriptor>>> {
-    Ok(read(path, expected_app_id)?.map(|catalog| catalog.versions))
+    match read(path, expected_app_id) {
+        Ok(catalog) => Ok(catalog.map(|catalog| catalog.versions)),
+        // A catalog whose size no longer matches the provider's bounded list is
+        // a stale cache after a policy change. Treat it as a miss so callers can
+        // refresh it; malformed files and unsafe paths remain hard errors.
+        Err(error)
+            if error.code == "version_catalog_cache_invalid"
+                && error.details.contains_key("versions")
+                && error.details.contains_key("maximum") =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub(crate) fn refresh_due(path: &Path, expected_app_id: &AppId, interval: Duration) -> bool {
@@ -114,12 +130,19 @@ fn validate_versions(versions: &[VersionDescriptor]) -> TorbenResult<()> {
         return Err(TorbenError::new(
             "version_catalog_cache_invalid",
             "The version catalog cache contains an invalid number of versions.",
-        ));
+        )
+        .with_detail("versions", versions.len().to_string())
+        .with_detail("maximum", MAX_CACHED_VERSIONS.to_string()));
     }
     let mut unique = BTreeSet::new();
-    if versions.iter().any(|version| {
-        version.released_at.trim().is_empty() || !unique.insert(version.version.clone())
-    }) {
+    // Some official registries (for example Rust's tags endpoint) do not
+    // publish a release timestamp. The version itself remains authoritative;
+    // an absent timestamp is represented by an empty string in the shared
+    // contract and should not make an otherwise valid catalog unusable.
+    if versions
+        .iter()
+        .any(|version| !unique.insert(version.version.clone()))
+    {
         return Err(TorbenError::new(
             "version_catalog_cache_invalid",
             "The version catalog cache contains duplicate or incomplete versions.",
@@ -264,6 +287,79 @@ mod tests {
         let app_id = AppId::new("temurin").unwrap();
 
         assert!(load(&path, &app_id).is_err());
+        assert!(refresh_due(&path, &app_id, Duration::from_hours(24)));
+    }
+
+    #[test]
+    fn core_version_catalog_fits_the_bounded_cache() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("node.json");
+        let app_id = AppId::new("node").unwrap();
+        let versions = (0..6)
+            .map(|patch| version(&format!("24.0.{patch}")))
+            .collect::<Vec<_>>();
+
+        save(&path, &app_id, &versions).unwrap();
+
+        assert_eq!(load(&path, &app_id).unwrap().unwrap(), versions);
+    }
+
+    #[test]
+    fn cache_still_rejects_an_unbounded_version_list() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("node.json");
+        let app_id = AppId::new("node").unwrap();
+        let versions = (0..=128)
+            .map(|patch| version(&format!("24.0.{patch}")))
+            .collect::<Vec<_>>();
+
+        let error = save(&path, &app_id, &versions).unwrap_err();
+
+        assert_eq!(error.code, "version_catalog_cache_invalid");
+        assert_eq!(
+            error.details.get("versions").map(String::as_str),
+            Some("129")
+        );
+        assert_eq!(
+            error.details.get("maximum").map(String::as_str),
+            Some("128")
+        );
+    }
+
+    #[test]
+    fn cache_accepts_versions_without_release_dates() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("rust.json");
+        let app_id = AppId::new("rust").unwrap();
+        let versions = vec![VersionDescriptor {
+            version: ExactVersion::from_str("1.90.0").unwrap(),
+            lts_name: Some("Rust stable".to_owned()),
+            released_at: String::new(),
+            recommended: true,
+        }];
+
+        save(&path, &app_id, &versions).unwrap();
+
+        assert_eq!(load(&path, &app_id).unwrap().unwrap(), versions);
+    }
+
+    #[test]
+    fn stale_unbounded_cache_is_treated_as_a_miss() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("node.json");
+        let app_id = AppId::new("node").unwrap();
+        let versions = (0..=128)
+            .map(|patch| version(&format!("24.0.{patch}")))
+            .collect::<Vec<_>>();
+        let cache = serde_json::json!({
+            "schemaVersion": 1,
+            "appId": "node",
+            "refreshedAt": 1,
+            "versions": versions,
+        });
+        std::fs::write(&path, serde_json::to_vec(&cache).unwrap()).unwrap();
+
+        assert_eq!(load(&path, &app_id).unwrap(), None);
         assert!(refresh_due(&path, &app_id, Duration::from_hours(24)));
     }
 }

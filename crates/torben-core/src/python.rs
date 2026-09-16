@@ -37,6 +37,84 @@ const PYTHON_WINDOWS_INDEX: &str = "https://www.python.org/ftp/python/index-wind
 const PYTHON_MANAGER_EXECUTABLE: &str = "pymanager.exe";
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Prepare writable Python and pip state below Torben's data root.
+///
+/// Runtime installations stay versioned under the managed app library, while
+/// pip's cache and user installs are mutable state. Keeping that state in a
+/// provider-owned directory makes it survive runtime switching and keeps
+/// downloads made by the managed `pip` shim out of the user's profile.
+pub(crate) fn configure_command_environment(
+    command: &mut std::process::Command,
+    data_root: &Path,
+    bin: &Path,
+) -> TorbenResult<()> {
+    for directory in ["cache", "user", "config", "temp"] {
+        std::fs::create_dir_all(data_root.join(directory)).map_err(|error| {
+            TorbenError::new(
+                "python_environment_failed",
+                "Could not prepare managed Python data.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+    }
+
+    let user_bin = if cfg!(windows) {
+        data_root.join("user").join("Scripts")
+    } else {
+        data_root.join("user").join("bin")
+    };
+    std::fs::create_dir_all(&user_bin).map_err(|error| {
+        TorbenError::new(
+            "python_environment_failed",
+            "Could not prepare the managed Python user script directory.",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+
+    let config_file =
+        data_root
+            .join("config")
+            .join(if cfg!(windows) { "pip.ini" } else { "pip.conf" });
+    if !config_file.exists() {
+        std::fs::write(&config_file, b"[global]\n").map_err(|error| {
+            TorbenError::new(
+                "python_environment_failed",
+                "Could not prepare the managed pip configuration.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+    }
+
+    for (name, value) in [
+        ("PIP_CACHE_DIR", data_root.join("cache")),
+        ("PIP_CONFIG_FILE", config_file),
+        ("PYTHONUSERBASE", data_root.join("user")),
+        ("TMP", data_root.join("temp")),
+        ("TEMP", data_root.join("temp")),
+        ("TMPDIR", data_root.join("temp")),
+    ] {
+        command.env(name, value);
+    }
+    // pip otherwise performs a periodic version-check request even when the
+    // user did not ask to install or query a package.
+    command.env("PIP_DISABLE_PIP_VERSION_CHECK", "1");
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        [bin.to_path_buf(), user_bin]
+            .into_iter()
+            .chain(std::env::split_paths(&inherited)),
+    )
+    .map_err(|error| {
+        TorbenError::new(
+            "python_environment_failed",
+            "Could not prepare the managed Python PATH.",
+        )
+        .with_detail("reason", error.to_string())
+    })?;
+    command.env("PATH", path);
+    Ok(())
+}
+
 pub trait PythonSigstoreVerifier: Send + Sync {
     fn verify(
         &self,
@@ -353,13 +431,16 @@ impl PythonProvider {
 
     pub fn command_path(&self, install_path: &Path, command: &str) -> TorbenResult<PathBuf> {
         let candidates = match (cfg!(windows), command) {
-            (true, "python" | "python3") => vec![install_path.join("python.exe")],
-            (true, "pip" | "pip3") => vec![
-                install_path.join("Scripts").join("pip.exe"),
-                install_path.join("pip.exe"),
-            ],
-            (false, "python" | "python3") => vec![install_path.join("bin").join("python3")],
-            (false, "pip" | "pip3") => vec![install_path.join("bin").join("pip3")],
+            // Python's Install Manager and modern CPython layouts do not
+            // guarantee a standalone pip.exe. The supported invocation is
+            // `python -m pip`, so the shim resolves pip to python.exe and
+            // Core adds the module arguments before user arguments.
+            (true, "python" | "python3" | "pip" | "pip3") => {
+                vec![install_path.join("python.exe")]
+            }
+            (false, "python" | "python3" | "pip" | "pip3") => {
+                vec![install_path.join("bin").join("python3")]
+            }
             _ => {
                 return Err(TorbenError::new(
                     "unsupported_command",
@@ -598,8 +679,11 @@ impl PythonProvider {
             cancellation,
         )
         .await?;
-        ensure_regular_directory(&runtime)?;
-        Ok(runtime)
+        // The Install Manager has used both a flat target layout and a
+        // versioned subdirectory layout over its releases. Resolve the
+        // actual CPython prefix instead of assuming that `--target` is the
+        // prefix itself.
+        find_extracted_python_runtime(&runtime)
     }
 
     async fn health_check_path(
@@ -636,13 +720,12 @@ impl PythonProvider {
             .with_detail("expected", version.to_string())
             .with_detail("actual", lines.join(";")));
         }
-        let pip = self.command_path(install_path, "pip")?;
-        let output = process::async_command(&pip)
-            .arg("--version")
+        let output = process::async_command(&python)
+            .args(["-m", "pip", "--version"])
             .kill_on_drop(true)
             .output()
             .await
-            .map_err(|error| process_start_error(&pip, error))?;
+            .map_err(|error| process_start_error(&python, error))?;
         if !output.status.success() || !String::from_utf8_lossy(&output.stdout).starts_with("pip ")
         {
             return Err(TorbenError::new(
@@ -1139,6 +1222,41 @@ fn find_extracted_python_manager(root: &Path) -> TorbenResult<PathBuf> {
     Ok(matches.remove(0))
 }
 
+fn find_extracted_python_runtime(root: &Path) -> TorbenResult<PathBuf> {
+    ensure_regular_directory(root)?;
+    let mut prefixes = BTreeSet::new();
+    for entry in walkdir::WalkDir::new(root).follow_links(false) {
+        let entry = entry.map_err(|error| {
+            TorbenError::new(
+                "python_install_manager_layout_invalid",
+                "Could not inspect the Python runtime produced by the Install Manager.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+        if entry.file_type().is_file()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case("python.exe"))
+        {
+            let candidate = entry.path().parent().unwrap_or(root);
+            if candidate.join("Lib").is_dir() {
+                prefixes.insert(candidate.to_path_buf());
+            }
+        }
+    }
+    if prefixes.len() != 1 {
+        return Err(TorbenError::new(
+            "python_install_manager_layout_invalid",
+            "The Python Install Manager did not produce one usable CPython runtime.",
+        )
+        .with_detail("prefixCount", prefixes.len().to_string()));
+    }
+    Ok(prefixes
+        .pop_first()
+        .expect("one runtime prefix was checked"))
+}
+
 async fn run_process(
     executable: &Path,
     arguments: &[OsString],
@@ -1536,6 +1654,43 @@ mod tests {
         assert_eq!(error.code, "python_sigstore_verifier_unavailable");
     }
 
+    #[test]
+    fn managed_python_commands_keep_pip_state_below_torben_data_root() {
+        let root = tempfile::tempdir().unwrap();
+        let data_root = root.path().join("userData/package-managers/python/pip");
+        let bin = root.path().join("apps/python/3.14.0");
+        let mut command = std::process::Command::new("python");
+
+        configure_command_environment(&mut command, &data_root, &bin).unwrap();
+
+        let env = command
+            .get_envs()
+            .filter_map(|(name, value)| {
+                value.map(|value| (name.to_string_lossy(), value.to_owned()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            env["PIP_CACHE_DIR"],
+            data_root.join("cache").into_os_string()
+        );
+        assert_eq!(
+            env["PYTHONUSERBASE"],
+            data_root.join("user").into_os_string()
+        );
+        assert_eq!(
+            env["PIP_CONFIG_FILE"],
+            data_root
+                .join("config")
+                .join(if cfg!(windows) { "pip.ini" } else { "pip.conf" })
+                .into_os_string()
+        );
+        assert_eq!(env["PIP_DISABLE_PIP_VERSION_CHECK"], "1");
+        assert!(data_root.join("cache").is_dir());
+        assert!(data_root.join("user").is_dir());
+        assert!(data_root.join("config").is_dir());
+        assert!(data_root.join("temp").is_dir());
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn bundled_manager_package_must_match_its_pinned_hash_before_extraction() {
@@ -1652,11 +1807,11 @@ mod tests {
 
         assert_eq!(record.version, version);
         assert!(Path::new(&record.install_path).join("python.exe").is_file());
-        assert!(
-            Path::new(&record.install_path)
-                .join("Scripts")
-                .join("pip.exe")
-                .is_file()
+        assert_eq!(
+            provider
+                .command_path(Path::new(&record.install_path), "pip")
+                .unwrap(),
+            Path::new(&record.install_path).join("python.exe")
         );
         provider.health_check(&record).await.unwrap();
     }
@@ -1711,6 +1866,11 @@ use std::{env, fs, path::PathBuf};
 fn main() {
     let current = std::env::current_exe().unwrap();
     let stem = current.file_stem().unwrap().to_string_lossy().to_ascii_lowercase();
+    let arguments = env::args().collect::<Vec<_>>();
+    if arguments.windows(2).any(|pair| pair == ["-m", "pip"]) {
+        println!("pip 26.0 from fixture");
+        return;
+    }
     if stem.starts_with("python") {
         println!("cpython\n3.14.7");
         return;
@@ -1719,7 +1879,6 @@ fn main() {
         println!("pip 26.0 from fixture");
         return;
     }
-    let arguments = env::args().collect::<Vec<_>>();
     assert!(arguments.iter().any(|arg| arg == "install"));
     assert!(arguments
         .iter()
@@ -1736,10 +1895,8 @@ fn main() {
         .iter()
         .find_map(|arg| arg.strip_prefix("--target=").map(PathBuf::from))
         .expect("target argument");
-    let scripts = target.join("Scripts");
-    fs::create_dir_all(&scripts).unwrap();
+    fs::create_dir_all(target.join("Lib")).unwrap();
     fs::copy(&current, target.join("python.exe")).unwrap();
-    fs::copy(&current, scripts.join("pip.exe")).unwrap();
 }
 "#,
         )

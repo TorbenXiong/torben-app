@@ -8,10 +8,12 @@ is retained as future release-engineering design and is not a current support co
 
 ## Native build matrix
 
-Each target is built on a native GitHub-hosted runner so that desktop packages and all seven native
-sidecars share one architecture. `eng/prepare-bundled-tools.mjs` validates the executable header of
-every plugin and shim against the Rust host target before copying it into Tauri's sidecar directory;
-the workflow also passes the same explicit target to Tauri and forwards `--locked` to Cargo.
+Each target is built on a native GitHub-hosted runner so that desktop packages and every
+target-supported native sidecar share one architecture. Windows x64 currently bundles ten provider
+plugins plus the command shim; deferred Unix targets retain the original six providers plus the
+shim. `eng/prepare-bundled-tools.mjs` validates the executable header of every selected plugin and
+shim against the Rust host target before copying it into Tauri's sidecar directory; the workflow
+also passes the same explicit target to Tauri and forwards `--locked` to Cargo.
 
 | Platform | Rust target | Expected packages |
 | --- | --- | --- |
@@ -68,10 +70,11 @@ recovery never uses `--nogpgcheck`.
 
 `eng/desktop-package-smoke.mjs` provides the equivalent post-install inspection and sustained launch
 probe for Windows and macOS. It re-verifies release metadata, requires the runner architecture to
-match the package target, validates `torben-desktop` and all seven adjacent sidecars as PE or thin
-Mach-O files for that target, and launches with isolated application data plus an allowlisted
-environment. On macOS it additionally verifies the bundle identifier, bundle version, executable
-name, and executable mode from the copied `.app`.
+match the package target, validates `torben-desktop` and every adjacent sidecar as PE or thin
+Mach-O files for that target (eleven sidecars on Windows x64, seven on deferred macOS), and
+launches with isolated application data plus an allowlisted environment. On macOS it additionally
+verifies the bundle identifier, bundle version, executable name, and executable mode from the
+copied `.app`.
 
 `.github/workflows/desktop-package-acceptance.yml` runs six disposable hosted-runner jobs: NSIS and
 MSI on Windows x64 and ARM64, plus DMG on macOS Intel and Apple Silicon. Windows invokes each
@@ -84,8 +87,8 @@ Windows x64 NSIS and MSI jobs.
 
 When verified release metadata declares `signingStatus=signed`, the desktop probe also repeats the
 platform trust checks after artifact transfer and installation. Windows requires valid
-Authenticode on the downloaded MSI or NSIS package, the installed desktop executable, and all seven
-installed sidecars. macOS verifies the copied application bundle with `codesign`, then revalidates
+Authenticode on the downloaded MSI or NSIS package, the installed desktop executable, and all eleven
+installed Windows sidecars. macOS verifies the copied application bundle with `codesign`, then revalidates
 the downloaded DMG's stapled notarization ticket and Gatekeeper assessment. Unsigned development
 metadata does not claim or require these checks.
 

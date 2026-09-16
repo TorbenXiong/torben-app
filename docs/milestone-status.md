@@ -19,11 +19,29 @@ Windows x64 gates required for the next supported release.
 
 ## Current software-plugin support decision
 
-- Node.js, Git, Visual Studio Code, and Codex CLI remain temporarily unsupported.
+- Git, Visual Studio Code, and Codex CLI remain temporarily unsupported.
   Production builds publish no capabilities or managed sources for them and reject their Core
   management actions with `capability_not_available`.
-- Eclipse Temurin JDK and Python are restored software plugins. Their provider payloads are
+- Node.js, Eclipse Temurin JDK, Python, Rust, MySQL, Redis, and PostgreSQL are restored software plugins. Their provider payloads are
   installed under `userData/plugins`, and managed runtimes remain under the same `userData` root.
+- Rust uses the official stable MSVC toolchain and shows the three newest stable toolchains by
+  default while retaining exact-version installation. MySQL uses official Community Server ZIP
+  archives and exposes 8.4.6, 8.0.46, and 5.7.44.
+  Redis uses SHA-256-pinned Windows x64 community builds from `redis-windows`, because upstream Redis
+  does not publish a native Windows Open Source binary. Each plugin supports independent version
+  installation, terminal selection, and provider-owned data below `userData`.
+- PostgreSQL uses fixed EDB Windows x64 installers whose SHA-256 values are pinned to exact
+  Microsoft WinGet manifests. Core invokes only EDB's `extract-only` mode, installs no runtime,
+  service, pgAdmin, or StackBuilder component. Runtime installation never initializes a cluster;
+  explicit instance creation does so in a version-pinned managed directory. PostgreSQL client
+  configuration lives below `userData/application-data/postgresql/client`; avoiding a shared `PGDATA`
+  prevents incompatible major versions from silently sharing one cluster.
+- MySQL, Redis, and PostgreSQL share a complete managed-instance lifecycle in Core and SQLite:
+  create, start, stop, status, backup, restore, and confirmed delete. Desktop and CLI use identical
+  contracts; instances listen only on loopback, are not Windows services, preserve their data across
+  plugin changes and runtime upgrades, and block removal of a pinned runtime version.
+- Database management pages separate runtime `Version management` from mutable-data `Instance
+  management` tabs.
 - The Python plugin package includes the pinned official Python Install Manager 26.3 MSI on
   Windows x64. Core verifies and extracts it inside operation staging, pins the official index,
   and invokes it with an exact tag, a Core-owned download directory, and staging `--target`.
@@ -38,7 +56,7 @@ Windows x64 gates required for the next supported release.
   Confirmation creates the base and `userData`, replaces an existing target `TorbenApp.exe` as an
   upgrade, relaunches the target copy, and removes the byte-identical original launch file. New
   builds keep the data path implicit as `<base>\userData` and create no pointer file.
-- The catalog keeps the remaining four descriptors visible as unavailable so the product backlog
+- The catalog keeps the remaining three descriptors visible as unavailable so the product backlog
   remains explicit. Each application will be restored separately only after its own writable data
   is constrained to the user-selected Torben App installation root and the Windows x64 behavior is
   verified.
@@ -50,14 +68,14 @@ Windows x64 gates required for the next supported release.
 ### Foundation
 
 - The Cargo and pnpm workspace contains the desktop application, shared contracts, Core, plugin
-  host, CLI, shim, private UI package, and six first-party native plugins.
+  host, CLI, shim, private UI package, and ten first-party native plugins.
 - Product identity is fixed as `Torben App`, `torben`, and
   `io.github.torbenxiong.torbenapp` across package, Cargo, Tauri, release, and updater metadata.
 - Core owns SQLite migrations, platform-standard paths, the managed application library,
   cross-process locking, durable journals, cancellation markers, diagnostic logs, settings, and
   startup recovery. Frontend and plugin processes do not access SQLite directly.
-- Full Core startup transactionally synchronizes the ordered six-application directory without
-  managed sources, plus the winget, Homebrew, apt, and DNF source descriptors into SQLite. App list,
+- Full Core startup transactionally synchronizes the ordered ten-application directory and its
+  enabled managed sources, plus the winget, Homebrew, apt, and DNF source descriptors into SQLite. App list,
   search, and detail queries read that persisted Core-owned snapshot.
 - The desktop opens on Plugins and exposes installed plugin applications such as Java directly in
   the sidebar, followed by Logs, Diagnostics, and Settings. The former Overview, Catalog, and
@@ -69,20 +87,23 @@ Windows x64 gates required for the next supported release.
   cloud synchronization, background services, and project-level version pinning remain outside the
   product boundary.
 
-### Dormant Node.js vertical implementation
+### Node.js vertical implementation
 
-- Fixture builds retain official metadata discovery, exact/LTS/Current resolution, signed checksum verification,
+- Production builds support official metadata discovery, exact/LTS/Current resolution, signed checksum verification,
   per-target archive selection, safe extraction, staging health checks, atomic commit, multi-version
   installation, global selection, external read-only discovery, cancellation, rollback, recovery,
-  and permanent uninstall are implemented in the shared Core path.
-- A single managed shim directory exposes `node`, `npm`, and `npx`. Selection changes are
+  and permanent uninstall in the shared Core path.
+- The opt-in bundled Node.js plugin is embedded in the Windows x64 portable executable. Its shims
+  prepare npm cache, global packages, configuration, temporary files, and REPL history below
+  `userData/package-managers/node/npm` (with pnpm state under `userData/package-managers/node/pnpm`); explicit user path overrides and arbitrary scripts are not sandboxed.
+- A single managed shim directory exposes `node`, `npm`, `npx`, and `pnpm`. Selection changes are
   receipt-backed, and command resolution must remain inside the exact managed installation.
 - Real CLI subprocess and desktop-command fixture tests cover discovery through uninstall, fresh
   terminal resolution, GUI/CLI concurrency, cross-process cancellation, and restart recovery.
 
 ### Dormant application and source implementations
 
-- Fixture builds retain Node.js, Git, Visual Studio Code, and Codex CLI official-only metadata,
+- Fixture builds retain Git, Visual Studio Code, and Codex CLI official-only metadata,
   per-platform distribution validation, supply-chain checks, staging, health checks, external
   read-only discovery, Schema UI, selection where applicable, managed updates, and uninstall.
 - Deferred Python implementations use verified CPython source builds on macOS/Linux. Git, VS Code,

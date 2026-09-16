@@ -1,7 +1,7 @@
 import { Button } from "@torben-app/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, Navigate, Route, Routes } from "react-router";
+import { Link, Navigate, Route, Routes, useParams } from "react-router";
 import {
   applyManagedUpdate,
   checkManagedUpdates,
@@ -10,22 +10,38 @@ import {
   getOperationEvents,
   getSnapshot,
   initialTorbenUpdateStatus,
+  installBundledMysqlPlugin,
+  installBundledNodePlugin,
+  installBundledPostgresqlPlugin,
   installBundledPythonPlugin,
+  installBundledRedisPlugin,
+  installBundledRustPlugin,
   installBundledTemurinPlugin,
   installTorbenUpdate,
   migrateManagedLibrary,
   setShellIntegration,
+  uninstallBundledMysqlPlugin,
+  uninstallBundledNodePlugin,
+  uninstallBundledPostgresqlPlugin,
   uninstallBundledPythonPlugin,
+  uninstallBundledRedisPlugin,
+  uninstallBundledRustPlugin,
   uninstallBundledTemurinPlugin,
   updateSettings,
 } from "./api";
 import { Layout } from "./components/Layout";
 import i18n from "./i18n";
+import { NodeDetailPage } from "./NodeDetailPage";
 import {
   DiagnosticsPage,
   LogsPage,
+  MysqlDetailPage,
+  PluginDetailPage,
   PluginsPage,
+  PostgresqlDetailPage,
   PythonDetailPage,
+  RedisDetailPage,
+  RustDetailPage,
   SettingsPage,
   TemurinDetailPage,
 } from "./pages";
@@ -84,7 +100,9 @@ export default function App() {
         }
       }
     };
-    timer = window.setTimeout(() => void poll(), 1000);
+    // Fetch immediately so a just-started install/uninstall remains visible
+    // when the user navigates to another plugin before the first interval.
+    void poll();
     return () => {
       stopped = true;
       window.clearTimeout(timer);
@@ -235,12 +253,32 @@ export default function App() {
   const temurinEnabled = snapshot.plugins.some(
     (plugin) => plugin.id === "app.torben.plugin.temurin" && plugin.enabled,
   );
+  const nodeEnabled = snapshot.plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.node" && plugin.enabled,
+  );
   const pythonEnabled = snapshot.plugins.some(
     (plugin) => plugin.id === "app.torben.plugin.python" && plugin.enabled,
   );
+  const rustEnabled = snapshot.plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.rust" && plugin.enabled,
+  );
+  const mysqlEnabled = snapshot.plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.mysql" && plugin.enabled,
+  );
+  const redisEnabled = snapshot.plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.redis" && plugin.enabled,
+  );
+  const postgresqlEnabled = snapshot.plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.postgresql" && plugin.enabled,
+  );
 
   return (
-    <Layout applications={snapshot.applications} plugins={snapshot.plugins}>
+    <Layout
+      applications={snapshot.applications}
+      pluginOrder={snapshot.settings.pluginOrder}
+      plugins={snapshot.plugins}
+      onPluginOrderChange={(pluginOrder) => saveSettings({ ...snapshot.settings, pluginOrder })}
+    >
       {error ? (
         <div className="error-banner" role="alert">
           {error}
@@ -271,20 +309,118 @@ export default function App() {
       {managedUpdates.candidates.length ? (
         <div className="notice-banner">
           {t("appShell.updatesAvailable", { count: managedUpdates.candidates.length })}
-          <Link to={managedUpdates.candidates[0]?.appId === "python" ? "/python" : "/java"}>
+          <Link
+            to={
+              managedUpdates.candidates[0]?.appId === "node"
+                ? "/node"
+                : managedUpdates.candidates[0]?.appId === "python"
+                  ? "/python"
+                  : managedUpdates.candidates[0]?.appId === "rust"
+                    ? "/rust"
+                    : managedUpdates.candidates[0]?.appId === "mysql"
+                      ? "/mysql"
+                      : managedUpdates.candidates[0]?.appId === "redis"
+                        ? "/redis"
+                        : managedUpdates.candidates[0]?.appId === "postgresql"
+                          ? "/postgresql"
+                          : "/java"
+            }
+          >
             {t("appShell.reviewUpdates")}
           </Link>
         </div>
       ) : null}
       <Routes>
         <Route
+          path="/node"
+          element={
+            nodeEnabled ? (
+              <NodeDetailPage
+                installed={snapshot.installed}
+                operations={snapshot.operations}
+                selected={snapshot.selected}
+                onChanged={refresh}
+                shellIntegration={snapshot.shellIntegration}
+              />
+            ) : (
+              <Navigate replace to="/plugins" />
+            )
+          }
+        />
+        <Route
           path="/python"
           element={
             pythonEnabled ? (
               <PythonDetailPage
                 installed={snapshot.installed}
+                operations={snapshot.operations}
                 onChanged={refresh}
                 selected={snapshot.selected}
+                shellIntegration={snapshot.shellIntegration}
+              />
+            ) : (
+              <Navigate replace to="/plugins" />
+            )
+          }
+        />
+        <Route
+          path="/rust"
+          element={
+            rustEnabled ? (
+              <RustDetailPage
+                installed={snapshot.installed}
+                operations={snapshot.operations}
+                onChanged={refresh}
+                selected={snapshot.selected}
+                shellIntegration={snapshot.shellIntegration}
+              />
+            ) : (
+              <Navigate replace to="/plugins" />
+            )
+          }
+        />
+        <Route
+          path="/mysql"
+          element={
+            mysqlEnabled ? (
+              <MysqlDetailPage
+                installed={snapshot.installed}
+                operations={snapshot.operations}
+                onChanged={refresh}
+                selected={snapshot.selected}
+                shellIntegration={snapshot.shellIntegration}
+              />
+            ) : (
+              <Navigate replace to="/plugins" />
+            )
+          }
+        />
+        <Route
+          path="/redis"
+          element={
+            redisEnabled ? (
+              <RedisDetailPage
+                installed={snapshot.installed}
+                operations={snapshot.operations}
+                onChanged={refresh}
+                selected={snapshot.selected}
+                shellIntegration={snapshot.shellIntegration}
+              />
+            ) : (
+              <Navigate replace to="/plugins" />
+            )
+          }
+        />
+        <Route
+          path="/postgresql"
+          element={
+            postgresqlEnabled ? (
+              <PostgresqlDetailPage
+                installed={snapshot.installed}
+                operations={snapshot.operations}
+                onChanged={refresh}
+                selected={snapshot.selected}
+                shellIntegration={snapshot.shellIntegration}
               />
             ) : (
               <Navigate replace to="/plugins" />
@@ -297,8 +433,10 @@ export default function App() {
             temurinEnabled ? (
               <TemurinDetailPage
                 installed={snapshot.installed}
+                operations={snapshot.operations}
                 onChanged={refresh}
                 selected={snapshot.selected}
+                shellIntegration={snapshot.shellIntegration}
               />
             ) : (
               <Navigate replace to="/plugins" />
@@ -315,11 +453,35 @@ export default function App() {
             <PluginsPage
               onChanged={refresh}
               onInstallBundledTemurin={installBundledTemurinPlugin}
+              onInstallBundledNode={installBundledNodePlugin}
+              onUninstallBundledNode={uninstallBundledNodePlugin}
               onInstallBundledPython={installBundledPythonPlugin}
+              onInstallBundledRust={installBundledRustPlugin}
+              onInstallBundledMysql={installBundledMysqlPlugin}
+              onInstallBundledRedis={installBundledRedisPlugin}
+              onInstallBundledPostgresql={installBundledPostgresqlPlugin}
               onUninstallBundledTemurin={uninstallBundledTemurinPlugin}
               onUninstallBundledPython={uninstallBundledPythonPlugin}
+              onUninstallBundledRust={uninstallBundledRustPlugin}
+              onUninstallBundledMysql={uninstallBundledMysqlPlugin}
+              onUninstallBundledRedis={uninstallBundledRedisPlugin}
+              onUninstallBundledPostgresql={uninstallBundledPostgresqlPlugin}
+              onPluginOrderChange={(pluginOrder) =>
+                saveSettings({ ...snapshot.settings, pluginOrder })
+              }
+              pluginOrder={snapshot.settings.pluginOrder}
               plugins={snapshot.plugins}
               registry={snapshot.pluginRegistry}
+            />
+          }
+        />
+        <Route
+          path="/plugins/:pluginId"
+          element={
+            <PluginDetailRoute
+              onSettingsChange={saveSettings}
+              plugins={snapshot.plugins}
+              settings={snapshot.settings}
             />
           }
         />
@@ -360,5 +522,30 @@ export default function App() {
         <Route path="*" element={<Navigate replace to="/plugins" />} />
       </Routes>
     </Layout>
+  );
+}
+
+function PluginDetailRoute({
+  onSettingsChange,
+  plugins,
+  settings,
+}: {
+  onSettingsChange: (settings: UserSettings) => Promise<void>;
+  plugins: DashboardSnapshot["plugins"];
+  settings: UserSettings;
+}) {
+  const { pluginId } = useParams();
+  let decodedId = pluginId ?? "";
+  try {
+    decodedId = decodeURIComponent(decodedId);
+  } catch {
+    // Keep the raw route parameter so the page can render its empty state.
+  }
+  return (
+    <PluginDetailPage
+      onSettingsChange={onSettingsChange}
+      plugin={plugins.find((plugin) => plugin.id === decodedId) ?? null}
+      settings={settings}
+    />
   );
 }

@@ -11,23 +11,31 @@ import {
   Database,
   ExternalLink,
   FolderArchive,
+  GripVertical,
   HardDrive,
   Laptop,
   PackageCheck,
+  Play,
+  Plus,
   RefreshCw,
+  RotateCcw,
+  Save,
   ShieldCheck,
+  Square,
   TerminalSquare,
   Trash2,
   Wrench,
 } from "lucide-react";
 import { Dialog } from "radix-ui";
-import { useCallback, useEffect, useState } from "react";
+import { type ComponentProps, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 import {
-  applyManagedUpdate,
+  backupDatabaseInstance,
   cancelOperation,
   clearSelection,
+  createDatabaseInstance,
+  deleteDatabaseInstance,
   executeManagedToPackageMigration,
   executePackageToManagedMigration,
   executeSourceMigration,
@@ -39,21 +47,34 @@ import {
   installOfficialPluginFromRegistry,
   installPlugin,
   invokePluginSchemaAction,
+  listDatabaseInstances,
   onVersionCatalogUpdated,
   planManagedToPackageMigration,
   planPackageToManagedMigration,
   planSourceMigration,
   planSourceOperation,
+  refreshDatabaseInstanceStatus,
   refreshOfficialPluginRegistry,
+  restoreDatabaseInstance,
   selectVersion,
   setPluginEnabled,
   setShellIntegration,
+  startDatabaseInstance,
+  stopDatabaseInstance,
   uninstallApp,
   updateSettings,
 } from "./api";
+import { ApplicationIcon } from "./components/ApplicationIcon";
+import {
+  activeRuntimeOperation,
+  RuntimeOperationProgress,
+} from "./components/RuntimeOperationProgress";
 import i18n from "./i18n";
+import { comparePluginOrder, movePlugin, normalizePluginOrder } from "./pluginOrder";
 import type {
   ApplicationDescriptor,
+  DatabaseEngine,
+  DatabaseInstance,
   DesktopUpdaterConfiguration,
   DoctorCheck,
   InstallRecord,
@@ -90,24 +111,89 @@ import type {
   VersionDescriptor,
 } from "./types";
 
+const bundledApplicationIds: Record<string, string> = {
+  "app.torben.plugin.node": "node",
+  "app.torben.plugin.temurin": "temurin",
+  "app.torben.plugin.python": "python",
+  "app.torben.plugin.rust": "rust",
+  "app.torben.plugin.mysql": "mysql",
+  "app.torben.plugin.redis": "redis",
+  "app.torben.plugin.postgresql": "postgresql",
+  "app.torben.plugin.git": "git",
+  "app.torben.plugin.vscode": "vscode",
+  "app.torben.plugin.codex": "codex",
+};
+
+const bundledRuntimePages: Record<string, string> = {
+  "app.torben.plugin.node": "/node",
+  "app.torben.plugin.temurin": "/java",
+  "app.torben.plugin.python": "/python",
+  "app.torben.plugin.rust": "/rust",
+  "app.torben.plugin.mysql": "/mysql",
+  "app.torben.plugin.redis": "/redis",
+  "app.torben.plugin.postgresql": "/postgresql",
+};
+
+const pluginEnvironmentAppIds: Record<string, string> = {
+  "app.torben.plugin.node": "node",
+  "app.torben.plugin.temurin": "temurin",
+  "app.torben.plugin.python": "python",
+  "app.torben.plugin.rust": "rust",
+};
+
+const environmentVariableSuggestions: Record<string, string[]> = {
+  node: ["NODE_OPTIONS", "NODE_EXTRA_CA_CERTS", "NPM_CONFIG_REGISTRY"],
+  temurin: ["JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "JAVA_HOME"],
+  python: ["PYTHONPATH", "PYTHONWARNINGS", "PYTHONUTF8"],
+  rust: ["RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_TARGET_DIR"],
+};
+
+interface EnvironmentVariableRow {
+  id: number;
+  name: string;
+  value: string;
+}
+
+let nextEnvironmentVariableRowId = 1;
+
+function environmentVariableRows(variables: Record<string, string>): EnvironmentVariableRow[] {
+  return Object.entries(variables).map(([name, value]) => ({
+    id: nextEnvironmentVariableRowId++,
+    name,
+    value,
+  }));
+}
+
 export function TemurinDetailPage({
   installed,
   onChanged,
   selected = [],
+  operations = [],
+  shellIntegration,
 }: {
   installed: InstallRecord[];
   onChanged: () => Promise<void>;
   selected?: SelectionRecord[];
+  operations?: OperationEvent[];
+  shellIntegration?: ShellIntegrationStatus;
 }) {
-  return <JavaDetailPage installed={installed} onChanged={onChanged} selected={selected} />;
+  return (
+    <JavaDetailPage
+      installed={installed}
+      onChanged={onChanged}
+      selected={selected}
+      operations={operations}
+      shellIntegration={shellIntegration}
+    />
+  );
 }
 
 interface PythonVersionRow {
+  version: string;
   channel: string;
   available?: VersionDescriptor;
   installed?: InstallRecord;
   selected: boolean;
-  updateAvailable: boolean;
 }
 
 function pythonVersionNumbers(version: string): number[] {
@@ -129,82 +215,98 @@ function pythonChannel(version: string): string | undefined {
   return match?.[1];
 }
 
-function buildPythonVersionRows(
+function buildRuntimeVersionRows(
   versions: VersionDescriptor[],
   installed: InstallRecord[],
   selected: SelectionRecord[],
+  appId: string,
 ): PythonVersionRow[] {
-  const availableByChannel = new Map(
-    versions.flatMap((version) => {
-      const channel = pythonChannel(version.version);
-      return channel ? [[channel, version] as const] : [];
-    }),
-  );
-  const installedByChannel = new Map<string, InstallRecord[]>();
-  for (const record of installed.filter((record) => record.appId === "python")) {
+  const rows = new Map<string, PythonVersionRow>();
+  for (const available of versions) {
+    const channel = pythonChannel(available.version);
+    if (!channel) continue;
+    rows.set(available.version, {
+      version: available.version,
+      channel,
+      available,
+      selected: false,
+    });
+  }
+  for (const record of installed.filter((record) => record.appId === appId)) {
     const channel = pythonChannel(record.version);
     if (!channel) continue;
-    installedByChannel.set(channel, [...(installedByChannel.get(channel) ?? []), record]);
-  }
-  const selectedVersion = selected.find((record) => record.appId === "python")?.version;
-  return [...new Set([...availableByChannel.keys(), ...installedByChannel.keys()])]
-    .sort((left, right) => comparePythonVersions(right, left))
-    .map((channel) => {
-      const available = availableByChannel.get(channel);
-      const installedVersions = installedByChannel.get(channel) ?? [];
-      const active = installedVersions.find((record) => record.version === selectedVersion);
-      const installedRecord =
-        active ??
-        installedVersions.sort((left, right) =>
-          comparePythonVersions(right.version, left.version),
-        )[0];
-      return {
-        channel,
-        available,
-        installed: installedRecord,
-        selected: installedRecord?.version === selectedVersion,
-        updateAvailable: Boolean(
-          available &&
-            installedRecord &&
-            comparePythonVersions(available.version, installedRecord.version) > 0,
-        ),
-      };
+    const current = rows.get(record.version);
+    rows.set(record.version, {
+      version: record.version,
+      channel,
+      available: current?.available,
+      installed: record,
+      selected: false,
     });
+  }
+  const selectedVersion = selected.find((record) => record.appId === appId)?.version;
+  return [...rows.values()]
+    .map((row) => ({ ...row, selected: row.version === selectedVersion }))
+    .sort((left, right) => comparePythonVersions(right.version, left.version));
 }
 
-export function PythonDetailPage({
+export function RuntimeDetailPage({
   installed,
   onChanged,
   selected = [],
+  operations = [],
+  shellIntegration,
+  appId,
+  displayName,
 }: {
   installed: InstallRecord[];
   onChanged: () => Promise<void>;
   selected?: SelectionRecord[];
+  operations?: OperationEvent[];
+  shellIntegration?: ShellIntegrationStatus;
+  appId?: "python" | "rust" | "mysql" | "redis" | "postgresql";
+  displayName?: string;
 }) {
   const { t } = useTranslation();
+  const runtimeAppId = appId ?? "python";
+  const runtimeDisplayName = displayName ?? "Python";
   const [versions, setVersions] = useState<VersionDescriptor[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
+  const [activeDatabaseTab, setActiveDatabaseTab] = useState<"versions" | "instances">("versions");
 
-  const readVersions = useCallback(async (showLoading: boolean) => {
-    if (showLoading) setLoading(true);
-    setError(null);
-    try {
-      setVersions(await getVersions("python"));
-    } catch (reason) {
-      setError(formatTorbenError(reason));
-    } finally {
-      setLoading(false);
+  async function selectPrimary(version: string) {
+    await selectVersion(runtimeAppId, version);
+    if (
+      shellIntegration &&
+      (shellIntegration.state === "disabled" || shellIntegration.state === "outdated")
+    ) {
+      await setShellIntegration(true);
     }
-  }, []);
+  }
+
+  const readVersions = useCallback(
+    async (showLoading: boolean) => {
+      if (showLoading) setLoading(true);
+      setError(null);
+      try {
+        setVersions(await getVersions(runtimeAppId));
+      } catch (reason) {
+        setError(formatTorbenError(reason));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [runtimeAppId],
+  );
 
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void readVersions(true);
     void onVersionCatalogUpdated((updatedAppId) => {
-      if (updatedAppId === "python") void readVersions(false);
+      if (updatedAppId === runtimeAppId) void readVersions(false);
     })
       .then((stopListening) => {
         if (disposed) stopListening();
@@ -215,10 +317,10 @@ export function PythonDetailPage({
       disposed = true;
       unlisten?.();
     };
-  }, [readVersions]);
+  }, [readVersions, runtimeAppId]);
 
   async function run(action: string, operation: () => Promise<unknown>) {
-    setBusy(action);
+    setBusy((current) => new Set(current).add(action));
     setError(null);
     try {
       await operation();
@@ -227,11 +329,17 @@ export function PythonDetailPage({
       setError(formatTorbenError(reason));
       await onChanged().catch(() => undefined);
     } finally {
-      setBusy(null);
+      setBusy((current) => {
+        const next = new Set(current);
+        next.delete(action);
+        return next;
+      });
     }
   }
 
-  const rows = buildPythonVersionRows(versions, installed, selected);
+  const rows = buildRuntimeVersionRows(versions, installed, selected, runtimeAppId);
+  const selectedVersion = selected.find((record) => record.appId === runtimeAppId)?.version;
+  const databaseEngine = isDatabaseEngine(runtimeAppId) ? runtimeAppId : null;
   return (
     <div className="page-stack">
       {error ? (
@@ -239,162 +347,557 @@ export function PythonDetailPage({
           <CircleAlert size={16} /> {error}
         </div>
       ) : null}
-      <div className="detail-grid">
-        <Card className="version-panel">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">{t("runtimePage.officialReleases")}</span>
-              <h2>{t("runtimePage.availableVersions")}</h2>
-            </div>
-          </div>
-          {loading ? (
-            <div className="skeleton-list">
-              <span />
-              <span />
-            </div>
-          ) : (
-            <div className="version-list">
-              {rows.length === 0 ? (
-                <p className="version-catalog-status">{t("runtimePage.catalogUpdating")}</p>
+      {databaseEngine ? (
+        <div className="database-management-tabs" role="tablist" aria-label={runtimeDisplayName}>
+          <button
+            aria-controls={`${databaseEngine}-versions-panel`}
+            aria-selected={activeDatabaseTab === "versions"}
+            className={activeDatabaseTab === "versions" ? "active" : undefined}
+            id={`${databaseEngine}-versions-tab`}
+            onClick={() => setActiveDatabaseTab("versions")}
+            role="tab"
+            type="button"
+          >
+            {t("runtimePage.versionManagement")}
+          </button>
+          <button
+            aria-controls={`${databaseEngine}-instances-panel`}
+            aria-selected={activeDatabaseTab === "instances"}
+            className={activeDatabaseTab === "instances" ? "active" : undefined}
+            id={`${databaseEngine}-instances-tab`}
+            onClick={() => setActiveDatabaseTab("instances")}
+            role="tab"
+            type="button"
+          >
+            {t("runtimePage.instanceManagement")}
+          </button>
+        </div>
+      ) : null}
+      {(!databaseEngine || activeDatabaseTab === "versions") && (
+        <div
+          className="detail-grid"
+          id={databaseEngine ? `${databaseEngine}-versions-panel` : undefined}
+          role={databaseEngine ? "tabpanel" : undefined}
+        >
+          <Card className="version-panel">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">{t("runtimePage.officialReleases")}</span>
+                <h2>{t("runtimePage.availableVersions")}</h2>
+              </div>
+              {selectedVersion ? (
+                <Button
+                  disabled={busy.has("clear-selection")}
+                  onClick={() => void run("clear-selection", () => clearSelection(runtimeAppId))}
+                  size="sm"
+                  variant="secondary"
+                >
+                  {t("runtimePage.clearSelection")}
+                </Button>
               ) : null}
-              {rows.map((row) => (
-                <div className="version-row java-version-row" key={row.channel}>
-                  <div className="version-main">
-                    <strong>Python {row.channel}</strong>
-                    <span className="java-version-summary">
-                      v{row.installed?.version ?? row.available?.version}
-                    </span>
-                  </div>
-                  <span className="release-date">
-                    {row.available?.releasedAt.slice(0, 10) ?? ""}
-                  </span>
-                  <span className="version-actions">
-                    {row.installed ? (
-                      row.updateAvailable && row.available ? (
-                        <Button
-                          disabled={Boolean(busy)}
-                          onClick={() =>
-                            void run(`upgrade:${row.channel}`, () =>
-                              applyManagedUpdate({
-                                appId: "python",
-                                channel: row.channel,
-                                installedVersion: row.installed?.version ?? "",
-                                availableVersion: row.available?.version ?? "",
-                                selectedVersion: row.selected
-                                  ? (row.installed?.version ?? null)
-                                  : null,
-                                releasedAt: row.available?.releasedAt ?? "",
-                                recommended: row.available?.recommended ?? false,
-                                automatic: false,
-                              }),
-                            )
-                          }
-                          size="sm"
-                          variant="secondary"
-                        >
-                          <ArrowDownToLine size={14} />
-                          {busy === `upgrade:${row.channel}`
-                            ? t("runtimePage.upgrading")
-                            : t("runtimePage.upgrade")}
-                        </Button>
-                      ) : (
-                        <Badge tone="positive">
-                          <Check size={12} /> {t("runtimePage.installed")}
-                        </Badge>
-                      )
-                    ) : row.available ? (
-                      <Button
-                        disabled={Boolean(busy)}
-                        onClick={() =>
-                          void run(`install:${row.available?.version}`, () =>
-                            installApp("python", row.available?.version ?? ""),
-                          )
-                        }
-                        size="sm"
-                        variant="secondary"
-                      >
-                        <ArrowDownToLine size={14} /> {t("common.install")}
-                      </Button>
-                    ) : null}
-                    {row.installed ? (
-                      row.selected ? (
-                        <Badge tone="accent">{t("runtimePage.selected")}</Badge>
-                      ) : (
-                        <Button
-                          disabled={Boolean(busy)}
-                          onClick={() =>
-                            void run(`select:${row.installed?.version}`, () =>
-                              selectVersion("python", row.installed?.version ?? ""),
-                            )
-                          }
-                          size="sm"
-                        >
-                          {busy === `select:${row.installed.version}`
-                            ? t("runtimePage.selecting")
-                            : t("runtimePage.select")}
-                        </Button>
-                      )
-                    ) : null}
-                    {row.installed ? (
-                      <Dialog.Root>
-                        <Dialog.Trigger asChild>
-                          <Button disabled={Boolean(busy)} size="sm" variant="danger">
-                            <Trash2 size={14} /> {t("runtimePage.uninstall")}
-                          </Button>
-                        </Dialog.Trigger>
-                        <Dialog.Portal>
-                          <Dialog.Overlay className="dialog-overlay" />
-                          <Dialog.Content className="dialog-content">
-                            <Dialog.Title>
-                              {t("runtimePage.uninstallTitle", {
-                                app: "Python",
-                                version: row.installed.version,
-                              })}
-                            </Dialog.Title>
-                            <Dialog.Description>
-                              {row.selected
-                                ? t("runtimePage.uninstallSelectedDescription")
-                                : t("runtimePage.uninstallDescription")}
-                            </Dialog.Description>
-                            <div className="dialog-actions">
-                              <Dialog.Close asChild>
-                                <Button variant="ghost">{t("common.cancel")}</Button>
-                              </Dialog.Close>
-                              <Dialog.Close asChild>
-                                <Button
-                                  onClick={() =>
-                                    void run(`uninstall:${row.installed?.version}`, async () => {
-                                      if (row.selected) await clearSelection("python");
-                                      await uninstallApp("python", row.installed?.version ?? "");
-                                    })
-                                  }
-                                  variant="danger"
-                                >
-                                  {t("runtimePage.uninstall")}
-                                </Button>
-                              </Dialog.Close>
-                            </div>
-                          </Dialog.Content>
-                        </Dialog.Portal>
-                      </Dialog.Root>
-                    ) : null}
-                  </span>
-                </div>
-              ))}
             </div>
-          )}
-        </Card>
-      </div>
+            {loading ? (
+              <div className="skeleton-list">
+                <span />
+                <span />
+              </div>
+            ) : (
+              <div className="version-list">
+                {rows.length === 0 ? (
+                  <p className="version-catalog-status">{t("runtimePage.catalogUpdating")}</p>
+                ) : null}
+                {rows.map((row) => {
+                  const installAction = `install:${row.version}`;
+                  const operationEvent = activeRuntimeOperation(
+                    operations,
+                    runtimeAppId,
+                    row.version,
+                  );
+                  const installEvent =
+                    operationEvent?.kind === "install" ? operationEvent : undefined;
+                  const uninstallEvent =
+                    operationEvent?.kind === "uninstall" ? operationEvent : undefined;
+                  const installing = busy.has(installAction) || Boolean(installEvent);
+                  const uninstalling =
+                    busy.has(`uninstall:${row.version}`) || Boolean(uninstallEvent);
+                  return (
+                    <div className="version-row runtime-version-row" key={row.version}>
+                      <div className="version-main">
+                        <strong>
+                          {runtimeDisplayName} {row.channel}
+                        </strong>
+                        <span className="runtime-version-summary">v{row.version}</span>
+                      </div>
+                      <span className="release-date">
+                        {row.available?.releasedAt.slice(0, 10) ?? ""}
+                      </span>
+                      <span className="version-actions">
+                        {row.installed ? (
+                          <Badge tone="positive">
+                            <Check size={12} /> {t("runtimePage.installed")}
+                          </Badge>
+                        ) : row.available ? (
+                          <Button
+                            disabled={installing}
+                            onClick={() =>
+                              void run(installAction, () =>
+                                installApp(runtimeAppId, row.available?.version ?? ""),
+                              )
+                            }
+                            size="sm"
+                            variant="secondary"
+                          >
+                            {installing ? (
+                              <RefreshCw className="spin" size={14} />
+                            ) : (
+                              <ArrowDownToLine size={14} />
+                            )}
+                            {installing ? t("common.installing") : t("common.install")}
+                          </Button>
+                        ) : null}
+                        {row.installed ? (
+                          row.selected ? (
+                            <Badge tone="accent">{t("runtimePage.selected")}</Badge>
+                          ) : (
+                            <Button
+                              disabled={busy.has(`select:${row.installed?.version}`)}
+                              onClick={() =>
+                                void run(`select:${row.installed?.version}`, () =>
+                                  selectPrimary(row.installed?.version ?? ""),
+                                )
+                              }
+                              size="sm"
+                            >
+                              {busy.has(`select:${row.installed.version}`)
+                                ? t("runtimePage.selecting")
+                                : t("runtimePage.select")}
+                            </Button>
+                          )
+                        ) : null}
+                        {row.installed ? (
+                          <Dialog.Root>
+                            <Dialog.Trigger asChild>
+                              <Button disabled={uninstalling} size="sm" variant="danger">
+                                {uninstalling ? (
+                                  <RefreshCw className="spin" size={14} />
+                                ) : (
+                                  <Trash2 size={14} />
+                                )}{" "}
+                                {uninstalling
+                                  ? t("runtimePage.uninstalling")
+                                  : t("runtimePage.uninstall")}
+                              </Button>
+                            </Dialog.Trigger>
+                            <Dialog.Portal>
+                              <Dialog.Overlay className="dialog-overlay" />
+                              <Dialog.Content className="dialog-content">
+                                <Dialog.Title>
+                                  {t("runtimePage.uninstallTitle", {
+                                    app: runtimeDisplayName,
+                                    version: row.installed.version,
+                                  })}
+                                </Dialog.Title>
+                                <Dialog.Description>
+                                  {row.selected
+                                    ? t("runtimePage.uninstallSelectedDescription")
+                                    : t("runtimePage.uninstallDescription")}
+                                </Dialog.Description>
+                                <div className="dialog-actions">
+                                  <Dialog.Close asChild>
+                                    <Button variant="ghost">{t("common.cancel")}</Button>
+                                  </Dialog.Close>
+                                  <Dialog.Close asChild>
+                                    <Button
+                                      onClick={() =>
+                                        void run(
+                                          `uninstall:${row.installed?.version}`,
+                                          async () => {
+                                            if (row.selected) await clearSelection(runtimeAppId);
+                                            await uninstallApp(
+                                              runtimeAppId,
+                                              row.installed?.version ?? "",
+                                            );
+                                          },
+                                        )
+                                      }
+                                      variant="danger"
+                                    >
+                                      {t("runtimePage.uninstall")}
+                                    </Button>
+                                  </Dialog.Close>
+                                </div>
+                              </Dialog.Content>
+                            </Dialog.Portal>
+                          </Dialog.Root>
+                        ) : null}
+                      </span>
+                      <RuntimeOperationProgress
+                        event={operationEvent}
+                        pending={installing || uninstalling}
+                        pendingLabel={uninstalling ? t("runtimePage.uninstalling") : undefined}
+                        version={row.version}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+      {databaseEngine && activeDatabaseTab === "instances" ? (
+        <DatabaseInstancesPanel
+          engine={databaseEngine}
+          installed={installed.filter((record) => record.appId === databaseEngine)}
+          selectedVersion={selectedVersion}
+        />
+      ) : null}
     </div>
   );
 }
 
+function isDatabaseEngine(value: string): value is DatabaseEngine {
+  return value === "mysql" || value === "redis" || value === "postgresql";
+}
+
+const DATABASE_DEFAULT_PORTS: Record<DatabaseEngine, number> = {
+  mysql: 3306,
+  redis: 6379,
+  postgresql: 5432,
+};
+
+function DatabaseInstancesPanel({
+  engine,
+  installed,
+  selectedVersion,
+}: {
+  engine: DatabaseEngine;
+  installed: InstallRecord[];
+  selectedVersion?: string;
+}) {
+  const { t } = useTranslation();
+  const [instances, setInstances] = useState<DatabaseInstance[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<Set<string>>(() => new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [name, setName] = useState("local");
+  const [port, setPort] = useState(String(DATABASE_DEFAULT_PORTS[engine]));
+  const [runtimeVersion, setRuntimeVersion] = useState(
+    selectedVersion ?? installed[0]?.version ?? "",
+  );
+
+  const refresh = useCallback(async () => {
+    setError(null);
+    try {
+      setInstances(await listDatabaseInstances(engine));
+    } catch (reason) {
+      setError(formatTorbenError(reason));
+    } finally {
+      setLoading(false);
+    }
+  }, [engine]);
+
+  useEffect(() => {
+    setLoading(true);
+    void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (selectedVersion && installed.some((record) => record.version === selectedVersion)) {
+      setRuntimeVersion(selectedVersion);
+    } else if (!installed.some((record) => record.version === runtimeVersion)) {
+      setRuntimeVersion(installed[0]?.version ?? "");
+    }
+  }, [installed, runtimeVersion, selectedVersion]);
+
+  async function run(action: string, operation: () => Promise<unknown>) {
+    setBusy((current) => new Set(current).add(action));
+    setError(null);
+    setNotice(null);
+    try {
+      await operation();
+      await refresh();
+    } catch (reason) {
+      setError(formatTorbenError(reason));
+    } finally {
+      setBusy((current) => {
+        const next = new Set(current);
+        next.delete(action);
+        return next;
+      });
+    }
+  }
+
+  async function restore(instance: DatabaseInstance) {
+    const source = await open({
+      directory: false,
+      multiple: false,
+      title: t("databaseInstances.restorePickerTitle"),
+    });
+    if (typeof source !== "string") return;
+    await run(`restore:${instance.name}`, () =>
+      restoreDatabaseInstance({ engine, name: instance.name }, source),
+    );
+  }
+
+  return (
+    <Card className="database-instances-panel">
+      <div className="section-heading">
+        <div>
+          <span className="eyebrow">{t("databaseInstances.eyebrow")}</span>
+          <h2>{t("databaseInstances.title")}</h2>
+          <p>{t("databaseInstances.description")}</p>
+        </div>
+        <Dialog.Root>
+          <Dialog.Trigger asChild>
+            <Button disabled={installed.length === 0} size="sm">
+              <Plus size={14} /> {t("databaseInstances.create")}
+            </Button>
+          </Dialog.Trigger>
+          <Dialog.Portal>
+            <Dialog.Overlay className="dialog-overlay" />
+            <Dialog.Content className="dialog-content">
+              <Dialog.Title>{t("databaseInstances.createTitle")}</Dialog.Title>
+              <Dialog.Description>{t("databaseInstances.createDescription")}</Dialog.Description>
+              <label className="dialog-field">
+                <span>{t("databaseInstances.name")}</span>
+                <input
+                  autoComplete="off"
+                  onChange={(event) => setName(event.target.value)}
+                  pattern="[a-z0-9_-]{1,64}"
+                  value={name}
+                />
+              </label>
+              <label className="dialog-field">
+                <span>{t("databaseInstances.runtimeVersion")}</span>
+                <select
+                  onChange={(event) => setRuntimeVersion(event.target.value)}
+                  value={runtimeVersion}
+                >
+                  {installed.map((record) => (
+                    <option key={record.version} value={record.version}>
+                      {record.version}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="dialog-field">
+                <span>{t("databaseInstances.port")}</span>
+                <input
+                  max={65535}
+                  min={1}
+                  onChange={(event) => setPort(event.target.value)}
+                  type="number"
+                  value={port}
+                />
+              </label>
+              <div className="dialog-actions">
+                <Dialog.Close asChild>
+                  <Button variant="ghost">{t("common.cancel")}</Button>
+                </Dialog.Close>
+                <Dialog.Close asChild>
+                  <Button
+                    disabled={!name || !runtimeVersion || !Number(port)}
+                    onClick={() =>
+                      void run("create", () =>
+                        createDatabaseInstance({
+                          engine,
+                          name,
+                          runtimeVersion,
+                          port: Number(port),
+                        }),
+                      )
+                    }
+                  >
+                    {t("databaseInstances.create")}
+                  </Button>
+                </Dialog.Close>
+              </div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+      </div>
+      {installed.length === 0 ? (
+        <p className="version-catalog-status">{t("databaseInstances.installRuntimeFirst")}</p>
+      ) : null}
+      {error ? (
+        <div className="error-banner" role="alert">
+          <CircleAlert size={16} /> {error}
+        </div>
+      ) : null}
+      {notice ? <p className="database-instance-notice">{notice}</p> : null}
+      {loading ? (
+        <div className="skeleton-list">
+          <span />
+        </div>
+      ) : instances.length === 0 ? (
+        <EmptyState
+          description={t("databaseInstances.emptyDescription")}
+          title={t("databaseInstances.emptyTitle")}
+        />
+      ) : (
+        <div className="database-instance-list">
+          {instances.map((instance) => {
+            const target = { engine, name: instance.name };
+            const actionBusy = [...busy].some((action) => action.endsWith(`:${instance.name}`));
+            const restoreReady = instance.state === (engine === "redis" ? "stopped" : "running");
+            return (
+              <div className="database-instance-row" key={instance.name}>
+                <div className="database-instance-main">
+                  <strong>{instance.name}</strong>
+                  <Badge
+                    tone={
+                      instance.state === "running"
+                        ? "positive"
+                        : instance.state === "stale"
+                          ? "warning"
+                          : "neutral"
+                    }
+                  >
+                    {t(`databaseInstances.state.${instance.state}`)}
+                  </Badge>
+                  <span>
+                    v{instance.runtimeVersion} ·{" "}
+                    {t("databaseInstances.portValue", { port: instance.port })}
+                  </span>
+                </div>
+                <div className="database-instance-actions">
+                  {instance.state === "stopped" ? (
+                    <Button
+                      disabled={actionBusy}
+                      onClick={() =>
+                        void run(`start:${instance.name}`, () => startDatabaseInstance(target))
+                      }
+                      size="sm"
+                    >
+                      <Play size={13} /> {t("databaseInstances.start")}
+                    </Button>
+                  ) : null}
+                  {instance.state === "running" ? (
+                    <Button
+                      disabled={actionBusy}
+                      onClick={() =>
+                        void run(`stop:${instance.name}`, () => stopDatabaseInstance(target))
+                      }
+                      size="sm"
+                      variant="secondary"
+                    >
+                      <Square size={13} /> {t("databaseInstances.stop")}
+                    </Button>
+                  ) : null}
+                  <Button
+                    aria-label={t("databaseInstances.refreshStatus")}
+                    disabled={actionBusy}
+                    onClick={() =>
+                      void run(`status:${instance.name}`, () =>
+                        refreshDatabaseInstanceStatus(target),
+                      )
+                    }
+                    size="sm"
+                    variant="ghost"
+                  >
+                    <RefreshCw size={13} />
+                  </Button>
+                  <Button
+                    disabled={actionBusy || instance.state !== "running"}
+                    onClick={() =>
+                      void run(`backup:${instance.name}`, async () => {
+                        const backup = await backupDatabaseInstance(target);
+                        setNotice(t("databaseInstances.backupCreated", { path: backup.path }));
+                      })
+                    }
+                    size="sm"
+                    variant="secondary"
+                  >
+                    <Save size={13} /> {t("databaseInstances.backup")}
+                  </Button>
+                  <Button
+                    disabled={actionBusy || !restoreReady}
+                    onClick={() => void restore(instance)}
+                    size="sm"
+                    variant="secondary"
+                  >
+                    <RotateCcw size={13} /> {t("databaseInstances.restore")}
+                  </Button>
+                  <Dialog.Root>
+                    <Dialog.Trigger asChild>
+                      <Button
+                        disabled={actionBusy || instance.state !== "stopped"}
+                        size="sm"
+                        variant="danger"
+                      >
+                        <Trash2 size={13} /> {t("databaseInstances.delete")}
+                      </Button>
+                    </Dialog.Trigger>
+                    <Dialog.Portal>
+                      <Dialog.Overlay className="dialog-overlay" />
+                      <Dialog.Content className="dialog-content">
+                        <Dialog.Title>
+                          {t("databaseInstances.deleteTitle", { name: instance.name })}
+                        </Dialog.Title>
+                        <Dialog.Description>
+                          {t("databaseInstances.deleteDescription")}
+                        </Dialog.Description>
+                        <div className="dialog-actions">
+                          <Dialog.Close asChild>
+                            <Button variant="ghost">{t("common.cancel")}</Button>
+                          </Dialog.Close>
+                          <Dialog.Close asChild>
+                            <Button
+                              onClick={() =>
+                                void run(`delete:${instance.name}`, () =>
+                                  deleteDatabaseInstance(target),
+                                )
+                              }
+                              variant="danger"
+                            >
+                              {t("databaseInstances.delete")}
+                            </Button>
+                          </Dialog.Close>
+                        </div>
+                      </Dialog.Content>
+                    </Dialog.Portal>
+                  </Dialog.Root>
+                </div>
+                <code className="database-instance-path">{instance.dataPath}</code>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+export function PythonDetailPage(
+  props: Omit<ComponentProps<typeof RuntimeDetailPage>, "appId" | "displayName">,
+) {
+  return <RuntimeDetailPage {...props} />;
+}
+
+export function RustDetailPage(props: ComponentProps<typeof RuntimeDetailPage>) {
+  return <RuntimeDetailPage {...props} appId="rust" displayName="Rust" />;
+}
+
+export function MysqlDetailPage(props: ComponentProps<typeof RuntimeDetailPage>) {
+  return <RuntimeDetailPage {...props} appId="mysql" displayName="MySQL" />;
+}
+
+export function RedisDetailPage(props: ComponentProps<typeof RuntimeDetailPage>) {
+  return <RuntimeDetailPage {...props} appId="redis" displayName="Redis" />;
+}
+
+export function PostgresqlDetailPage(props: ComponentProps<typeof RuntimeDetailPage>) {
+  return <RuntimeDetailPage {...props} appId="postgresql" displayName="PostgreSQL" />;
+}
+
 interface JavaVersionRow {
+  version: string;
   channel: string;
   available?: VersionDescriptor;
   installed?: InstallRecord;
   selected: boolean;
-  updateAvailable: boolean;
 }
 
 function javaVersionNumbers(version: string): number[] {
@@ -421,70 +924,81 @@ function buildJavaVersionRows(
   installed: InstallRecord[],
   selected: SelectionRecord[],
 ): JavaVersionRow[] {
-  const availableByMajor = new Map<string, VersionDescriptor>();
-  for (const version of versions) {
-    const major = javaMajor(version.version);
-    if (!major) continue;
-    const current = availableByMajor.get(major);
-    if (!current || compareJavaVersions(version.version, current.version) > 0) {
-      availableByMajor.set(major, version);
-    }
-  }
-
-  const installedByMajor = new Map<string, InstallRecord[]>();
-  for (const record of installed.filter((record) => record.appId === "temurin")) {
-    const major = javaMajor(record.version);
-    if (!major) continue;
-    const records = installedByMajor.get(major) ?? [];
-    records.push(record);
-    installedByMajor.set(major, records);
-  }
-
-  const majors = new Set([...availableByMajor.keys(), ...installedByMajor.keys()]);
-  return [...majors]
-    .sort((left, right) => Number(right) - Number(left))
-    .map((channel) => {
-      const available = availableByMajor.get(channel);
-      const installedVersions = installedByMajor.get(channel) ?? [];
-      const selectedVersion = selected.find(
-        (record) => record.appId === "temurin" && javaMajor(record.version) === channel,
-      )?.version;
-      const installedVersion = selectedVersion
-        ? installedVersions.find((record) => record.version === selectedVersion)
-        : undefined;
-      const installedRecord =
-        installedVersion ??
-        installedVersions.sort((left, right) =>
-          compareJavaVersions(right.version, left.version),
-        )[0];
-      return {
-        channel,
-        available,
-        installed: installedRecord,
-        selected: installedRecord?.version === selectedVersion,
-        updateAvailable: Boolean(
-          available &&
-            installedRecord &&
-            compareJavaVersions(available.version, installedRecord.version) > 0,
-        ),
-      };
+  const rows = new Map<string, JavaVersionRow>();
+  for (const available of versions) {
+    const channel = javaMajor(available.version);
+    if (!channel) continue;
+    rows.set(available.version, {
+      version: available.version,
+      channel,
+      available,
+      selected: false,
     });
+  }
+  for (const record of installed.filter((record) => record.appId === "temurin")) {
+    const channel = javaMajor(record.version);
+    if (!channel) continue;
+    const current = rows.get(record.version);
+    rows.set(record.version, {
+      version: record.version,
+      channel,
+      available: current?.available,
+      installed: record,
+      selected: false,
+    });
+  }
+  const selectedVersion = selected.find((record) => record.appId === "temurin")?.version;
+  return [...rows.values()]
+    .map((row) => ({ ...row, selected: row.version === selectedVersion }))
+    .sort((left, right) => compareJavaVersions(right.version, left.version));
 }
 
 function JavaDetailPage({
   installed,
   onChanged,
   selected = [],
+  operations = [],
+  shellIntegration,
 }: {
   installed: InstallRecord[];
   onChanged: () => Promise<void>;
   selected?: SelectionRecord[];
+  operations?: OperationEvent[];
+  shellIntegration?: ShellIntegrationStatus;
 }) {
   const { t } = useTranslation();
   const [versions, setVersions] = useState<VersionDescriptor[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
+
+  async function selectPrimary(version: string) {
+    await selectVersion("temurin", version);
+    if (
+      shellIntegration &&
+      (shellIntegration.state === "disabled" || shellIntegration.state === "outdated")
+    ) {
+      await setShellIntegration(true);
+    }
+  }
+
+  async function run(action: string, operation: () => Promise<unknown>) {
+    setBusy((current) => new Set(current).add(action));
+    setError(null);
+    try {
+      await operation();
+      await onChanged();
+    } catch (reason) {
+      setError(formatTorbenError(reason));
+      await onChanged().catch(() => undefined);
+    } finally {
+      setBusy((current) => {
+        const next = new Set(current);
+        next.delete(action);
+        return next;
+      });
+    }
+  }
 
   const readVersions = useCallback(async (showLoading: boolean) => {
     if (showLoading) setLoading(true);
@@ -517,62 +1031,22 @@ function JavaDetailPage({
   }, [readVersions]);
 
   async function install(version: string) {
-    setBusy(`install:${version}`);
-    setError(null);
-    try {
-      await installApp("temurin", version);
-      await onChanged();
-    } catch (reason) {
-      setError(formatTorbenError(reason));
-    } finally {
-      setBusy(null);
-    }
+    await run(`install:${version}`, () => installApp("temurin", version));
   }
 
   async function remove(version: string) {
-    setBusy(`uninstall:${version}`);
-    setError(null);
-    try {
+    await run(`uninstall:${version}`, async () => {
       if (selected.some((record) => record.appId === "temurin" && record.version === version)) {
         await clearSelection("temurin");
       }
       await uninstallApp("temurin", version);
-      await onChanged();
-    } catch (reason) {
-      setError(formatTorbenError(reason));
-      await onChanged().catch(() => undefined);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function upgrade(row: JavaVersionRow) {
-    if (!row.available || !row.installed) return;
-    setBusy(`upgrade:${row.channel}`);
-    setError(null);
-    try {
-      await applyManagedUpdate({
-        appId: "temurin",
-        channel: row.channel,
-        installedVersion: row.installed.version,
-        availableVersion: row.available.version,
-        selectedVersion: row.selected ? row.installed.version : null,
-        releasedAt: row.available.releasedAt,
-        recommended: false,
-        automatic: false,
-      });
-      await onChanged();
-    } catch (reason) {
-      setError(formatTorbenError(reason));
-      await onChanged().catch(() => undefined);
-    } finally {
-      setBusy(null);
-    }
+    });
   }
 
   const javaRows = buildJavaVersionRows(versions, installed, selected);
+  const selectedVersion = selected.find((record) => record.appId === "temurin")?.version;
 
-  function uninstallControl(version: string, isSelected: boolean) {
+  function uninstallControl(version: string, isSelected: boolean, uninstalling: boolean) {
     return (
       <Dialog.Root>
         <Dialog.Trigger asChild>
@@ -581,18 +1055,12 @@ function JavaDetailPage({
               app: "Java",
               version,
             })}
-            disabled={Boolean(busy)}
+            disabled={uninstalling}
             size="sm"
             variant="danger"
           >
-            {busy === `uninstall:${version}` ? (
-              <RefreshCw className="spin" size={14} />
-            ) : (
-              <Trash2 size={14} />
-            )}
-            {busy === `uninstall:${version}`
-              ? t("runtimePage.uninstalling")
-              : t("runtimePage.uninstall")}
+            {uninstalling ? <RefreshCw className="spin" size={14} /> : <Trash2 size={14} />}
+            {uninstalling ? t("runtimePage.uninstalling") : t("runtimePage.uninstall")}
           </Button>
         </Dialog.Trigger>
         <Dialog.Portal>
@@ -639,6 +1107,16 @@ function JavaDetailPage({
               <span className="eyebrow">{t("runtimePage.officialReleases")}</span>
               <h2>{t("runtimePage.availableVersions")}</h2>
             </div>
+            {selectedVersion ? (
+              <Button
+                disabled={busy.has("clear-selection")}
+                onClick={() => void run("clear-selection", () => clearSelection("temurin"))}
+                size="sm"
+                variant="secondary"
+              >
+                {t("runtimePage.clearSelection")}
+              </Button>
+            ) : null}
           </div>
           {loading ? (
             <div className="skeleton-list">
@@ -651,65 +1129,78 @@ function JavaDetailPage({
               {javaRows.length === 0 ? (
                 <p className="version-catalog-status">{t("runtimePage.catalogUpdating")}</p>
               ) : null}
-              {javaRows.map((row) => (
-                <div className="version-row java-version-row" key={row.channel}>
-                  <div className="version-main">
-                    <strong>JDK {row.channel}</strong>
-                    <Badge tone="accent">LTS</Badge>
-                    <span className="java-version-summary">
-                      {row.installed && row.updateAvailable && row.available
-                        ? `v${row.installed.version} → v${row.available.version}`
-                        : `v${row.installed?.version ?? row.available?.version}`}
+              {javaRows.map((row) => {
+                const installAction = `install:${row.version}`;
+                const operationEvent = activeRuntimeOperation(operations, "temurin", row.version);
+                const installEvent =
+                  operationEvent?.kind === "install" ? operationEvent : undefined;
+                const uninstallEvent =
+                  operationEvent?.kind === "uninstall" ? operationEvent : undefined;
+                const installing = busy.has(installAction) || Boolean(installEvent);
+                const uninstalling =
+                  busy.has(`uninstall:${row.version}`) || Boolean(uninstallEvent);
+                return (
+                  <div className="version-row runtime-version-row" key={row.version}>
+                    <div className="version-main">
+                      <strong>JDK {row.channel}</strong>
+                      <Badge tone="accent">LTS</Badge>
+                      <span className="runtime-version-summary">v{row.version}</span>
+                    </div>
+                    <span className="release-date">
+                      {row.available?.releasedAt.slice(0, 10) ?? ""}
                     </span>
-                  </div>
-                  <span className="release-date">
-                    {row.available?.releasedAt.slice(0, 10) ?? ""}
-                  </span>
-                  <span className="version-actions">
-                    {row.installed ? (
-                      row.updateAvailable && row.available ? (
-                        <Button
-                          aria-label={t("runtimePage.upgradeAria", {
-                            version: row.available.version,
-                          })}
-                          disabled={Boolean(busy)}
-                          onClick={() => void upgrade(row)}
-                          size="sm"
-                          variant="secondary"
-                        >
-                          {busy === `upgrade:${row.channel}` ? (
-                            <RefreshCw className="spin" size={14} />
-                          ) : (
-                            <ArrowDownToLine size={14} />
-                          )}
-                          {busy === `upgrade:${row.channel}`
-                            ? t("runtimePage.upgrading")
-                            : t("runtimePage.upgrade")}
-                        </Button>
-                      ) : (
+                    <span className="version-actions">
+                      {row.installed ? (
                         <Badge tone="positive">
                           <Check size={12} /> {t("runtimePage.installed")}
                         </Badge>
-                      )
-                    ) : row.available ? (
-                      <Button
-                        disabled={Boolean(busy)}
-                        onClick={() => void install(row.available?.version ?? "")}
-                        size="sm"
-                        variant="secondary"
-                      >
-                        {busy === `install:${row.available.version}` ? (
-                          <RefreshCw className="spin" size={14} />
+                      ) : row.available ? (
+                        <Button
+                          disabled={installing}
+                          onClick={() => void install(row.available?.version ?? "")}
+                          size="sm"
+                          variant="secondary"
+                        >
+                          {installing ? (
+                            <RefreshCw className="spin" size={14} />
+                          ) : (
+                            <ArrowDownToLine size={14} />
+                          )}{" "}
+                          {installing ? t("common.installing") : t("common.install")}
+                        </Button>
+                      ) : null}
+                      {row.installed ? (
+                        row.selected ? (
+                          <Badge tone="accent">{t("runtimePage.selected")}</Badge>
                         ) : (
-                          <ArrowDownToLine size={14} />
-                        )}{" "}
-                        {t("common.install")}
-                      </Button>
-                    ) : null}
-                    {row.installed ? uninstallControl(row.installed.version, row.selected) : null}
-                  </span>
-                </div>
-              ))}
+                          <Button
+                            disabled={busy.has(`select:${row.installed.version}`)}
+                            onClick={() =>
+                              void run(`select:${row.installed?.version}`, () =>
+                                selectPrimary(row.installed?.version ?? ""),
+                              )
+                            }
+                            size="sm"
+                          >
+                            {busy.has(`select:${row.installed.version}`)
+                              ? t("runtimePage.selecting")
+                              : t("runtimePage.select")}
+                          </Button>
+                        )
+                      ) : null}
+                      {row.installed
+                        ? uninstallControl(row.installed.version, row.selected, uninstalling)
+                        : null}
+                    </span>
+                    <RuntimeOperationProgress
+                      event={operationEvent}
+                      pending={installing || uninstalling}
+                      pendingLabel={uninstalling ? t("runtimePage.uninstalling") : undefined}
+                      version={row.version}
+                    />
+                  </div>
+                );
+              })}
             </div>
           )}
         </Card>
@@ -875,17 +1366,28 @@ function schemaValueKey(pageId: string, fieldId: string) {
 
 interface PluginsPageProps {
   plugins: PluginSummary[];
+  pluginOrder?: string[];
   registry?: PluginRegistryStatus;
   onChanged: () => Promise<void>;
+  onPluginOrderChange?: (pluginOrder: string[]) => Promise<void>;
   chooseManifest?: () => Promise<string | null>;
   installManifest?: (manifestPath: string, developerMode: boolean) => Promise<PluginSummary>;
   onInstallBundledTemurin?: () => Promise<PluginSummary>;
   onUninstallBundledTemurin?: () => Promise<void>;
+  onInstallBundledNode?: () => Promise<PluginSummary>;
+  onUninstallBundledNode?: () => Promise<void>;
   onInstallBundledPython?: () => Promise<PluginSummary>;
   onUninstallBundledPython?: () => Promise<void>;
+  onInstallBundledRust?: () => Promise<PluginSummary>;
+  onUninstallBundledRust?: () => Promise<void>;
+  onInstallBundledMysql?: () => Promise<PluginSummary>;
+  onUninstallBundledMysql?: () => Promise<void>;
+  onInstallBundledRedis?: () => Promise<PluginSummary>;
+  onUninstallBundledRedis?: () => Promise<void>;
+  onInstallBundledPostgresql?: () => Promise<PluginSummary>;
+  onUninstallBundledPostgresql?: () => Promise<void>;
   installRegistryPlugin?: (pluginId: string, version?: string) => Promise<PluginSummary>;
   refreshRegistry?: () => Promise<PluginRegistryStatus>;
-  loadSchemaPages?: (pluginId: string) => Promise<SchemaPage[]>;
   runSchemaAction?: (
     pluginId: string,
     pageId: string,
@@ -897,8 +1399,11 @@ interface PluginsPageProps {
   changeEnabled?: (pluginId: string, enabled: boolean) => Promise<void>;
 }
 
+const defaultPluginOrder: string[] = [];
+
 export function PluginsPage({
   plugins,
+  pluginOrder: savedPluginOrder = defaultPluginOrder,
   registry = {
     configured: false,
     sourceUrl: null,
@@ -907,6 +1412,7 @@ export function PluginsPage({
     generatedAt: null,
   },
   onChanged,
+  onPluginOrderChange = async () => undefined,
   chooseManifest = choosePluginManifest,
   installManifest = installPlugin,
   onInstallBundledTemurin = async () => {
@@ -915,15 +1421,44 @@ export function PluginsPage({
   onUninstallBundledTemurin = async () => {
     throw new Error("Bundled Temurin uninstall is unavailable.");
   },
+  onInstallBundledNode = async () => {
+    throw new Error("Bundled Node.js installation is unavailable.");
+  },
+  onUninstallBundledNode = async () => {
+    throw new Error("Bundled Node.js uninstall is unavailable.");
+  },
   onInstallBundledPython = async () => {
     throw new Error("Bundled Python installation is unavailable.");
   },
   onUninstallBundledPython = async () => {
     throw new Error("Bundled Python uninstall is unavailable.");
   },
+  onInstallBundledRust = async () => {
+    throw new Error("Bundled Rust installation is unavailable.");
+  },
+  onUninstallBundledRust = async () => {
+    throw new Error("Bundled Rust uninstall is unavailable.");
+  },
+  onInstallBundledMysql = async () => {
+    throw new Error("Bundled MySQL installation is unavailable.");
+  },
+  onUninstallBundledMysql = async () => {
+    throw new Error("Bundled MySQL uninstall is unavailable.");
+  },
+  onInstallBundledRedis = async () => {
+    throw new Error("Bundled Redis installation is unavailable.");
+  },
+  onUninstallBundledRedis = async () => {
+    throw new Error("Bundled Redis uninstall is unavailable.");
+  },
+  onInstallBundledPostgresql = async () => {
+    throw new Error("Bundled PostgreSQL installation is unavailable.");
+  },
+  onUninstallBundledPostgresql = async () => {
+    throw new Error("Bundled PostgreSQL uninstall is unavailable.");
+  },
   installRegistryPlugin = installOfficialPluginFromRegistry,
   refreshRegistry = refreshOfficialPluginRegistry,
-  loadSchemaPages = getPluginSchemaPages,
   runSchemaAction = invokePluginSchemaAction,
   changeEnabled = setPluginEnabled,
 }: PluginsPageProps) {
@@ -944,6 +1479,51 @@ export function PluginsPage({
     action: SchemaAction;
   } | null>(null);
   const [uninstallPlugin, setUninstallPlugin] = useState<PluginSummary | null>(null);
+  const [pluginOrder, setPluginOrder] = useState<string[]>(() =>
+    normalizePluginOrder(savedPluginOrder, plugins),
+  );
+  const [draggingPlugin, setDraggingPlugin] = useState<string | null>(null);
+  const [dropTargetPlugin, setDropTargetPlugin] = useState<string | null>(null);
+  const [dragPointer, setDragPointer] = useState<{ x: number; y: number } | null>(null);
+  const draggingPluginRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setPluginOrder(normalizePluginOrder(savedPluginOrder, plugins));
+  }, [plugins, savedPluginOrder]);
+
+  useEffect(() => {
+    const finishPointerDrag = () => {
+      draggingPluginRef.current = null;
+      setDraggingPlugin(null);
+      setDropTargetPlugin(null);
+      setDragPointer(null);
+    };
+    const trackPointerDrag = (event: PointerEvent) => {
+      if (draggingPluginRef.current) {
+        setDragPointer({ x: event.clientX, y: event.clientY });
+      }
+    };
+    window.addEventListener("pointerup", finishPointerDrag);
+    window.addEventListener("pointercancel", finishPointerDrag);
+    window.addEventListener("pointermove", trackPointerDrag);
+    return () => {
+      window.removeEventListener("pointerup", finishPointerDrag);
+      window.removeEventListener("pointercancel", finishPointerDrag);
+      window.removeEventListener("pointermove", trackPointerDrag);
+    };
+  }, []);
+
+  function reorderPlugin(pluginId: string, targetPluginId: string) {
+    if (pluginId === targetPluginId) return;
+    const source = normalizePluginOrder(pluginOrder, plugins);
+    const next = movePlugin(source, pluginId, targetPluginId);
+    if (next.every((value, index) => value === source[index])) return;
+    setPluginOrder(next);
+    void onPluginOrderChange(next).catch((reason: unknown) => {
+      setError(formatTorbenError(reason));
+      setPluginOrder(normalizePluginOrder(savedPluginOrder, plugins));
+    });
+  }
 
   async function installSideloadedPlugin() {
     setBusy("install");
@@ -968,7 +1548,12 @@ export function PluginsPage({
     setBusy(plugin.id);
     setError(null);
     try {
-      if (plugin.id === "app.torben.plugin.python") await onInstallBundledPython();
+      if (plugin.id === "app.torben.plugin.node") await onInstallBundledNode();
+      else if (plugin.id === "app.torben.plugin.python") await onInstallBundledPython();
+      else if (plugin.id === "app.torben.plugin.rust") await onInstallBundledRust();
+      else if (plugin.id === "app.torben.plugin.mysql") await onInstallBundledMysql();
+      else if (plugin.id === "app.torben.plugin.redis") await onInstallBundledRedis();
+      else if (plugin.id === "app.torben.plugin.postgresql") await onInstallBundledPostgresql();
       else await onInstallBundledTemurin();
       await onChanged();
     } catch (reason) {
@@ -982,7 +1567,12 @@ export function PluginsPage({
     setBusy(plugin.id);
     setError(null);
     try {
-      if (plugin.id === "app.torben.plugin.python") await onUninstallBundledPython();
+      if (plugin.id === "app.torben.plugin.node") await onUninstallBundledNode();
+      else if (plugin.id === "app.torben.plugin.python") await onUninstallBundledPython();
+      else if (plugin.id === "app.torben.plugin.rust") await onUninstallBundledRust();
+      else if (plugin.id === "app.torben.plugin.mysql") await onUninstallBundledMysql();
+      else if (plugin.id === "app.torben.plugin.redis") await onUninstallBundledRedis();
+      else if (plugin.id === "app.torben.plugin.postgresql") await onUninstallBundledPostgresql();
       else await onUninstallBundledTemurin();
       await onChanged();
       setUninstallPlugin(null);
@@ -1038,23 +1628,6 @@ export function PluginsPage({
     }
   }
 
-  async function openSchemaPages(plugin: PluginSummary) {
-    setBusy(`schema:${plugin.id}`);
-    setError(null);
-    setSchemaMessage(null);
-    try {
-      const pages = await loadSchemaPages(plugin.id);
-      setSchemaPlugin(plugin);
-      setSchemaPages(pages);
-      setSelectedSchemaPage(pages[0]?.id ?? null);
-      setSchemaValues(initialSchemaValues(pages));
-    } catch (reason) {
-      setError(formatTorbenError(reason));
-    } finally {
-      setBusy(null);
-    }
-  }
-
   function closeSchemaPages() {
     setSchemaPlugin(null);
     setSchemaPages([]);
@@ -1101,9 +1674,25 @@ export function PluginsPage({
   }
 
   const activeSchemaPage = schemaPages.find((page) => page.id === selectedSchemaPage) ?? null;
+  const orderedPlugins = [...plugins].sort((left, right) =>
+    comparePluginOrder(left.id, right.id, pluginOrder),
+  );
 
   return (
     <div className="page-stack">
+      {draggingPlugin && dragPointer ? (
+        <div
+          aria-hidden="true"
+          className="plugin-drag-preview"
+          style={{ left: dragPointer.x + 14, top: dragPointer.y + 14 }}
+        >
+          <GripVertical size={15} />
+          <span>
+            {orderedPlugins.find((plugin) => plugin.id === draggingPlugin)?.displayName ??
+              draggingPlugin}
+          </span>
+        </div>
+      ) : null}
       <PageHeader
         description={t("pluginsPage.description")}
         eyebrow={t("pluginsPage.eyebrow")}
@@ -1120,9 +1709,8 @@ export function PluginsPage({
               <Dialog.Content className="dialog-content">
                 <Dialog.Title>{t("pluginsPage.developerTitle")}</Dialog.Title>
                 <Dialog.Description>{t("pluginsPage.developerDescription")}</Dialog.Description>
-                <ul className="trust-checklist">
+                <ul className="developer-checklist">
                   <li>{t("pluginsPage.developerRegistryWarning")}</li>
-                  <li>{t("pluginsPage.developerTrustWarning")}</li>
                   <li>{t("pluginsPage.developerVerification")}</li>
                 </ul>
                 <div className="dialog-actions">
@@ -1150,19 +1738,15 @@ export function PluginsPage({
           <CircleAlert size={16} /> {error}
         </div>
       ) : null}
-      <Card className="registry-card">
-        <div className="app-icon">
+      <details className="plugin-registry-disclosure">
+        <summary>
           <ShieldCheck size={22} />
-        </div>
+          <h2>{t("pluginsPage.registryTitle")}</h2>
+          <Badge tone={registry.configured ? "positive" : "warning"}>
+            {registry.configured ? t("pluginsPage.configured") : t("pluginsPage.developmentBuild")}
+          </Badge>
+        </summary>
         <div className="registry-card-body">
-          <div className="app-card-title">
-            <h2>{t("pluginsPage.registryTitle")}</h2>
-            <Badge tone={registry.configured ? "positive" : "warning"}>
-              {registry.configured
-                ? t("pluginsPage.configured")
-                : t("pluginsPage.developmentBuild")}
-            </Badge>
-          </div>
           <p>
             {registry.sequence === null
               ? registry.configured
@@ -1180,7 +1764,7 @@ export function PluginsPage({
           </p>
           {registry.sourceUrl ? <code>{registry.sourceUrl}</code> : null}
         </div>
-        <div className="registry-actions">
+        <div className="registry-actions plugin-registry-actions">
           <Button
             disabled={!registry.configured || Boolean(busy)}
             onClick={() => void refreshOfficialRegistry()}
@@ -1240,106 +1824,87 @@ export function PluginsPage({
             </Dialog.Portal>
           </Dialog.Root>
         </div>
-      </Card>
+      </details>
       <div className="plugin-list">
-        {plugins.map((plugin) => {
+        {orderedPlugins.map((plugin) => {
           const builtIn = plugin.origin === "built_in";
-          const official = plugin.origin === "official_registry";
           const temurin = plugin.id === "app.torben.plugin.temurin";
-          const python = plugin.id === "app.torben.plugin.python";
-          const installableBundled = temurin || python;
+          const installableBundled = plugin.id in bundledRuntimePages;
           const pluginDisplayName = temurin ? "Java" : plugin.displayName;
-          const bundledAppId =
-            plugin.id === "app.torben.plugin.temurin"
-              ? "temurin"
-              : plugin.id === "app.torben.plugin.python"
-                ? "python"
-                : plugin.id === "app.torben.plugin.git"
-                  ? "git"
-                  : plugin.id === "app.torben.plugin.vscode"
-                    ? "vscode"
-                    : plugin.id === "app.torben.plugin.codex"
-                      ? "codex"
-                      : "node";
+          const bundledAppId = bundledApplicationIds[plugin.id];
           return (
-            <Card className={`plugin-card${plugin.enabled ? "" : " is-disabled"}`} key={plugin.id}>
-              <div className={builtIn ? `app-icon app-icon-${bundledAppId}` : "app-icon"}>
-                {builtIn ? (
-                  <AppGlyph id={bundledAppId} />
-                ) : (
-                  pluginDisplayName.slice(0, 2).toUpperCase()
-                )}
-              </div>
-              <div>
-                <div className="app-card-title">
-                  <h2>{pluginDisplayName}</h2>
-                  <span className="plugin-badges">
-                    <Badge tone={builtIn || official ? "positive" : "warning"}>
-                      {builtIn
-                        ? t("pluginsPage.builtIn")
-                        : official
-                          ? t("pluginsPage.officialRegistry")
-                          : t("pluginsPage.sideloaded")}
-                    </Badge>
-                    <Badge>
-                      {plugin.enabled
-                        ? t("common.enabled")
-                        : installableBundled
-                          ? t("pluginsPage.availableToInstall")
-                          : t("common.disabled")}
-                    </Badge>
-                  </span>
+            <Card
+              className={`plugin-card${plugin.enabled ? "" : " is-disabled"}${draggingPlugin === plugin.id ? " is-dragging" : ""}${dropTargetPlugin === plugin.id ? " is-drop-target" : ""}`}
+              data-plugin-id={plugin.id}
+              key={plugin.id}
+              onPointerEnter={() => {
+                if (draggingPluginRef.current && draggingPluginRef.current !== plugin.id) {
+                  setDropTargetPlugin(plugin.id);
+                }
+              }}
+              onPointerUp={() => {
+                const sourcePluginId = draggingPluginRef.current;
+                if (sourcePluginId && sourcePluginId !== plugin.id) {
+                  reorderPlugin(sourcePluginId, plugin.id);
+                }
+                draggingPluginRef.current = null;
+                setDraggingPlugin(null);
+                setDropTargetPlugin(null);
+              }}
+            >
+              <button
+                aria-label={t("pluginsPage.reorderPluginAria", { plugin: pluginDisplayName })}
+                className="plugin-drag-handle"
+                onKeyDown={(event) => {
+                  const index = orderedPlugins.findIndex((entry) => entry.id === plugin.id);
+                  const target =
+                    event.key === "ArrowUp"
+                      ? orderedPlugins[index - 1]
+                      : event.key === "ArrowDown"
+                        ? orderedPlugins[index + 1]
+                        : undefined;
+                  if (target) {
+                    event.preventDefault();
+                    reorderPlugin(plugin.id, target.id);
+                  }
+                }}
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.preventDefault();
+                  draggingPluginRef.current = plugin.id;
+                  setDraggingPlugin(plugin.id);
+                  setDragPointer({ x: event.clientX, y: event.clientY });
+                  setDropTargetPlugin(null);
+                }}
+                title={t("pluginsPage.reorderPluginHint")}
+                type="button"
+              >
+                <GripVertical aria-hidden="true" size={16} />
+              </button>
+              <a
+                aria-label={t("pluginsPage.detailsAria", { plugin: pluginDisplayName })}
+                className="plugin-card-main"
+                href={`#/plugins/${encodeURIComponent(plugin.id)}`}
+              >
+                <div
+                  className={
+                    builtIn && bundledAppId ? `app-icon app-icon-${bundledAppId}` : "app-icon"
+                  }
+                >
+                  {builtIn && bundledAppId ? (
+                    <AppGlyph id={bundledAppId} />
+                  ) : (
+                    pluginDisplayName.slice(0, 2).toUpperCase()
+                  )}
                 </div>
-                <p className="plugin-metadata">
-                  {plugin.publisher} · v{plugin.version} ·{" "}
-                  {t("pluginsPage.capabilityCount", { count: plugin.capabilities.length })}
-                </p>
-                <PluginPermissionList permissions={plugin.permissions} />
-                {installableBundled ? (
-                  <p className="plugin-metadata">
-                    {plugin.enabled
-                      ? t(
-                          python
-                            ? "pluginsPage.pythonUsageAfterInstall"
-                            : "pluginsPage.temurinUsageAfterInstall",
-                        )
-                      : t(
-                          python
-                            ? "pluginsPage.pythonUsageBeforeInstall"
-                            : "pluginsPage.temurinUsageBeforeInstall",
-                        )}
-                  </p>
-                ) : null}
-              </div>
+                <div>
+                  <div className="app-card-title">
+                    <h2>{pluginDisplayName}</h2>
+                  </div>
+                  <p className="plugin-summary">{pluginSummary(t, plugin)}</p>
+                </div>
+              </a>
               <div className="plugin-card-actions">
-                {temurin && plugin.enabled ? (
-                  <Button asChild size="sm">
-                    <Link to="/java">
-                      <Wrench size={14} /> {t("pluginsPage.manageJdk")}
-                    </Link>
-                  </Button>
-                ) : null}
-                {python && plugin.enabled ? (
-                  <Button asChild size="sm">
-                    <Link to="/python">
-                      <Wrench size={14} /> {t("pluginsPage.managePython")}
-                    </Link>
-                  </Button>
-                ) : null}
-                {plugin.capabilities.includes("schema_ui") ? (
-                  <Button
-                    aria-label={t("pluginsPage.openPagesAria", { plugin: pluginDisplayName })}
-                    disabled={!plugin.enabled || Boolean(busy)}
-                    onClick={() => void openSchemaPages(plugin)}
-                    size="sm"
-                    variant={installableBundled ? "secondary" : undefined}
-                  >
-                    <Wrench size={14} />
-                    {busy === `schema:${plugin.id}`
-                      ? t("pluginsPage.opening")
-                      : t("pluginsPage.open")}
-                  </Button>
-                ) : null}
                 {installableBundled ? (
                   plugin.enabled ? (
                     <Button
@@ -1414,15 +1979,22 @@ export function PluginsPage({
           <Dialog.Content className="dialog-content">
             <Dialog.Title>
               {t("pluginsPage.uninstallConfirmTitle", {
-                plugin: uninstallPlugin?.id === "app.torben.plugin.python" ? "Python" : "Java",
+                plugin:
+                  uninstallPlugin?.id === "app.torben.plugin.temurin"
+                    ? "Java"
+                    : uninstallPlugin?.displayName,
               })}
             </Dialog.Title>
             <Dialog.Description>
               {t("pluginsPage.uninstallConfirmDescription", {
                 application:
-                  uninstallPlugin?.id === "app.torben.plugin.python"
-                    ? t("pluginsPage.pythonRuntime")
-                    : "JDK",
+                  uninstallPlugin?.id === "app.torben.plugin.node"
+                    ? "Node.js"
+                    : uninstallPlugin?.id === "app.torben.plugin.python"
+                      ? t("pluginsPage.pythonRuntime")
+                      : uninstallPlugin?.id === "app.torben.plugin.temurin"
+                        ? "JDK"
+                        : uninstallPlugin?.displayName,
               })}
             </Dialog.Description>
             <div className="dialog-actions">
@@ -1639,13 +2211,6 @@ export function PluginsPage({
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
-      <div className="trust-note">
-        <ShieldCheck size={17} />
-        <div>
-          <strong>{t("pluginsPage.trustedCode")}</strong>
-          <p>{t("pluginsPage.trustedCodeDescription")}</p>
-        </div>
-      </div>
     </div>
   );
 }
@@ -1695,6 +2260,325 @@ function PluginPermissionList({ permissions }: { permissions: PluginPermissions 
           <ShieldCheck size={13} /> {t("pluginsPage.noPermissions")}
         </span>
       )}
+    </div>
+  );
+}
+
+function pluginSummary(t: (key: string) => string, plugin: PluginSummary) {
+  const keyById: Record<string, string> = {
+    "app.torben.plugin.node": "pluginsPage.summaryNode",
+    "app.torben.plugin.temurin": "pluginsPage.summaryJava",
+    "app.torben.plugin.python": "pluginsPage.summaryPython",
+    "app.torben.plugin.rust": "pluginsPage.summaryRust",
+    "app.torben.plugin.mysql": "pluginsPage.summaryMysql",
+    "app.torben.plugin.redis": "pluginsPage.summaryRedis",
+    "app.torben.plugin.postgresql": "pluginsPage.summaryPostgresql",
+  };
+  return t(keyById[plugin.id] ?? "pluginsPage.summaryPlugin");
+}
+
+export function PluginDetailPage({
+  plugin,
+  loadSchemaPages = getPluginSchemaPages,
+  onSettingsChange,
+  settings,
+}: {
+  plugin: PluginSummary | null;
+  loadSchemaPages?: (pluginId: string) => Promise<SchemaPage[]>;
+  onSettingsChange?: (settings: UserSettings) => Promise<void>;
+  settings?: UserSettings;
+}) {
+  const { t } = useTranslation();
+  const [schemaPages, setSchemaPages] = useState<SchemaPage[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [environmentRows, setEnvironmentRows] = useState<EnvironmentVariableRow[]>([]);
+  const [environmentSaving, setEnvironmentSaving] = useState(false);
+  const [environmentError, setEnvironmentError] = useState<string | null>(null);
+  const [environmentMessage, setEnvironmentMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!plugin) return;
+    let disposed = false;
+    setLoading(true);
+    void loadSchemaPages(plugin.id)
+      .then((pages) => {
+        if (!disposed) setSchemaPages(pages);
+      })
+      .catch(() => {
+        if (!disposed) setSchemaPages([]);
+      })
+      .finally(() => {
+        if (!disposed) setLoading(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [loadSchemaPages, plugin]);
+
+  const environmentAppId = plugin ? pluginEnvironmentAppIds[plugin.id] : undefined;
+  useEffect(() => {
+    const variables =
+      environmentAppId && settings
+        ? (settings.applicationEnvironments[environmentAppId] ?? {})
+        : {};
+    setEnvironmentRows(environmentVariableRows(variables));
+    setEnvironmentError(null);
+    setEnvironmentMessage(null);
+  }, [environmentAppId, settings]);
+
+  async function savePluginEnvironment() {
+    if (!environmentAppId || !settings || !onSettingsChange) return;
+    const variables: Record<string, string> = {};
+    const normalizedNames = new Set<string>();
+    for (const row of environmentRows) {
+      const name = row.name.trim();
+      if (!name && !row.value) continue;
+      if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name)) {
+        setEnvironmentError(t("pluginsPage.environmentNameInvalid"));
+        return;
+      }
+      const normalized = name.toLocaleUpperCase("en-US");
+      if (normalizedNames.has(normalized)) {
+        setEnvironmentError(t("pluginsPage.environmentNameDuplicate", { name }));
+        return;
+      }
+      normalizedNames.add(normalized);
+      variables[name] = row.value;
+    }
+    setEnvironmentSaving(true);
+    setEnvironmentError(null);
+    setEnvironmentMessage(null);
+    try {
+      const applicationEnvironments = { ...settings.applicationEnvironments };
+      if (Object.keys(variables).length) applicationEnvironments[environmentAppId] = variables;
+      else delete applicationEnvironments[environmentAppId];
+      await onSettingsChange({ ...settings, applicationEnvironments });
+      setEnvironmentMessage(t("pluginsPage.environmentSaved"));
+    } catch (reason) {
+      setEnvironmentError(formatTorbenError(reason));
+    } finally {
+      setEnvironmentSaving(false);
+    }
+  }
+
+  if (!plugin) {
+    return (
+      <EmptyState
+        description={t("pluginsPage.noPluginsDescription")}
+        title={t("pluginsPage.noPluginsTitle")}
+      />
+    );
+  }
+  const name = displayPluginName(plugin);
+  const appId = bundledApplicationIds[plugin.id];
+  const runtimePage = bundledRuntimePages[plugin.id];
+  return (
+    <div className="page-stack plugin-detail-page">
+      <PageHeader
+        description={pluginSummary(t, plugin)}
+        eyebrow={t("pluginsPage.detailEyebrow")}
+        title={name}
+        actions={
+          <Button asChild variant="secondary">
+            <Link to="/plugins">
+              <ArrowRight size={14} /> {t("pluginsPage.backToPlugins")}
+            </Link>
+          </Button>
+        }
+      />
+      <Card className="plugin-detail-hero">
+        <div className={`app-icon app-icon-${appId ?? "plugin"}`}>
+          {appId ? <AppGlyph id={appId} /> : name.slice(0, 2).toUpperCase()}
+        </div>
+        <div>
+          <div className="app-card-title">
+            <h2>{name}</h2>
+            <Badge tone={plugin.enabled ? "positive" : "warning"}>
+              {plugin.enabled ? t("common.enabled") : t("pluginsPage.availableToInstall")}
+            </Badge>
+          </div>
+          <p className="plugin-summary">{pluginSummary(t, plugin)}</p>
+        </div>
+        {runtimePage && plugin.enabled ? (
+          <Button asChild>
+            <Link to={runtimePage}>
+              <Wrench size={14} /> {t("pluginsPage.open")}
+            </Link>
+          </Button>
+        ) : null}
+      </Card>
+      <div className="plugin-detail-grid">
+        <Card className="plugin-detail-section">
+          <h2>{t("pluginsPage.detailInformation")}</h2>
+          <dl className="plugin-detail-facts">
+            <div>
+              <dt>{t("pluginsPage.publisher")}</dt>
+              <dd>{plugin.publisher}</dd>
+            </div>
+            <div>
+              <dt>{t("pluginsPage.version")}</dt>
+              <dd>{plugin.version}</dd>
+            </div>
+            <div>
+              <dt>{t("pluginsPage.source")}</dt>
+              <dd>
+                {plugin.origin === "built_in"
+                  ? t("pluginsPage.builtIn")
+                  : plugin.origin === "official_registry"
+                    ? t("pluginsPage.officialRegistry")
+                    : t("pluginsPage.sideloaded")}
+              </dd>
+            </div>
+            <div>
+              <dt>{t("pluginsPage.capabilities")}</dt>
+              <dd>{plugin.capabilities.join(" · ")}</dd>
+            </div>
+          </dl>
+        </Card>
+        <Card className="plugin-detail-section">
+          <h2>{t("pluginsPage.permissions")}</h2>
+          <PluginPermissionList permissions={plugin.permissions} />
+        </Card>
+      </div>
+      {environmentAppId && settings && onSettingsChange ? (
+        <Card className="plugin-detail-section plugin-environment-section">
+          <div className="plugin-environment-heading">
+            <div>
+              <h2>{t("pluginsPage.environmentVariables")}</h2>
+              <p>{t("pluginsPage.environmentDescription")}</p>
+            </div>
+            <Badge tone="accent">{t("pluginsPage.processScoped")}</Badge>
+          </div>
+          <datalist id={`environment-suggestions-${environmentAppId}`}>
+            {(environmentVariableSuggestions[environmentAppId] ?? []).map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
+          <div className="plugin-environment-list">
+            {environmentRows.map((row, index) => (
+              <div className="plugin-environment-row" key={row.id}>
+                <label>
+                  <span>{t("pluginsPage.environmentName")}</span>
+                  <input
+                    aria-label={t("pluginsPage.environmentNameAria", { index: index + 1 })}
+                    autoComplete="off"
+                    list={`environment-suggestions-${environmentAppId}`}
+                    onChange={(event) =>
+                      setEnvironmentRows((current) =>
+                        current.map((entry) =>
+                          entry.id === row.id ? { ...entry, name: event.target.value } : entry,
+                        ),
+                      )
+                    }
+                    placeholder={
+                      environmentVariableSuggestions[environmentAppId]?.[0] ?? "VARIABLE_NAME"
+                    }
+                    spellCheck={false}
+                    value={row.name}
+                  />
+                </label>
+                <label>
+                  <span>{t("pluginsPage.environmentValue")}</span>
+                  <input
+                    aria-label={t("pluginsPage.environmentValueAria", { index: index + 1 })}
+                    autoComplete="off"
+                    onChange={(event) =>
+                      setEnvironmentRows((current) =>
+                        current.map((entry) =>
+                          entry.id === row.id ? { ...entry, value: event.target.value } : entry,
+                        ),
+                      )
+                    }
+                    placeholder={t("pluginsPage.environmentValuePlaceholder")}
+                    spellCheck={false}
+                    value={row.value}
+                  />
+                </label>
+                <Button
+                  aria-label={t("pluginsPage.removeEnvironmentVariable", { index: index + 1 })}
+                  onClick={() =>
+                    setEnvironmentRows((current) => current.filter((entry) => entry.id !== row.id))
+                  }
+                  size="sm"
+                  variant="ghost"
+                >
+                  <Trash2 size={14} />
+                </Button>
+              </div>
+            ))}
+          </div>
+          {!environmentRows.length ? (
+            <p className="plugin-metadata">{t("pluginsPage.noEnvironmentVariables")}</p>
+          ) : null}
+          <p className="plugin-environment-note">{t("pluginsPage.environmentStorageNote")}</p>
+          {environmentError ? (
+            <p className="settings-message error" role="alert">
+              {environmentError}
+            </p>
+          ) : null}
+          {environmentMessage ? (
+            <p className="settings-message" role="status">
+              {environmentMessage}
+            </p>
+          ) : null}
+          <div className="plugin-environment-actions">
+            <Button
+              disabled={environmentSaving || environmentRows.length >= 32}
+              onClick={() =>
+                setEnvironmentRows((current) => [
+                  ...current,
+                  { id: nextEnvironmentVariableRowId++, name: "", value: "" },
+                ])
+              }
+              size="sm"
+              variant="secondary"
+            >
+              <Plus size={14} /> {t("pluginsPage.addEnvironmentVariable")}
+            </Button>
+            <Button
+              disabled={environmentSaving}
+              onClick={() => void savePluginEnvironment()}
+              size="sm"
+            >
+              <Save size={14} />
+              {environmentSaving
+                ? t("pluginsPage.savingEnvironment")
+                : t("pluginsPage.saveEnvironment")}
+            </Button>
+          </div>
+        </Card>
+      ) : null}
+      <Card className="plugin-detail-section">
+        <h2>{t("pluginsPage.pluginPages")}</h2>
+        {loading ? (
+          <p className="plugin-metadata">{t("pluginsPage.opening")}</p>
+        ) : schemaPages.length ? (
+          schemaPages.map((page) => (
+            <section className="plugin-detail-schema" key={page.id}>
+              <h3>{page.title}</h3>
+              {page.description ? <p>{page.description}</p> : null}
+              {page.sections.map((section) => (
+                <div key={section.id}>
+                  <h4>{section.title}</h4>
+                  {section.description ? <p>{section.description}</p> : null}
+                  {section.fields.length ? (
+                    <ul>
+                      {section.fields.map((field) => (
+                        <li key={field.id}>
+                          <strong>{field.label}</strong>
+                          <span>{field.value ?? "—"}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ))}
+            </section>
+          ))
+        ) : (
+          <p className="plugin-metadata">{t("pluginsPage.noPagesDescription")}</p>
+        )}
+      </Card>
     </div>
   );
 }
@@ -2437,12 +3321,12 @@ export function SettingsPage({
   onLibraryMigrate,
   updater = {
     configured: false,
-    currentVersion: "0.1.0",
+    currentVersion: "0.0.1",
     endpoint: "",
   },
   updateStatus = {
     state: "unconfigured",
-    currentVersion: "0.1.0",
+    currentVersion: "0.0.1",
     availableVersion: null,
     publishedAt: null,
     notes: null,
@@ -2821,22 +3705,8 @@ function SettingSelect({
     </label>
   );
 }
-function appMonogram(id: string) {
-  return (
-    (
-      { node: "JS", temurin: "J", python: "Py", git: "G", vscode: "<>", codex: "AI" } as Record<
-        string,
-        string
-      >
-    )[id] ?? id.slice(0, 2).toUpperCase()
-  );
-}
 function AppGlyph({ id }: { id: string }) {
-  return id === "temurin" ? (
-    <img alt="" aria-hidden="true" src="/icons/java-temurin.png" />
-  ) : (
-    appMonogram(id)
-  );
+  return <ApplicationIcon id={id} size={44} />;
 }
 function _applicationDisplayName(application: ApplicationDescriptor) {
   return application.id === "temurin" ? "Java" : application.displayName;

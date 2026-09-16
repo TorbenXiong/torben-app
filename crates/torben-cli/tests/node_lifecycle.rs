@@ -861,7 +861,7 @@ fn compile_fixture_plugin(
                     "arguments": ["--version"],
                     "expected_output": format!("v{VERSION}")
                 },
-                { "type": "create_shims", "commands": ["node", "npm", "npx"] }
+                { "type": "create_shims", "commands": ["node", "npm", "npx", "pnpm"] }
             ],
             "metadata": { "target": test_fixtures::node_plugin_target() }
         }
