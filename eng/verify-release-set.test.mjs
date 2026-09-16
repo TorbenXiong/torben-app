@@ -214,7 +214,6 @@ test("development workflow pins approved Actions and cannot publish an official 
   assert.deepEqual(reusableCalls, [
     "uses: ./.github/workflows/linux-package-acceptance.yml",
     "uses: ./.github/workflows/desktop-package-acceptance.yml",
-    "uses: ./.github/workflows/desktop-package-acceptance.yml",
   ]);
   for (const line of usesLines) {
     if (line.startsWith("uses: ./")) continue;
@@ -321,46 +320,35 @@ test("development workflow pins approved Actions and cannot publish an official 
   assert.equal((officialWorkflow.match(/^ {4}environment: official-release$/gm) ?? []).length, 2);
   assert.equal((officialWorkflow.match(/contents: write/g) ?? []).length, 1);
   assert.doesNotMatch(officialWorkflow, /^ {2}linux-package-acceptance:/m);
+  assert.doesNotMatch(officialWorkflow, /^ {2}desktop-package-acceptance:/m);
   assert.match(
     officialWorkflow,
-    /^ {2}desktop-package-acceptance:\r?\n {4}name: Install and launch signed Windows x64 packages\r?\n {4}needs: build\r?\n {4}uses: \.\/\.github\/workflows\/desktop-package-acceptance\.yml\r?\n {4}with:\r?\n {6}artifact-prefix: official-[\s\S]*?acceptance_matrix:/m,
+    /^ {2}publish:\r?\n {4}name: Verify and publish signed portable release\r?\n {4}needs: build$/m,
   );
-  assert.match(
-    officialWorkflow,
-    /^ {2}publish:\r?\n {4}name: Verify and publish official release\r?\n {4}needs: \[build, desktop-package-acceptance\]$/m,
-  );
-  assert.match(officialWorkflow, /TAURI_SIGNING_PRIVATE_KEY/);
-  assert.match(officialWorkflow, /TORBEN_UPDATER_PUBLIC_KEY/);
+  assert.doesNotMatch(officialWorkflow, /TAURI_SIGNING_PRIVATE_KEY|TORBEN_UPDATER_PUBLIC_KEY/);
+  assert.match(officialWorkflow, /WINDOWS_CERTIFICATE_SUBJECT/);
   assert.match(officialWorkflow, /Get-AuthenticodeSignature/);
+  assert.match(officialWorkflow, /TimeStamperCertificate/);
   assert.doesNotMatch(officialWorkflow, /xcrun stapler validate|APPLE_CERTIFICATE/);
-  assert.match(officialWorkflow, /verify-updater/);
-  assert.match(officialWorkflow, /verify-updater-artifacts\.mjs/);
-  assert.doesNotMatch(
-    officialWorkflow,
-    /JSON\.parse\(readFileSync\(join\(root, "updater-artifacts\.json"/,
-  );
-  assert.ok(
-    officialWorkflow.indexOf("- name: Generate signed official metadata") <
-      officialWorkflow.indexOf("- name: Verify every updater signature"),
-    "signed target metadata must exist before the strict updater mapping verifier runs",
-  );
-  assert.match(officialWorkflow, /generate-updater-manifest\.mjs/);
+  assert.doesNotMatch(officialWorkflow, /updater|latest\.json|\.msi|nsis|torben\.exe/i);
+  assert.match(officialWorkflow, /build-windows-portable\.mjs --prepare-only/);
+  assert.match(officialWorkflow, /build-windows-portable\.mjs --desktop-only/);
+  assert.match(officialWorkflow, /verify-windows-portable-release\.mjs/);
+  assert.match(officialWorkflow, /Launch portable executable with isolated data/);
+  assert.match(officialWorkflow, /Copy-Item -LiteralPath \$source -Destination \$portable/);
+  assert.doesNotMatch(officialWorkflow, /TORBEN_DATA_DIR/);
+  assert.match(officialWorkflow, /tools\\shims\\userData/);
   assert.match(
     officialWorkflow,
-    /prepare-github-release-assets\.mjs\r?\n\s+create\r?\n\s+--releases artifacts\/release-set/,
+    /path: artifacts\/torben-app-portable-windows-x64\/TorbenApp\.exe/,
   );
-  assert.match(
-    officialWorkflow,
-    /prepare-github-release-assets\.mjs\r?\n\s+verify\r?\n\s+--releases artifacts\/release-set/,
-  );
+  assert.match(officialWorkflow, /--expected-sha256 '\$\{\{ needs\.build\.outputs\.sha256 \}\}'/);
   assert.match(officialWorkflow, /gh release create/);
   assert.match(
     officialWorkflow,
-    /gh release create "\$\{GITHUB_REF_NAME\}" artifacts\/publishing\/\*/,
+    /gh release create "\$\{\{ github\.ref_name \}\}" 'artifacts\\publishing\\TorbenApp\.exe'/,
   );
   assert.match(officialWorkflow, /--verify-tag/);
-  assert.match(officialWorkflow, /--release-kind official/);
-  assert.match(officialWorkflow, /--signing-status signed/);
   assert.doesNotMatch(officialWorkflow, /--skip-stapling|--no-sign|continue-on-error/);
   assert.deepEqual(officialReleaseTargets, ["x86_64-pc-windows-msvc"]);
   assert.match(officialWorkflow, /runs-on: windows-latest/);
@@ -368,12 +356,9 @@ test("development workflow pins approved Actions and cannot publish an official 
   assert.doesNotMatch(officialWorkflow, /(?:aarch64|apple-darwin|unknown-linux)/);
 
   const publicationGates = [
-    "Download signed Windows x64 target",
-    "Re-verify downloaded Windows x64 target and updater signatures",
-    "Generate signed static updater manifest",
-    "Create and re-verify official Windows x64 release set",
-    "Prepare unique flat GitHub Release assets",
-    "Re-verify flat GitHub Release assets",
+    "Download signed portable executable",
+    "Re-verify downloaded portable executable",
+    "Create release notes",
     "Create immutable GitHub Release",
   ];
   let previousGate = -1;

@@ -116,9 +116,10 @@ Windows x64 gates required for the next supported release.
 
 ### Release and plugin ecosystem
 
-- The required CI and preview workflows validate Windows x64. The official tag workflow signs and
-  publishes only Windows x64 NSIS/MSI packages and the matching CLI, with deterministic metadata,
-  updater signatures, install-and-launch acceptance, and immutable GitHub Release publication.
+- The required CI and preview workflows validate Windows x64. The official tag workflow signs all
+  embedded native components and publishes only the Windows x64 `TorbenApp.exe`, with an isolated
+  clean-data launch, artifact-transfer verification, SHA-256 in the release notes, and immutable
+  GitHub Release publication.
 - A separate manual development workflow retains the original six-target packaging and native
   acceptance design. It is future-platform evidence and is not a current release gate.
 - Torben App and managed-application updates default to notification. Managed automatic updates are
@@ -201,9 +202,10 @@ The authoritative test-to-requirement mapping is maintained in
 The following items are not proven by local source or simulated fixtures and must not be described
 as complete until their authoritative remote evidence exists:
 
-1. Configure the protected `official-release` environment with reviewed Windows Authenticode and
-   Tauri updater credentials. Only a successful exact-version tag run can prove Windows package,
-   CLI and sidecar signing, updater signatures, and immutable GitHub Release publication.
+1. Configure the protected `official-release` environment with reviewed Windows Authenticode
+   credentials. Only a successful exact-version tag run can prove embedded-component and portable
+   executable signing, clean-data launch, transfer verification, and immutable GitHub Release
+   publication.
 2. Configure the protected `official-plugin-registry` environment with the offline root,
    publisher keys, and reviewed public trust root. Generate and review an artifact from committed
    production registry inputs.

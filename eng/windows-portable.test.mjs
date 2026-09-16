@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
+import { verifyWindowsPortableRelease } from "./verify-windows-portable-release.mjs";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -66,6 +69,41 @@ test("Windows portable builder emits only the desktop executable with embedded p
   assert.match(managerPreparation, /redirect: "error"/u);
   assert.doesNotMatch(script, /torben-plugin-(?:git|vscode|codex)/u);
   assert.doesNotMatch(script, /copyFileSync\(join\(releaseRoot, "torben\.exe"/u);
+  assert.match(script, /--prepare-only/u);
+  assert.match(script, /--desktop-only/u);
+});
+
+test("official portable verifier accepts exactly one Windows x64 TorbenApp executable", () => {
+  const root = mkdtempSync(join(tmpdir(), "torben-portable-release-"));
+  try {
+    const release = join(root, "release");
+    mkdirSync(release);
+    const executable = Buffer.alloc(512);
+    executable.write("MZ", 0, "ascii");
+    executable.writeUInt32LE(0x80, 0x3c);
+    executable.write("PE\0\0", 0x80, "ascii");
+    executable.writeUInt16LE(0x8664, 0x84);
+    writeFileSync(join(release, "TorbenApp.exe"), executable);
+
+    const verified = verifyWindowsPortableRelease({ directory: release });
+    assert.equal(verified.target, "x86_64-pc-windows-msvc");
+    assert.match(verified.sha256, /^[0-9A-F]{64}$/u);
+    assert.equal(
+      verifyWindowsPortableRelease({
+        directory: release,
+        expectedSha256: verified.sha256.toLowerCase(),
+      }).sha256,
+      verified.sha256,
+    );
+
+    writeFileSync(join(release, "SHA256SUMS"), "not published");
+    assert.throws(
+      () => verifyWindowsPortableRelease({ directory: release }),
+      /must contain only TorbenApp\.exe/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Windows release startup confirms the base and keeps data in its userData directory", () => {

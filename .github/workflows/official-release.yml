@@ -1,4 +1,4 @@
-name: Official signed release
+name: Official signed portable release
 
 on:
   push:
@@ -13,13 +13,12 @@ concurrency:
 
 jobs:
   build:
-    name: Sign Windows x64
+    name: Build, sign, and accept Windows x64 portable executable
     environment: official-release
     runs-on: windows-latest
-    env:
-      TORBEN_UPDATER_PUBLIC_KEY: ${{ secrets.TORBEN_UPDATER_PUBLIC_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    outputs:
+      sha256: ${{ steps.portable.outputs.sha256 }}
+      version: ${{ steps.identity.outputs.version }}
     steps:
       - name: Check out exact tagged revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,24 +28,22 @@ jobs:
         with:
           node-version: 24.19.0
 
-      - name: Validate tag and mandatory updater credentials
+      - name: Validate tag and release notes
+        id: identity
         shell: node {0}
         run: |
-          const { readFileSync } = require("node:fs");
+          const { appendFileSync, existsSync, readFileSync } = require("node:fs");
           const { join } = require("node:path");
+          const root = process.env.GITHUB_WORKSPACE;
           const { version } = JSON.parse(
             readFileSync(join(process.env.GITHUB_WORKSPACE, "package.json"), "utf8"),
           );
           if (process.env.GITHUB_REF !== `refs/tags/v${version}`) {
             throw new Error(`Expected refs/tags/v${version}; received ${process.env.GITHUB_REF}.`);
           }
-          for (const name of [
-            "TORBEN_UPDATER_PUBLIC_KEY",
-            "TAURI_SIGNING_PRIVATE_KEY",
-            "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
-          ]) {
-            if (!process.env[name]) throw new Error(`Official release secret is missing: ${name}`);
-          }
+          const notes = join(root, "docs", "releases", `${version}.md`);
+          if (!existsSync(notes)) throw new Error(`Release notes are missing: ${notes}`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
 
       - name: Install pnpm
         run: npm install --global pnpm@11.19.0
@@ -62,11 +59,19 @@ jobs:
       - name: Install locked frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify release tooling and updater key
+      - name: Fetch locked Rust dependencies for the offline portable build
+        run: cargo fetch --locked --target x86_64-pc-windows-msvc
+
+      - name: Verify source and release tooling
         run: |
-          cargo test -p torben-release-tools --locked
-          cargo run --locked -p torben-release-tools -- validate-updater-key "$TORBEN_UPDATER_PUBLIC_KEY"
-          pnpm run test:release
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --workspace --locked
+          pnpm run check
+          pnpm run test
+
+      - name: Prepare pinned Python Install Manager
+        run: pnpm run prepare:python-manager
 
       - name: Import Windows signing certificate
         shell: pwsh
@@ -89,17 +94,11 @@ jobs:
           if (-not $certificate.HasPrivateKey) { throw 'Windows certificate has no private key.' }
           if ($certificate.Subject -ne $env:WINDOWS_CERTIFICATE_SUBJECT) { throw "Windows certificate subject mismatch: $($certificate.Subject)" }
           "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $config = @{ bundle = @{ windows = @{ certificateThumbprint = $certificate.Thumbprint; digestAlgorithm = 'sha256'; timestampUrl = $env:WINDOWS_TIMESTAMP_URL } } }
-          New-Item -ItemType Directory -Path target -Force | Out-Null
-          $config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath target\official-signing.conf.json -Encoding utf8
 
-      - name: Build locked CLI and release tools
-        run: cargo build -p torben-cli -p torben-release-tools --release --locked
+      - name: Build embedded native components
+        run: node eng/build-windows-portable.mjs --prepare-only
 
-      - name: Prepare and verify native sidecars
-        run: pnpm --filter @torben-app/desktop run prepare:bundled-tools:release
-
-      - name: Sign Windows CLI and sidecars
+      - name: Sign embedded native components
         shell: pwsh
         env:
           WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
@@ -108,77 +107,96 @@ jobs:
           $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
             Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
           if (-not $signtool) { throw 'signtool.exe was not found in the Windows SDK.' }
-          $files = @('target/release/torben.exe') + @(Get-ChildItem apps\desktop\src-tauri\binaries\*.exe | ForEach-Object FullName)
-          foreach ($file in $files) {
+          $names = @(
+            'torben-plugin-node',
+            'torben-plugin-temurin',
+            'torben-plugin-python',
+            'torben-plugin-rust',
+            'torben-plugin-mysql',
+            'torben-plugin-redis',
+            'torben-plugin-postgresql',
+            'torben-shim'
+          )
+          foreach ($name in $names) {
+            $file = Join-Path 'target\release' "$name.exe"
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Embedded component is missing: $file" }
             & $signtool sign /sha1 $env:WINDOWS_CERTIFICATE_THUMBPRINT /fd sha256 /tr $env:WINDOWS_TIMESTAMP_URL /td sha256 $file
             if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed: $file" }
           }
 
-      - name: Build platform-signed desktop and updater artifacts
+      - name: Build portable desktop executable
         working-directory: apps/desktop
-        run: >-
-          node node_modules/@tauri-apps/cli/tauri.js build
-          --ci --target x86_64-pc-windows-msvc
-          --config src-tauri/tauri.bundle.conf.json
-          --config src-tauri/tauri.official.conf.json
-          --config ../../target/official-signing.conf.json
-          -- --locked
+        run: node ../../eng/build-windows-portable.mjs --desktop-only
 
-      - name: Verify Windows Authenticode signatures
+      - name: Sign and verify portable executable
+        id: portable
         shell: pwsh
         env:
           WINDOWS_CERTIFICATE_SUBJECT: ${{ secrets.WINDOWS_CERTIFICATE_SUBJECT }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
         run: |
-          $files = @('target/release/torben.exe') + @(Get-ChildItem apps\desktop\src-tauri\binaries\*.exe | ForEach-Object FullName)
-          $files += @(Get-ChildItem 'target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi','target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe' | ForEach-Object FullName)
-          foreach ($file in $files) {
+          $ErrorActionPreference = 'Stop'
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw 'signtool.exe was not found in the Windows SDK.' }
+          $portable = 'artifacts\torben-app-portable-windows-x64\TorbenApp.exe'
+          & $signtool sign /sha1 $env:WINDOWS_CERTIFICATE_THUMBPRINT /fd sha256 /tr $env:WINDOWS_TIMESTAMP_URL /td sha256 $portable
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed: $portable" }
+          $signatureTargets = @($portable)
+          $signatureTargets += @(
+            'torben-plugin-node',
+            'torben-plugin-temurin',
+            'torben-plugin-python',
+            'torben-plugin-rust',
+            'torben-plugin-mysql',
+            'torben-plugin-redis',
+            'torben-plugin-postgresql',
+            'torben-shim'
+          ) | ForEach-Object { if ($_ -eq $portable) { $_ } else { "target\release\$_.exe" } }
+          foreach ($file in $signatureTargets) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file
             if ($signature.Status -ne 'Valid') { throw "Invalid Authenticode signature: $file ($($signature.Status))" }
             if ($signature.SignerCertificate.Subject -ne $env:WINDOWS_CERTIFICATE_SUBJECT) { throw "Unexpected Authenticode publisher: $file" }
+            if (-not $signature.TimeStamperCertificate) { throw "Authenticode timestamp is missing: $file" }
           }
+          $version = (Get-Item -LiteralPath $portable).VersionInfo.ProductVersion
+          if ($version -ne '${{ steps.identity.outputs.version }}') { throw "Portable version mismatch: $version" }
+          node eng/verify-windows-portable-release.mjs --directory artifacts/torben-app-portable-windows-x64
+          $sha256 = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash
+          "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Collect official packages and CLI
-        run: >-
-          node eng/collect-release-artifacts.mjs
-          --bundle-root target/x86_64-pc-windows-msvc/release/bundle
-          --cli-binary target/release/torben.exe
-          --output artifacts/x86_64-pc-windows-msvc
-          --target x86_64-pc-windows-msvc
-
-      - name: Archive signed Windows CLI
+      - name: Launch portable executable with isolated data
         shell: pwsh
         run: |
-          $version = node -p "require('./package.json').version"
-          Compress-Archive -LiteralPath 'target/release/torben.exe' -DestinationPath "artifacts/x86_64-pc-windows-msvc/torben-$version-x86_64-pc-windows-msvc.zip"
+          $ErrorActionPreference = 'Stop'
+          $source = Resolve-Path 'artifacts\torben-app-portable-windows-x64\TorbenApp.exe'
+          $root = Join-Path $env:RUNNER_TEMP "torben-portable-acceptance-$([Guid]::NewGuid())"
+          $data = Join-Path $root 'userData'
+          New-Item -ItemType Directory -Force -Path $data | Out-Null
+          $portable = Join-Path $root 'TorbenApp.exe'
+          Copy-Item -LiteralPath $source -Destination $portable
+          $process = $null
+          try {
+            $process = Start-Process -FilePath $portable -WorkingDirectory $root -PassThru -WindowStyle Hidden
+            Start-Sleep -Seconds 10
+            if ($process.HasExited) { throw "TorbenApp.exe exited during portable acceptance with code $($process.ExitCode)." }
+            if (-not (Test-Path -LiteralPath (Join-Path $data 'state.db') -PathType Leaf)) { throw 'Portable launch did not initialize state.db.' }
+            if (Test-Path -LiteralPath (Join-Path $data 'tools\shims\userData')) { throw 'Portable launch created a recursively nested shim data directory.' }
+          } finally {
+            $cleanupError = $null
+            if ($process -and -not $process.HasExited) {
+              & taskkill.exe /PID $process.Id /T /F | Out-Null
+              if ($LASTEXITCODE -ne 0) { $cleanupError = "Could not stop the portable process tree (exit code $LASTEXITCODE)." }
+            }
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+            if ($cleanupError) { throw $cleanupError }
+          }
 
-      - name: Collect signed updater artifacts
-        run: >-
-          node eng/collect-updater-artifacts.mjs
-          --bundle-root target/x86_64-pc-windows-msvc/release/bundle
-          --output artifacts/x86_64-pc-windows-msvc
-          --target x86_64-pc-windows-msvc
-
-      - name: Generate signed official metadata
-        run: >-
-          node eng/release-metadata.mjs create
-          --artifacts artifacts/x86_64-pc-windows-msvc
-          --target x86_64-pc-windows-msvc
-          --revision ${{ github.sha }}
-          --source-ref ${{ github.ref }}
-          --release-kind official
-          --signing-status signed
-
-      - name: Verify every updater signature
-        run: >-
-          node eng/verify-updater-artifacts.mjs
-          --directory artifacts/x86_64-pc-windows-msvc
-          --target x86_64-pc-windows-msvc
-
-      - name: Upload signed target artifact
+      - name: Upload signed portable executable
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: official-x86_64-pc-windows-msvc
-          path: artifacts/x86_64-pc-windows-msvc
+          name: official-windows-x64-portable
+          path: artifacts/torben-app-portable-windows-x64/TorbenApp.exe
           if-no-files-found: error
           retention-days: 30
 
@@ -187,25 +205,16 @@ jobs:
         shell: pwsh
         run: Remove-Item -LiteralPath "Cert:\CurrentUser\My\$env:WINDOWS_CERTIFICATE_THUMBPRINT"
 
-  desktop-package-acceptance:
-    name: Install and launch signed Windows x64 packages
-    needs: build
-    uses: ./.github/workflows/desktop-package-acceptance.yml
-    with:
-      artifact-prefix: official-
-      acceptance_matrix: >-
-        {"include":[{"name":"Windows x64 NSIS","runner":"windows-latest","target":"x86_64-pc-windows-msvc","format":"nsis"},{"name":"Windows x64 MSI","runner":"windows-latest","target":"x86_64-pc-windows-msvc","format":"msi"}]}
-
   publish:
-    name: Verify and publish official release
-    needs: [build, desktop-package-acceptance]
+    name: Verify and publish signed portable release
+    needs: build
     environment: official-release
-    runs-on: ubuntu-24.04
+    runs-on: windows-latest
     permissions:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      TORBEN_UPDATER_PUBLIC_KEY: ${{ secrets.TORBEN_UPDATER_PUBLIC_KEY }}
+      WINDOWS_CERTIFICATE_SUBJECT: ${{ secrets.WINDOWS_CERTIFICATE_SUBJECT }}
     steps:
       - name: Check out exact tagged revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -215,62 +224,42 @@ jobs:
         with:
           node-version: 24.19.0
 
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.98.0 --profile minimal
-
-      - name: Select pinned Rust toolchain
-        run: rustup default 1.98.0
-
-      - name: Download signed Windows x64 target
+      - name: Download signed portable executable
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: official-x86_64-pc-windows-msvc
-          path: artifacts/release-set/x86_64-pc-windows-msvc
+          name: official-windows-x64-portable
+          path: artifacts/publishing
 
-      - name: Re-verify downloaded Windows x64 target and updater signatures
+      - name: Re-verify downloaded portable executable
+        shell: pwsh
         run: |
-          node eng/release-metadata.mjs verify --artifacts artifacts/release-set/x86_64-pc-windows-msvc
-          node eng/verify-updater-artifacts.mjs --directory artifacts/release-set/x86_64-pc-windows-msvc --target x86_64-pc-windows-msvc
+          $ErrorActionPreference = 'Stop'
+          node eng/verify-windows-portable-release.mjs --directory artifacts/publishing --expected-sha256 '${{ needs.build.outputs.sha256 }}'
+          $portable = 'artifacts\publishing\TorbenApp.exe'
+          $signature = Get-AuthenticodeSignature -LiteralPath $portable
+          if ($signature.Status -ne 'Valid') { throw "Invalid Authenticode signature: $($signature.Status)" }
+          if ($signature.SignerCertificate.Subject -ne $env:WINDOWS_CERTIFICATE_SUBJECT) { throw 'Unexpected Authenticode publisher.' }
+          if (-not $signature.TimeStamperCertificate) { throw 'Authenticode timestamp is missing.' }
+          $version = (Get-Item -LiteralPath $portable).VersionInfo.ProductVersion
+          if ($version -ne '${{ needs.build.outputs.version }}') { throw "Portable version mismatch: $version" }
 
-      - name: Resolve deterministic publication timestamp
-        id: publication
-        shell: bash
+      - name: Create release notes
+        shell: pwsh
         run: |
-          timestamp="$(git show -s --format=%cI | node -e 'process.stdin.once("data", value => process.stdout.write(new Date(value.toString().trim()).toISOString().replace(".000Z", "Z")))')"
-          echo "timestamp=$timestamp" >> "$GITHUB_OUTPUT"
-
-      - name: Generate signed static updater manifest
-        run: >-
-          node eng/generate-updater-manifest.mjs
-          --releases artifacts/release-set
-          --published-at ${{ steps.publication.outputs.timestamp }}
-          --notes "Torben App ${{ github.ref_name }}"
-
-      - name: Create and re-verify official Windows x64 release set
-        run: |
-          node eng/verify-release-set.mjs create --releases artifacts/release-set
-          node eng/verify-release-set.mjs verify --releases artifacts/release-set
-
-      - name: Prepare unique flat GitHub Release assets
-        run: >-
-          node eng/prepare-github-release-assets.mjs
-          create
-          --releases artifacts/release-set
-          --output artifacts/publishing
-
-      - name: Re-verify flat GitHub Release assets
-        run: >-
-          node eng/prepare-github-release-assets.mjs
-          verify
-          --releases artifacts/release-set
-          --output artifacts/publishing
+          $ErrorActionPreference = 'Stop'
+          $version = '${{ needs.build.outputs.version }}'
+          $template = "docs\releases\$version.md"
+          $notes = Get-Content -LiteralPath $template -Raw
+          $notes += "`n`n## 下载`n`n下载 ``TorbenApp.exe`` 后直接运行。"
+          $notes += "`n`n## SHA-256`n`n``${{ needs.build.outputs.sha256 }}``"
+          $notes += "`n`n## 变更日志`n`n完整变更记录：[查看 $version 提交记录](https://github.com/${{ github.repository }}/commits/v$version)"
+          Set-Content -LiteralPath 'artifacts\release-notes.md' -Value $notes -Encoding utf8NoBOM
 
       - name: Create immutable GitHub Release
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          gh release create "${GITHUB_REF_NAME}" artifacts/publishing/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --verify-tag \
-            --title "Torben App ${GITHUB_REF_NAME}" \
-            --notes "Signed Torben App Windows x64 release ${GITHUB_REF_NAME}. See SHA256SUMS and release-index.json for verified artifacts."
+          gh release create "${{ github.ref_name }}" 'artifacts\publishing\TorbenApp.exe' `
+            --repo "${{ github.repository }}" `
+            --verify-tag `
+            --title '${{ needs.build.outputs.version }}' `
+            --notes-file 'artifacts\release-notes.md'
