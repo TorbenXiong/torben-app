@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "sequence": 1,
   "generatedAt": "2026-08-23T00:00:00Z",
-  "minimumHostVersion": "0.1.0",
+  "minimumHostVersion": "0.0.1",
   "publishers": [
     {
       "id": "fixture.publisher",
@@ -17,9 +17,9 @@
       "version": "1.2.3",
       "publisherId": "fixture.publisher",
       "manifestPath": "packages/online-fixture/1.2.3/plugin.json",
-      "manifestSha256": "93666ab79b982057f611127de5d96bf3e89ccfc359b1b2a7838732bc88595656",
+      "manifestSha256": "347897283286ed9f1104d06d9405a3200175040d22ddaa5530e76d0d773e0fef",
       "revoked": false
     }
   ],
-  "signature": "jAO3OSQxLOOrpnoOxlm0E5X8k/l7oaCNSUMvepS1FdTOKe/akZwaEaVKAGibRD4HDat0SpYFkiOFvIJovnwQAg=="
+  "signature": "Mr6L1JvMXGMZK5ai6GsWL3sd5cscO8PyAliFgnk7fmkOhP3xmwHFDljWls3SFVeqblTaA/y1a0B1hTLW6DEMBQ=="
 }

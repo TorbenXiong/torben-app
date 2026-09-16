@@ -9,8 +9,9 @@ managed applications in Torben App:
 - Git: <https://git-scm.com/community/logos>
 - Visual Studio Code: <https://code.visualstudio.com/brand>
 - Codex: OpenAI monoblossom from <https://openai.com/brand/>
-- MySQL: the dolphin mark is cropped from [`logo-mysql-110x55.png`](https://github.com/mysql/mysql-server/blob/trunk/doxygen_resources/logo-mysql-110x55.png)
-  from the official `mysql/mysql-server` repository; the UI uses `mysql-mark.png` so the wordmark is not shown.
+- MySQL: the complete [`logo-mysql-110x55.png`](https://github.com/mysql/mysql-server/blob/trunk/doxygen_resources/logo-mysql-110x55.png)
+  from the official `mysql/mysql-server` repository; the UI uses the original artwork as `mysql-logo.png`
+  and only scales it proportionally without cropping or recoloring it.
 - Redis: the cube mark is clipped from [`assets/icons/logo.svg`](https://github.com/redis/docs/blob/main/assets/icons/logo.svg)
   in the Redis documentation repository; the UI uses `redis-mark.svg` so the wordmark is not shown.
 - PostgreSQL: [`PostgreSQL_logo.3colors.svg`](https://wiki.postgresql.org/wiki/Logo) from the

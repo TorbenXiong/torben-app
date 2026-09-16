@@ -174,8 +174,13 @@ impl PostgresqlProvider {
         if !installer_path.is_file()
             || sha256_file_checked(&installer_path, Some(&cancellation))? != distribution.checksum
         {
-            self.download(&distribution.installer_url, &installer_path, &cancellation)
-                .await?;
+            self.download(
+                &distribution.installer_url,
+                &installer_path,
+                &cancellation,
+                journal,
+            )
+            .await?;
         }
         let actual = sha256_file_checked(&installer_path, Some(&cancellation))?;
         if actual != distribution.checksum {
@@ -373,6 +378,7 @@ impl PostgresqlProvider {
         url: &Url,
         destination: &Path,
         cancellation: &CancellationProbe,
+        journal: &mut OperationJournal,
     ) -> TorbenResult<()> {
         let response = self
             .client
@@ -384,16 +390,16 @@ impl PostgresqlProvider {
             return Err(unexpected_origin());
         }
         let response = response.error_for_status().map_err(network_error)?;
-        if response
-            .content_length()
-            .is_some_and(|size| size > MAX_INSTALLER_BYTES)
-        {
+        let content_length = response.content_length();
+        if content_length.is_some_and(|size| size > MAX_INSTALLER_BYTES) {
             return Err(installer_too_large());
         }
         let partial = destination.with_extension("partial");
         let mut file = tokio::fs::File::create(&partial).await.map_err(io_error)?;
         let mut stream = response.bytes_stream();
         let mut total = 0u64;
+        let mut last_progress = 0.2_f32;
+        let mut last_reported_bytes = 0u64;
         while let Some(chunk) = stream.next().await {
             cancellation.check()?;
             let chunk = chunk.map_err(network_error)?;
@@ -402,6 +408,37 @@ impl PostgresqlProvider {
                 return Err(installer_too_large());
             }
             file.write_all(&chunk).await.map_err(io_error)?;
+            if let Some(length) = content_length.filter(|length| *length > 0) {
+                #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+                let fraction = (total as f64 / length as f64).clamp(0.0, 1.0);
+                #[allow(clippy::cast_possible_truncation)]
+                let progress = (0.2 + fraction * 0.35) as f32;
+                if progress - last_progress >= 0.01 || progress >= 0.55 {
+                    journal.record(
+                        OperationState::Running,
+                        "download",
+                        format!("Downloading PostgreSQL ({total}/{length} bytes)"),
+                        Some(progress),
+                    )?;
+                    last_progress = progress;
+                }
+            } else if total >= last_reported_bytes.saturating_add(4 * 1024 * 1024) {
+                // Some EDB edge nodes omit Content-Length. Keep the UI alive
+                // with bounded, monotonic progress until the stream ends.
+                #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+                let progress =
+                    (0.2 + (total as f64 / MAX_INSTALLER_BYTES as f64) * 0.35).min(0.54) as f32;
+                if progress > last_progress {
+                    journal.record(
+                        OperationState::Running,
+                        "download",
+                        format!("Downloading PostgreSQL ({total} bytes)"),
+                        Some(progress),
+                    )?;
+                    last_progress = progress;
+                    last_reported_bytes = total;
+                }
+            }
         }
         file.flush().await.map_err(io_error)?;
         file.sync_all().await.map_err(io_error)?;
@@ -414,8 +451,11 @@ pub(crate) fn configure_command_environment(
     data_root: &Path,
     bin: &Path,
 ) -> TorbenResult<()> {
-    let config_root = data_root.join("config");
-    std::fs::create_dir_all(&config_root).map_err(io_error)?;
+    let client_root = data_root.join("client");
+    let config_root = client_root.join("config");
+    for directory in [&config_root, &data_root.join("instances")] {
+        std::fs::create_dir_all(directory).map_err(io_error)?;
+    }
     let inherited = std::env::var_os("PATH").unwrap_or_default();
     let path = std::env::join_paths(
         [bin.to_path_buf()]
@@ -429,8 +469,8 @@ pub(crate) fn configure_command_environment(
         )
         .with_detail("reason", error.to_string())
     })?;
-    command.env("PGPASSFILE", data_root.join("pgpass.conf"));
-    command.env("PGSERVICEFILE", data_root.join("pg_service.conf"));
+    command.env("PGPASSFILE", client_root.join("pgpass.conf"));
+    command.env("PGSERVICEFILE", client_root.join("pg_service.conf"));
     command.env("PGSYSCONFDIR", config_root);
     command.env("PATH", path);
     Ok(())
@@ -654,7 +694,10 @@ mod tests {
     #[test]
     fn managed_commands_keep_configuration_below_postgresql_data_root_without_pgdata() {
         let root = tempdir().unwrap();
-        let data_root = root.path().join("userData").join("postgresql");
+        let data_root = root
+            .path()
+            .join("userData")
+            .join("application-data/postgresql");
         let bin = root.path().join("apps").join("postgresql").join("bin");
         let mut command = std::process::Command::new("psql");
 
@@ -669,24 +712,25 @@ mod tests {
                 .get(OsStr::new("PGPASSFILE"))
                 .unwrap()
                 .as_deref(),
-            Some(data_root.join("pgpass.conf").as_os_str())
+            Some(data_root.join("client").join("pgpass.conf").as_os_str())
         );
         assert_eq!(
             environment
                 .get(OsStr::new("PGSERVICEFILE"))
                 .unwrap()
                 .as_deref(),
-            Some(data_root.join("pg_service.conf").as_os_str())
+            Some(data_root.join("client").join("pg_service.conf").as_os_str())
         );
         assert_eq!(
             environment
                 .get(OsStr::new("PGSYSCONFDIR"))
                 .unwrap()
                 .as_deref(),
-            Some(data_root.join("config").as_os_str())
+            Some(data_root.join("client").join("config").as_os_str())
         );
         assert!(!environment.contains_key(OsStr::new("PGDATA")));
-        assert!(data_root.join("config").is_dir());
+        assert!(data_root.join("client").join("config").is_dir());
+        assert!(data_root.join("instances").is_dir());
     }
 
     #[test]

@@ -9,14 +9,22 @@ vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn() }));
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: vi.fn() }));
 
 import {
+  backupDatabaseInstance,
   clearSelection,
+  createDatabaseInstance,
+  deleteDatabaseInstance,
   getOperationEvents,
   getVersions,
   installApp,
   installBundledNodePlugin,
   installBundledPythonPlugin,
+  listDatabaseInstances,
   onVersionCatalogUpdated,
+  refreshDatabaseInstanceStatus,
+  restoreDatabaseInstance,
   selectVersion,
+  startDatabaseInstance,
+  stopDatabaseInstance,
   uninstallApp,
   uninstallBundledNodePlugin,
   uninstallBundledPythonPlugin,
@@ -27,6 +35,69 @@ describe("Tauri application lifecycle command mapping", () => {
     invokeMock.mockReset();
     listenMock.mockReset();
     window.__TAURI_INTERNALS__ = {};
+  });
+
+  it("maps the complete managed database instance lifecycle", async () => {
+    const instance = {
+      engine: "redis",
+      name: "local",
+      runtimeVersion: "8.2.1",
+      port: 6379,
+      dataPath: "C:/Torben/application-data/redis/instances/local/data",
+      createdAt: "fixture",
+      state: "stopped",
+      pid: null,
+    } as const;
+    const target = { engine: "redis", name: "local" } as const;
+    invokeMock
+      .mockResolvedValueOnce([instance])
+      .mockResolvedValueOnce(instance)
+      .mockResolvedValueOnce({ ...instance, state: "running", pid: 42 })
+      .mockResolvedValueOnce({ ...instance, state: "running", pid: 42 })
+      .mockResolvedValueOnce({
+        engine: "redis",
+        instanceName: "local",
+        path: "C:/backup/local.rdb",
+        createdAt: "fixture",
+      })
+      .mockResolvedValueOnce(instance)
+      .mockResolvedValueOnce(instance)
+      .mockResolvedValueOnce(undefined);
+
+    await listDatabaseInstances("redis");
+    await createDatabaseInstance({
+      engine: "redis",
+      name: "local",
+      runtimeVersion: "8.2.1",
+      port: 6379,
+    });
+    await startDatabaseInstance(target);
+    await refreshDatabaseInstanceStatus(target);
+    await backupDatabaseInstance(target);
+    await restoreDatabaseInstance(target, "C:/backup/local.rdb");
+    await stopDatabaseInstance(target);
+    await deleteDatabaseInstance(target);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["list_database_instances", { engine: "redis" }],
+      [
+        "create_database_instance",
+        {
+          request: {
+            engine: "redis",
+            name: "local",
+            runtimeVersion: "8.2.1",
+            port: 6379,
+          },
+        },
+      ],
+      ["start_database_instance", { target }],
+      ["database_instance_status", { target }],
+      ["backup_database_instance", { request: { ...target, destination: null } }],
+      ["restore_database_instance", { request: { ...target, source: "C:/backup/local.rdb" } }],
+      ["stop_database_instance", { target }],
+      ["delete_database_instance", { request: { ...target, confirm: true } }],
+    ]);
   });
 
   afterEach(() => {

@@ -100,7 +100,9 @@ export default function App() {
         }
       }
     };
-    timer = window.setTimeout(() => void poll(), 1000);
+    // Fetch immediately so a just-started install/uninstall remains visible
+    // when the user navigates to another plugin before the first interval.
+    void poll();
     return () => {
       stopped = true;
       window.clearTimeout(timer);
@@ -271,7 +273,12 @@ export default function App() {
   );
 
   return (
-    <Layout applications={snapshot.applications} plugins={snapshot.plugins}>
+    <Layout
+      applications={snapshot.applications}
+      pluginOrder={snapshot.settings.pluginOrder}
+      plugins={snapshot.plugins}
+      onPluginOrderChange={(pluginOrder) => saveSettings({ ...snapshot.settings, pluginOrder })}
+    >
       {error ? (
         <div className="error-banner" role="alert">
           {error}
@@ -459,6 +466,10 @@ export default function App() {
               onUninstallBundledMysql={uninstallBundledMysqlPlugin}
               onUninstallBundledRedis={uninstallBundledRedisPlugin}
               onUninstallBundledPostgresql={uninstallBundledPostgresqlPlugin}
+              onPluginOrderChange={(pluginOrder) =>
+                saveSettings({ ...snapshot.settings, pluginOrder })
+              }
+              pluginOrder={snapshot.settings.pluginOrder}
               plugins={snapshot.plugins}
               registry={snapshot.pluginRegistry}
             />
@@ -466,7 +477,13 @@ export default function App() {
         />
         <Route
           path="/plugins/:pluginId"
-          element={<PluginDetailRoute plugins={snapshot.plugins} />}
+          element={
+            <PluginDetailRoute
+              onSettingsChange={saveSettings}
+              plugins={snapshot.plugins}
+              settings={snapshot.settings}
+            />
+          }
         />
         <Route
           path="/diagnostics"
@@ -508,7 +525,15 @@ export default function App() {
   );
 }
 
-function PluginDetailRoute({ plugins }: { plugins: DashboardSnapshot["plugins"] }) {
+function PluginDetailRoute({
+  onSettingsChange,
+  plugins,
+  settings,
+}: {
+  onSettingsChange: (settings: UserSettings) => Promise<void>;
+  plugins: DashboardSnapshot["plugins"];
+  settings: UserSettings;
+}) {
   const { pluginId } = useParams();
   let decodedId = pluginId ?? "";
   try {
@@ -516,5 +541,11 @@ function PluginDetailRoute({ plugins }: { plugins: DashboardSnapshot["plugins"] 
   } catch {
     // Keep the raw route parameter so the page can render its empty state.
   }
-  return <PluginDetailPage plugin={plugins.find((plugin) => plugin.id === decodedId) ?? null} />;
+  return (
+    <PluginDetailPage
+      onSettingsChange={onSettingsChange}
+      plugin={plugins.find((plugin) => plugin.id === decodedId) ?? null}
+      settings={settings}
+    />
+  );
 }

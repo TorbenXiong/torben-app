@@ -10,8 +10,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{Value, json};
 use torben_contracts::{
-    ApiEnvelope, AppId, ExactVersion, ManagedLibraryMigrationResult, OperationEvent, OperationId,
-    PackageCoordinate, PackageToManagedMigrationRequest, PluginId, SourceAction,
+    ApiEnvelope, AppId, BackupDatabaseInstanceRequest, CreateDatabaseInstanceRequest,
+    DatabaseEngine, DatabaseInstanceName, DatabaseInstanceTarget, DeleteDatabaseInstanceRequest,
+    ExactVersion, ManagedLibraryMigrationResult, OperationEvent, OperationId, PackageCoordinate,
+    PackageToManagedMigrationRequest, PluginId, RestoreDatabaseInstanceRequest, SourceAction,
     SourceAdapterAvailability, SourceAdapterKind, SourceExecutionRequest, SourceMigrationRequest,
     SourcePackageKind, SourcePackageVersion, TorbenError, TorbenResult,
 };
@@ -55,6 +57,7 @@ enum Command {
     Shell(ShellCommand),
     Library(LibraryCommand),
     Shim(ShimCommand),
+    Instance(InstanceCommand),
     Doctor,
 }
 
@@ -336,6 +339,57 @@ enum LibrarySubcommand {
 struct ShimCommand {
     #[command(subcommand)]
     command: ShimSubcommand,
+}
+
+#[derive(Args)]
+struct InstanceCommand {
+    #[command(subcommand)]
+    command: InstanceSubcommand,
+}
+
+#[derive(Subcommand)]
+enum InstanceSubcommand {
+    List {
+        engine: Option<String>,
+    },
+    Create {
+        engine: String,
+        name: String,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+    },
+    Start {
+        engine: String,
+        name: String,
+    },
+    Stop {
+        engine: String,
+        name: String,
+    },
+    Status {
+        engine: String,
+        name: String,
+    },
+    Backup {
+        engine: String,
+        name: String,
+        #[arg(long, value_name = "ABSOLUTE_PATH")]
+        destination: Option<PathBuf>,
+    },
+    Restore {
+        engine: String,
+        name: String,
+        #[arg(value_name = "ABSOLUTE_PATH")]
+        source: PathBuf,
+    },
+    Delete {
+        engine: String,
+        name: String,
+        #[arg(long)]
+        confirm: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1073,6 +1127,126 @@ async fn run(cli: Cli) -> TorbenResult<Output> {
                 )?)
             }
         },
+        Command::Instance(command) => match command.command {
+            InstanceSubcommand::List { engine } => {
+                let engine = engine
+                    .as_deref()
+                    .map(DatabaseEngine::from_str)
+                    .transpose()?;
+                let instances = core.database_instances(engine)?;
+                Ok(Output::new(
+                    instances
+                        .iter()
+                        .map(|instance| {
+                            format!(
+                                "{:<12} {:<20} {:<8} port={} runtime={}",
+                                instance.engine,
+                                instance.name,
+                                format!("{:?}", instance.state).to_ascii_lowercase(),
+                                instance.port,
+                                instance.runtime_version
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    instances,
+                )?)
+            }
+            InstanceSubcommand::Create {
+                engine,
+                name,
+                version,
+                port,
+            } => {
+                let instance = core.create_database_instance(CreateDatabaseInstanceRequest {
+                    engine: DatabaseEngine::from_str(&engine)?,
+                    name: DatabaseInstanceName::new(name)?,
+                    runtime_version: version.as_deref().map(ExactVersion::from_str).transpose()?,
+                    port,
+                })?;
+                Ok(Output::new(
+                    format!(
+                        "Created {} instance {} on port {}",
+                        instance.engine, instance.name, instance.port
+                    ),
+                    instance,
+                )?)
+            }
+            InstanceSubcommand::Start { engine, name } => {
+                let instance = core.start_database_instance(database_target(&engine, &name)?)?;
+                Ok(Output::new(
+                    format!("Started {} instance {}", instance.engine, instance.name),
+                    instance,
+                )?)
+            }
+            InstanceSubcommand::Stop { engine, name } => {
+                let instance = core.stop_database_instance(database_target(&engine, &name)?)?;
+                Ok(Output::new(
+                    format!("Stopped {} instance {}", instance.engine, instance.name),
+                    instance,
+                )?)
+            }
+            InstanceSubcommand::Status { engine, name } => {
+                let instance = core.database_instance_status(database_target(&engine, &name)?)?;
+                Ok(Output::new(
+                    format!(
+                        "{} instance {} is {}",
+                        instance.engine,
+                        instance.name,
+                        format!("{:?}", instance.state).to_ascii_lowercase()
+                    ),
+                    instance,
+                )?)
+            }
+            InstanceSubcommand::Backup {
+                engine,
+                name,
+                destination,
+            } => {
+                let target = database_target(&engine, &name)?;
+                let backup = core.backup_database_instance(BackupDatabaseInstanceRequest {
+                    engine: target.engine,
+                    name: target.name,
+                    destination: destination.map(|path| path.display().to_string()),
+                })?;
+                Ok(Output::new(
+                    format!("Created database backup at {}", backup.path),
+                    backup,
+                )?)
+            }
+            InstanceSubcommand::Restore {
+                engine,
+                name,
+                source,
+            } => {
+                let target = database_target(&engine, &name)?;
+                let instance = core.restore_database_instance(RestoreDatabaseInstanceRequest {
+                    engine: target.engine,
+                    name: target.name,
+                    source: source.display().to_string(),
+                })?;
+                Ok(Output::new(
+                    format!("Restored {} instance {}", instance.engine, instance.name),
+                    instance,
+                )?)
+            }
+            InstanceSubcommand::Delete {
+                engine,
+                name,
+                confirm,
+            } => {
+                let target = database_target(&engine, &name)?;
+                core.delete_database_instance(DeleteDatabaseInstanceRequest {
+                    engine: target.engine,
+                    name: target.name.clone(),
+                    confirm,
+                })?;
+                Ok(Output::new(
+                    format!("Deleted {} instance {}", target.engine, target.name),
+                    json!({ "engine": target.engine, "name": target.name, "deleted": true }),
+                )?)
+            }
+        },
         Command::Doctor => {
             let checks = core.doctor()?;
             Ok(Output::new(
@@ -1092,6 +1266,13 @@ async fn run(cli: Cli) -> TorbenResult<Output> {
             )?)
         }
     }
+}
+
+fn database_target(engine: &str, name: &str) -> TorbenResult<DatabaseInstanceTarget> {
+    Ok(DatabaseInstanceTarget {
+        engine: DatabaseEngine::from_str(engine)?,
+        name: DatabaseInstanceName::new(name)?,
+    })
 }
 
 fn run_task(command: &TaskCommand) -> TorbenResult<Output> {
@@ -1380,11 +1561,11 @@ mod tests {
     };
 
     use super::{
-        Cli, Command, LibrarySubcommand, PluginRegistrySubcommand, PluginSubcommand,
-        ShellSubcommand, SourceMigrationSubcommand, SourceMigrationToManagedSubcommand,
-        SourceMigrationToPackageSubcommand, SourceSubcommand, TaskSubcommand, UpdateSubcommand,
-        collect_schema_values, latest_operations, managed_library_migration_message,
-        parse_key_value, parse_spec,
+        Cli, Command, InstanceSubcommand, LibrarySubcommand, PluginRegistrySubcommand,
+        PluginSubcommand, ShellSubcommand, SourceMigrationSubcommand,
+        SourceMigrationToManagedSubcommand, SourceMigrationToPackageSubcommand, SourceSubcommand,
+        TaskSubcommand, UpdateSubcommand, collect_schema_values, latest_operations,
+        managed_library_migration_message, parse_key_value, parse_spec,
     };
 
     #[test]
@@ -1393,6 +1574,57 @@ mod tests {
         assert_eq!(app.as_str(), "node");
         assert_eq!(version, "24.19.0");
         assert!(parse_spec("node").is_err());
+    }
+
+    #[test]
+    fn parses_database_instance_lifecycle_commands() {
+        let cli = Cli::try_parse_from([
+            "torben",
+            "instance",
+            "create",
+            "postgresql",
+            "local_dev",
+            "--version",
+            "18.0.0",
+            "--port",
+            "55432",
+            "--json",
+        ])
+        .unwrap();
+        assert!(cli.json);
+        let Command::Instance(command) = cli.command else {
+            panic!("expected instance command");
+        };
+        let InstanceSubcommand::Create {
+            engine,
+            name,
+            version,
+            port,
+        } = command.command
+        else {
+            panic!("expected instance create command");
+        };
+        assert_eq!(engine, "postgresql");
+        assert_eq!(name, "local_dev");
+        assert_eq!(version.as_deref(), Some("18.0.0"));
+        assert_eq!(port, Some(55432));
+
+        let cli = Cli::try_parse_from([
+            "torben",
+            "instance",
+            "delete",
+            "redis",
+            "local",
+            "--confirm",
+        ])
+        .unwrap();
+        let Command::Instance(command) = cli.command else {
+            panic!("expected instance command");
+        };
+        assert!(matches!(
+            command.command,
+            InstanceSubcommand::Delete { confirm: true, .. }
+        ));
     }
 
     #[test]

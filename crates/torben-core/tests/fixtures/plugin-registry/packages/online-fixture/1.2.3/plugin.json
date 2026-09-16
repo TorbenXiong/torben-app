@@ -3,7 +3,7 @@
   "displayName": "Online fixture",
   "version": "1.2.3",
   "protocolVersion": 1,
-  "minimumHostVersion": "0.1.0",
+  "minimumHostVersion": "0.0.1",
   "publisher": "Fixture Publisher",
   "capabilities": [],
   "permissions": {
@@ -44,6 +44,6 @@
       "sha256": "3c494e7212a228cf3c4594530a605563bd97d7bed7413de10c0599a7e3bf8646"
     }
   ],
-  "signature": "SYuzJgWZwI6BCbZALWLtVWOoCkxozy3bcu+AhHISjWoipk8947aKh0SP54YeQHoLZtgUFkN7s9Jq+cOe6OW3Cw==",
+  "signature": "UrKrSDfWRnDw83keVPMWeAIch/b4JXkn0ixwhprIaTjCzhgxqt9/os4pqzdPRThWoXFcRxFYf8XL80kvhhArDg==",
   "revoked": false
 }

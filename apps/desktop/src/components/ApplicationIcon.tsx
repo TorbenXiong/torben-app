@@ -3,7 +3,7 @@ const applicationIconAssets: Record<string, string> = {
   temurin: "/icons/duke.png",
   python: "/icons/python.svg",
   rust: "/icons/rust.svg",
-  mysql: "/icons/mysql-mark.png",
+  mysql: "/icons/mysql-logo.png",
   redis: "/icons/redis-mark.svg",
   postgresql: "/icons/postgresql.svg",
   git: "/icons/git.svg",
@@ -39,7 +39,7 @@ export function NodeIcon({ size = 17 }: { size?: number }) {
 }
 
 export function JavaIcon({ size = 17 }: { size?: number }) {
-  return <ApplicationIcon className="java-nav-icon" id="temurin" size={size} />;
+  return <ApplicationIcon className="app-nav-icon java-nav-icon" id="temurin" size={size} />;
 }
 
 export function PythonIcon({ size = 17 }: { size?: number }) {

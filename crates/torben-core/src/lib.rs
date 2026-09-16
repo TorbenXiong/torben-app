@@ -3,6 +3,7 @@
 mod bundled_shim;
 mod catalog;
 mod codex;
+mod database_instances;
 mod diagnostic_log;
 mod git;
 mod git_signature;
@@ -339,6 +340,7 @@ impl TorbenCore {
         {
             let _lock = WorkspaceLock::acquire(paths.workspace_lock())?;
             shell_integration.recover(&paths.shim_dir())?;
+            database_instances::recover_database_instance_mutations(&paths, &store)?;
             recover_interrupted_operations(&paths, Arc::clone(&store))?;
         }
         let bundled_shim = BundledShim::discover(&paths)?;
@@ -559,13 +561,14 @@ impl TorbenCore {
         self.store.list_selections()
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn install(
         &self,
         app_id: &AppId,
         requested_version: &str,
     ) -> TorbenResult<InstallRecord> {
         self.ensure_supported_app(app_id)?;
-        let _workspace_lock = WorkspaceLock::acquire_shared(self.paths.workspace_lock())?;
+        let workspace_lock = WorkspaceLock::acquire_shared(self.paths.workspace_lock())?;
         let mut journal = OperationJournal::start(
             &self.paths,
             Arc::clone(&self.store),
@@ -612,7 +615,7 @@ impl TorbenCore {
             journal.fail_and_rollback(&error)?;
             return Err(error);
         }
-        let _installation_lock = match WorkspaceLock::acquire(installation_lock_path) {
+        let installation_lock = match WorkspaceLock::acquire(installation_lock_path) {
             Ok(lock) => lock,
             Err(error) => {
                 let _ = plugin.shutdown().await;
@@ -623,6 +626,10 @@ impl TorbenCore {
         if let Some(existing) = self.store.get_installation(app_id, &resolved)? {
             plugin.shutdown().await?;
             journal.succeed(format!("{app_id} {resolved} is already installed"))?;
+            drop(installation_lock);
+            drop(workspace_lock);
+            self.select_if_only_managed_version(app_id, &existing.version)
+                .await?;
             return Ok(existing);
         }
         if let Err(error) = journal.cancellation_probe().check() {
@@ -658,7 +665,12 @@ impl TorbenCore {
             .install_managed_payload(app_id, &resolved, &plan, &mut journal)
             .await;
 
-        self.finish_install_transaction(app_id, &mut journal, result)
+        let record = self.finish_install_transaction(app_id, &mut journal, result)?;
+        drop(installation_lock);
+        drop(workspace_lock);
+        self.select_if_only_managed_version(app_id, &record.version)
+            .await?;
+        Ok(record)
     }
 
     async fn install_managed_payload(
@@ -954,6 +966,29 @@ impl TorbenCore {
         self.select_locked(app_id, version).await
     }
 
+    async fn select_if_only_managed_version(
+        &self,
+        app_id: &AppId,
+        version: &ExactVersion,
+    ) -> TorbenResult<()> {
+        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        if self.store.selected_version(app_id)?.is_some() {
+            return Ok(());
+        }
+        let mut managed_versions = self
+            .store
+            .list_installations()?
+            .into_iter()
+            .filter(|record| record.app_id == *app_id && record.scope == InstallScope::Managed);
+        let Some(only) = managed_versions.next() else {
+            return Ok(());
+        };
+        if managed_versions.next().is_none() && only.version == *version {
+            self.select_locked(app_id, version).await?;
+        }
+        Ok(())
+    }
+
     async fn select_if_current(
         &self,
         app_id: &AppId,
@@ -1059,6 +1094,19 @@ impl TorbenCore {
             .with_detail("version", version.to_string())
             .with_remediation(
                 "Use `torben source execute uninstall` or the package source operation in Diagnostics.",
+            ));
+        }
+        if let Ok(engine) = app_id.as_str().parse::<torben_contracts::DatabaseEngine>()
+            && self.store.database_runtime_is_referenced(engine, version)?
+        {
+            return Err(TorbenError::new(
+                "database_runtime_in_use",
+                "The database runtime is pinned by one or more managed instances.",
+            )
+            .with_detail("appId", app_id.to_string())
+            .with_detail("version", version.to_string())
+            .with_remediation(
+                "Delete or migrate every instance that uses this runtime version before uninstalling it.",
             ));
         }
         if self.store.selected_version(app_id)?.as_ref() == Some(version) {
@@ -2891,9 +2939,7 @@ impl TorbenCore {
             })?;
         let install_path = validate_selected_installation(&self.paths, &record)?;
         let command_path = match app_id.as_str() {
-            "node" if command == "pnpm" => self
-                .node
-                .pnpm_command_path(&self.paths.data_dir().join("node")),
+            "node" if command == "pnpm" => self.node.pnpm_command_path(&self.paths.npm_data_dir()),
             "node" => self.node.command_path(&install_path, command),
             "temurin" => self.temurin.command_path(&install_path, command),
             "python" => self.python.command_path(&install_path, command),
@@ -2931,54 +2977,45 @@ impl TorbenCore {
             })?;
             node::configure_command_environment(
                 &mut process,
-                &self.paths.data_dir().join("node"),
+                &self.paths.npm_data_dir(),
+                &self.paths.pnpm_data_dir(),
                 bin,
             )?;
         } else if app_id.as_str() == "python" {
             let bin = executable.parent().ok_or_else(|| {
                 TorbenError::internal("The Python executable has no parent directory.")
             })?;
-            python::configure_command_environment(
-                &mut process,
-                &self.paths.data_dir().join("python"),
-                bin,
-            )?;
+            python::configure_command_environment(&mut process, &self.paths.pip_data_dir(), bin)?;
         } else if app_id.as_str() == "rust" {
             let bin = executable.parent().ok_or_else(|| {
                 TorbenError::internal("The Rust executable has no parent directory.")
             })?;
-            rust::configure_command_environment(
-                &mut process,
-                &self.paths.data_dir().join("rust"),
-                bin,
-            )?;
+            rust::configure_command_environment(&mut process, &self.paths.cargo_data_dir(), bin)?;
         } else if app_id.as_str() == "mysql" {
             let bin = executable.parent().ok_or_else(|| {
                 TorbenError::internal("The MySQL executable has no parent directory.")
             })?;
-            mysql::configure_command_environment(
-                &mut process,
-                &self.paths.data_dir().join("mysql"),
-                bin,
-            )?;
+            mysql::configure_command_environment(&mut process, &self.paths.mysql_data_dir(), bin)?;
         } else if app_id.as_str() == "redis" {
             let bin = executable.parent().ok_or_else(|| {
                 TorbenError::internal("The Redis executable has no parent directory.")
             })?;
-            redis::configure_command_environment(
-                &mut process,
-                &self.paths.data_dir().join("redis"),
-                bin,
-            )?;
+            redis::configure_command_environment(&mut process, &self.paths.redis_data_dir(), bin)?;
         } else if app_id.as_str() == "postgresql" {
             let bin = executable.parent().ok_or_else(|| {
                 TorbenError::internal("The PostgreSQL executable has no parent directory.")
             })?;
             postgresql::configure_command_environment(
                 &mut process,
-                &self.paths.data_dir().join("postgresql"),
+                &self.paths.postgresql_data_dir(),
                 bin,
             )?;
+        }
+        if let Some(environment) = self.user_settings()?.application_environments.get(app_id) {
+            process.envs(environment);
+        }
+        if app_id.as_str() == "python" && matches!(command, "pip" | "pip3") {
+            process.args(["-m", "pip"]);
         }
         Ok(process)
     }
@@ -4617,13 +4654,14 @@ fn validate_managed_node_tool_path(
     paths: &TorbenPaths,
     command_path: &Path,
 ) -> TorbenResult<PathBuf> {
-    let managed_root = std::fs::canonicalize(paths.data_dir().join("node")).map_err(|error| {
-        TorbenError::new(
-            "selection_state_invalid",
-            "The managed Node.js data directory cannot be resolved.",
-        )
-        .with_detail("reason", error.to_string())
-    })?;
+    let managed_root =
+        std::fs::canonicalize(paths.package_managers_dir().join("node")).map_err(|error| {
+            TorbenError::new(
+                "selection_state_invalid",
+                "The managed Node.js data directory cannot be resolved.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
     let canonical_command = std::fs::canonicalize(command_path).map_err(|error| {
         TorbenError::new(
             "managed_command_missing",
@@ -8797,7 +8835,7 @@ mod tests {
             display_name: "Fixture plugin".to_owned(),
             version: ExactVersion::from_str("1.2.3").unwrap(),
             protocol_version: torben_contracts::plugin::PLUGIN_PROTOCOL_VERSION,
-            minimum_host_version: ExactVersion::from_str("0.1.0").unwrap(),
+            minimum_host_version: ExactVersion::from_str("0.0.1").unwrap(),
             publisher: "Example Publisher".to_owned(),
             capabilities: vec![PluginCapability::SchemaUi],
             permissions: PluginPermissions {
@@ -9045,7 +9083,7 @@ mod tests {
             .paths
             .plugin_dir()
             .join(BUNDLED_TEMURIN_PLUGIN_ID)
-            .join("0.1.0");
+            .join("0.0.1");
         assert!(plugin_root.join("plugin.json").is_file());
         assert!(
             plugin_root
@@ -9082,7 +9120,7 @@ mod tests {
             .paths
             .plugin_dir()
             .join(BUNDLED_TEMURIN_PLUGIN_ID)
-            .join("0.1.0");
+            .join("0.0.1");
 
         core.uninstall_bundled_temurin().unwrap();
 
@@ -9147,7 +9185,7 @@ mod tests {
             .paths
             .plugin_dir()
             .join(BUNDLED_PYTHON_PLUGIN_ID)
-            .join("0.1.0");
+            .join("0.0.1");
         assert!(plugin_root.join("plugin.json").is_file());
         assert!(
             plugin_root
@@ -9317,7 +9355,7 @@ mod tests {
             display_name: "Schema fixture".to_owned(),
             version: version.clone(),
             protocol_version: torben_contracts::plugin::PLUGIN_PROTOCOL_VERSION,
-            minimum_host_version: ExactVersion::from_str("0.1.0").unwrap(),
+            minimum_host_version: ExactVersion::from_str("0.0.1").unwrap(),
             publisher: "Fixture".to_owned(),
             capabilities: vec![PluginCapability::SchemaUi],
             permissions: PluginPermissions::default(),
@@ -10423,6 +10461,61 @@ mod tests {
             .unwrap();
         assert!(!selection_check.healthy);
         assert!(selection_check.message.contains("selection_state_invalid"));
+    }
+
+    #[test]
+    fn selected_commands_receive_plugin_scoped_environment_variables() {
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().to_path_buf());
+        let core = TorbenCore::open(paths.clone()).unwrap();
+        let (app_id, version) = node_identity();
+        let record = install_record(&paths, &app_id, &version);
+        let install_path = PathBuf::from(&record.install_path);
+        let executable = if cfg!(windows) {
+            install_path.join("node.exe")
+        } else {
+            install_path.join("bin/node")
+        };
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&executable, b"fixture").unwrap();
+        core.store.add_installation(&record).unwrap();
+        core.store.set_selection(&app_id, &version).unwrap();
+        let mut settings = core.user_settings().unwrap();
+        settings.application_environments.0.insert(
+            app_id.clone(),
+            [("NODE_OPTIONS".to_owned(), "--enable-source-maps".to_owned())]
+                .into_iter()
+                .collect(),
+        );
+        core.update_user_settings(&settings).unwrap();
+
+        let command = core.command_for(&app_id, "node").unwrap();
+        let environment = command
+            .get_envs()
+            .filter_map(|(name, value)| {
+                value.map(|value| {
+                    (
+                        name.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            environment.get("NODE_OPTIONS").map(String::as_str),
+            Some("--enable-source-maps")
+        );
+        assert_eq!(
+            environment.get("npm_config_cache").map(String::as_str),
+            Some(
+                paths
+                    .npm_data_dir()
+                    .join("cache")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
     }
 
     #[cfg(unix)]

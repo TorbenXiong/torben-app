@@ -1,8 +1,8 @@
 {
   "id": "app.torben.plugin.postgresql",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "protocolVersion": 1,
-  "minimumHostVersion": "0.1.0",
+  "minimumHostVersion": "0.0.1",
   "publisher": "Torben App",
   "displayName": "PostgreSQL",
   "capabilities": [

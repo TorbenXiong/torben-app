@@ -1,3 +1,4 @@
+mod database;
 mod envelope;
 mod error;
 mod model;
@@ -8,6 +9,11 @@ mod source;
 mod storage;
 mod updates;
 
+pub use database::{
+    BackupDatabaseInstanceRequest, CreateDatabaseInstanceRequest, DatabaseBackup, DatabaseEngine,
+    DatabaseInstance, DatabaseInstanceName, DatabaseInstanceState, DatabaseInstanceTarget,
+    DeleteDatabaseInstanceRequest, RestoreDatabaseInstanceRequest,
+};
 pub use envelope::{API_SCHEMA_VERSION, ApiEnvelope};
 pub use error::{TorbenError, TorbenResult};
 pub use model::{
@@ -15,7 +21,9 @@ pub use model::{
     OperationEvent, OperationId, OperationKind, OperationState, PluginId, SelectionRecord,
     SourceId, VersionDescriptor,
 };
-pub use settings::{LanguagePreference, ThemePreference, UpdatePreferences, UserSettings};
+pub use settings::{
+    ApplicationEnvironments, LanguagePreference, ThemePreference, UpdatePreferences, UserSettings,
+};
 pub use shell::{ShellIntegrationState, ShellIntegrationStatus};
 pub use source::{
     ManagedToPackageMigrationPlan, ManagedToPackageMigrationResult, PackageCoordinate,

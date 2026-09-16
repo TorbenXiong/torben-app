@@ -433,6 +433,10 @@ impl BundledPluginSession {
         app_id: &AppId,
         managed_root: &Path,
     ) -> TorbenResult<Vec<InstallRecord>> {
+        // Windows canonical paths use the verbatim `\\?\` prefix. Send the managed root in the
+        // same form as candidates canonicalized by provider plugins so Torben's own shims cannot
+        // be mistaken for external installations and recursively reopen Core during discovery.
+        let managed_root = canonical_managed_root(managed_root)?;
         let result: ExternalDiscoverResult = self
             .client
             .call(
@@ -610,6 +614,17 @@ impl BundledPluginSession {
     }
 }
 
+fn canonical_managed_root(managed_root: &Path) -> TorbenResult<PathBuf> {
+    std::fs::canonicalize(managed_root).map_err(|error| {
+        TorbenError::new(
+            "managed_root_unavailable",
+            "The managed data directory could not be resolved for external discovery.",
+        )
+        .with_detail("path", managed_root.display().to_string())
+        .with_detail("reason", error.to_string())
+    })
+}
+
 pub(crate) fn current_target() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
@@ -620,7 +635,7 @@ mod tests {
 
     use torben_contracts::plugin::PluginCapability;
 
-    use super::BundledPlugin;
+    use super::{BundledPlugin, canonical_managed_root};
 
     #[test]
     fn bundled_manifests_declare_every_invoked_capability() {
@@ -664,5 +679,19 @@ mod tests {
             panic!("missing plugin unexpectedly started");
         };
         assert_eq!(error.code, "bundled_plugin_missing");
+    }
+
+    #[test]
+    fn canonical_managed_root_matches_canonical_managed_candidates() {
+        let root = tempfile::tempdir().unwrap();
+        let shim_dir = root.path().join("tools/shims");
+        std::fs::create_dir_all(&shim_dir).unwrap();
+        let shim = shim_dir.join(if cfg!(windows) { "node.exe" } else { "node" });
+        std::fs::write(&shim, b"shim").unwrap();
+
+        let canonical_root = canonical_managed_root(root.path()).unwrap();
+        let canonical_shim = std::fs::canonicalize(shim).unwrap();
+
+        assert!(canonical_shim.starts_with(canonical_root));
     }
 }

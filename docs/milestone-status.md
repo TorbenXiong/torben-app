@@ -24,15 +24,24 @@ Windows x64 gates required for the next supported release.
   management actions with `capability_not_available`.
 - Node.js, Eclipse Temurin JDK, Python, Rust, MySQL, Redis, and PostgreSQL are restored software plugins. Their provider payloads are
   installed under `userData/plugins`, and managed runtimes remain under the same `userData` root.
-- Rust uses the official stable MSVC toolchain. MySQL uses official Community Server ZIP archives.
+- Rust uses the official stable MSVC toolchain and shows the three newest stable toolchains by
+  default while retaining exact-version installation. MySQL uses official Community Server ZIP
+  archives and exposes 8.4.6, 8.0.46, and 5.7.44.
   Redis uses SHA-256-pinned Windows x64 community builds from `redis-windows`, because upstream Redis
   does not publish a native Windows Open Source binary. Each plugin supports independent version
   installation, terminal selection, and provider-owned data below `userData`.
 - PostgreSQL uses fixed EDB Windows x64 installers whose SHA-256 values are pinned to exact
   Microsoft WinGet manifests. Core invokes only EDB's `extract-only` mode, installs no runtime,
-  service, pgAdmin, or StackBuilder component, and never initializes a database cluster. PostgreSQL
-  configuration paths live below `userData/postgresql`; `PGDATA` remains explicit so incompatible
-  major versions cannot silently share one cluster.
+  service, pgAdmin, or StackBuilder component. Runtime installation never initializes a cluster;
+  explicit instance creation does so in a version-pinned managed directory. PostgreSQL client
+  configuration lives below `userData/application-data/postgresql/client`; avoiding a shared `PGDATA`
+  prevents incompatible major versions from silently sharing one cluster.
+- MySQL, Redis, and PostgreSQL share a complete managed-instance lifecycle in Core and SQLite:
+  create, start, stop, status, backup, restore, and confirmed delete. Desktop and CLI use identical
+  contracts; instances listen only on loopback, are not Windows services, preserve their data across
+  plugin changes and runtime upgrades, and block removal of a pinned runtime version.
+- Database management pages separate runtime `Version management` from mutable-data `Instance
+  management` tabs.
 - The Python plugin package includes the pinned official Python Install Manager 26.3 MSI on
   Windows x64. Core verifies and extracts it inside operation staging, pins the official index,
   and invokes it with an exact tag, a Core-owned download directory, and staging `--target`.
@@ -86,7 +95,7 @@ Windows x64 gates required for the next supported release.
   and permanent uninstall in the shared Core path.
 - The opt-in bundled Node.js plugin is embedded in the Windows x64 portable executable. Its shims
   prepare npm cache, global packages, configuration, temporary files, and REPL history below
-  `userData/node`; explicit user path overrides and arbitrary scripts are not sandboxed.
+  `userData/package-managers/node/npm` (with pnpm state under `userData/package-managers/node/pnpm`); explicit user path overrides and arbitrary scripts are not sandboxed.
 - A single managed shim directory exposes `node`, `npm`, `npx`, and `pnpm`. Selection changes are
   receipt-backed, and command resolution must remain inside the exact managed installation.
 - Real CLI subprocess and desktop-command fixture tests cover discovery through uninstall, fresh

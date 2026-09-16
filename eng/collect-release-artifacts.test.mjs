@@ -240,7 +240,7 @@ test("copied CLI name includes the workspace version and target", () => {
     });
     assert.equal(
       basename(copied.find((entry) => entry.format === "cli").path),
-      "torben-0.1.0-aarch64-apple-darwin",
+      "torben-0.0.1-aarch64-apple-darwin",
     );
   } finally {
     removeFixture(root);
@@ -254,7 +254,7 @@ test("rolls back staged packages when a later destination collides", () => {
     const bundleRoot = createBundle(root, target);
     renameSync(
       join(bundleRoot, "nsis", `Torben-App-nsis-${target}.exe`),
-      join(bundleRoot, "nsis", `torben-0.1.0-${target}.exe`),
+      join(bundleRoot, "nsis", `torben-0.0.1-${target}.exe`),
     );
     const output = join(root, "artifacts");
     assert.throws(

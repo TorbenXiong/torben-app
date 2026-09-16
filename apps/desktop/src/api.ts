@@ -4,7 +4,12 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import type {
   ApplicationDescriptor,
+  CreateDatabaseInstanceRequest,
   DashboardSnapshot,
+  DatabaseBackup,
+  DatabaseEngine,
+  DatabaseInstance,
+  DatabaseInstanceTarget,
   DesktopUpdaterConfiguration,
   DoctorCheck,
   InstallRecord,
@@ -130,7 +135,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.rust",
     displayName: "Rust",
-    version: "0.1.0",
+    version: "0.0.1",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -152,7 +157,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.mysql",
     displayName: "MySQL",
-    version: "0.1.0",
+    version: "0.0.1",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -174,7 +179,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.redis",
     displayName: "Redis",
-    version: "0.1.0",
+    version: "0.0.1",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -200,7 +205,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.postgresql",
     displayName: "PostgreSQL",
-    version: "0.1.0",
+    version: "0.0.1",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -239,7 +244,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.temurin",
     displayName: "Java",
-    version: "0.1.0",
+    version: "0.0.1",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -266,7 +271,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.python",
     displayName: "Python",
-    version: "0.1.0",
+    version: "0.0.1",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -288,7 +293,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.node",
     displayName: "Node.js",
-    version: "0.1.0",
+    version: "0.0.1",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -813,12 +818,14 @@ const mockSnapshot: DashboardSnapshot = {
   packageInstallations: [],
   updater: {
     configured: false,
-    currentVersion: "0.1.0",
+    currentVersion: "0.0.1",
     endpoint: "https://github.com/TorbenXiong/torben-app/releases/latest/download/latest.json",
   },
   settings: {
     theme: "system",
     language: "system",
+    pluginOrder: [],
+    applicationEnvironments: {},
     updates: {
       notifyTorbenApp: true,
       notifyManagedApps: true,
@@ -962,6 +969,30 @@ export async function getVersions(appId: string): Promise<VersionDescriptor[]> {
       { version: "3.13.15", releasedAt: "2026-08-05T11:00:00Z", recommended: false },
     ];
   }
+  if (appId === "mysql") {
+    return [
+      { version: "8.4.6", ltsName: "MySQL LTS", releasedAt: "2025-07-22", recommended: true },
+      { version: "8.0.46", releasedAt: "2026-04-22", recommended: false },
+      { version: "5.7.44", releasedAt: "2023-10-25", recommended: false },
+    ];
+  }
+  if (appId === "redis") {
+    return [
+      { version: "8.8.0", releasedAt: "2026-05-26", recommended: true },
+      { version: "7.4.9", releasedAt: "2026-05-06", recommended: false },
+    ];
+  }
+  if (appId === "postgresql") {
+    return [
+      {
+        version: "18.6.0",
+        ltsName: "PostgreSQL current major",
+        releasedAt: "2026-09-01",
+        recommended: true,
+      },
+      { version: "17.11.0", releasedAt: "2026-09-01", recommended: false },
+    ];
+  }
   if (appId === "git") {
     return [
       {
@@ -1032,6 +1063,80 @@ export async function uninstallApp(appId: string, version: string): Promise<void
     throw new Error("Uninstall is available in the Tauri desktop runtime.");
   }
   await invoke("uninstall_app", { appId, version });
+}
+
+export async function listDatabaseInstances(engine?: DatabaseEngine): Promise<DatabaseInstance[]> {
+  if (!isTauri()) return [];
+  return invoke<DatabaseInstance[]>("list_database_instances", { engine });
+}
+
+export async function createDatabaseInstance(
+  request: CreateDatabaseInstanceRequest,
+): Promise<DatabaseInstance> {
+  if (!isTauri()) {
+    throw new Error("Database instance creation is available in the Tauri desktop runtime.");
+  }
+  return invoke<DatabaseInstance>("create_database_instance", { request });
+}
+
+export async function startDatabaseInstance(
+  target: DatabaseInstanceTarget,
+): Promise<DatabaseInstance> {
+  if (!isTauri()) {
+    throw new Error("Database instance startup is available in the Tauri desktop runtime.");
+  }
+  return invoke<DatabaseInstance>("start_database_instance", { target });
+}
+
+export async function stopDatabaseInstance(
+  target: DatabaseInstanceTarget,
+): Promise<DatabaseInstance> {
+  if (!isTauri()) {
+    throw new Error("Database instance shutdown is available in the Tauri desktop runtime.");
+  }
+  return invoke<DatabaseInstance>("stop_database_instance", { target });
+}
+
+export async function refreshDatabaseInstanceStatus(
+  target: DatabaseInstanceTarget,
+): Promise<DatabaseInstance> {
+  if (!isTauri()) {
+    throw new Error("Database status checks are available in the Tauri desktop runtime.");
+  }
+  return invoke<DatabaseInstance>("database_instance_status", { target });
+}
+
+export async function backupDatabaseInstance(
+  target: DatabaseInstanceTarget,
+  destination: string | null = null,
+): Promise<DatabaseBackup> {
+  if (!isTauri()) {
+    throw new Error("Database backups are available in the Tauri desktop runtime.");
+  }
+  return invoke<DatabaseBackup>("backup_database_instance", {
+    request: { ...target, destination },
+  });
+}
+
+export async function restoreDatabaseInstance(
+  target: DatabaseInstanceTarget,
+  source: string,
+): Promise<DatabaseInstance> {
+  if (!isTauri()) {
+    throw new Error("Database restores are available in the Tauri desktop runtime.");
+  }
+  return invoke<DatabaseInstance>("restore_database_instance", {
+    request: { ...target, source },
+  });
+}
+
+export async function deleteDatabaseInstance(target: DatabaseInstanceTarget): Promise<void> {
+  if (!isTauri()) {
+    throw new Error("Database instance deletion is available in the Tauri desktop runtime.");
+  }
+  await invoke("delete_database_instance", {
+    request: { ...target, confirm: true },
+  });
 }
 
 export async function checkManagedUpdates(appId?: string): Promise<ManagedUpdateCheck> {

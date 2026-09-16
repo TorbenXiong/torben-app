@@ -14,7 +14,7 @@ import {
   uninstallApp,
 } from "./api";
 import {
-  activeInstallOperation,
+  activeRuntimeOperation,
   RuntimeOperationProgress,
 } from "./components/RuntimeOperationProgress";
 import type {
@@ -209,8 +209,14 @@ export function NodeDetailPage({
               ) : null}
               {rows.map((row) => {
                 const installAction = `install:${row.version}`;
-                const installEvent = activeInstallOperation(operations, "node", row.version);
+                const operationEvent = activeRuntimeOperation(operations, "node", row.version);
+                const installEvent =
+                  operationEvent?.kind === "install" ? operationEvent : undefined;
+                const uninstallEvent =
+                  operationEvent?.kind === "uninstall" ? operationEvent : undefined;
                 const installing = busy.has(installAction) || Boolean(installEvent);
+                const uninstalling =
+                  busy.has(`uninstall:${row.version}`) || Boolean(uninstallEvent);
                 return (
                   <div className="version-row runtime-version-row" key={row.version}>
                     <div className="version-main">
@@ -269,12 +275,15 @@ export function NodeDetailPage({
                       {row.installed ? (
                         <Dialog.Root>
                           <Dialog.Trigger asChild>
-                            <Button
-                              disabled={busy.has(`uninstall:${row.installed?.version}`)}
-                              size="sm"
-                              variant="danger"
-                            >
-                              <Trash2 size={14} /> {t("runtimePage.uninstall")}
+                            <Button disabled={uninstalling} size="sm" variant="danger">
+                              {uninstalling ? (
+                                <RefreshCw className="spin" size={14} />
+                              ) : (
+                                <Trash2 size={14} />
+                              )}{" "}
+                              {uninstalling
+                                ? t("runtimePage.uninstalling")
+                                : t("runtimePage.uninstall")}
                             </Button>
                           </Dialog.Trigger>
                           <Dialog.Portal>
@@ -315,8 +324,9 @@ export function NodeDetailPage({
                       ) : null}
                     </span>
                     <RuntimeOperationProgress
-                      event={installEvent}
-                      pending={installing}
+                      event={operationEvent}
+                      pending={installing || uninstalling}
+                      pendingLabel={uninstalling ? t("runtimePage.uninstalling") : undefined}
                       version={row.version}
                     />
                   </div>

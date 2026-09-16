@@ -17,9 +17,9 @@ function fixture() {
   const source = join(root, "candidate");
   mkdirSync(source);
   const files = {
-    nsis: "Torben App_0.1.0_x64-setup.exe",
-    msi: "Torben App_0.1.0_x64_en-US.msi",
-    cli: "torben-0.1.0-x86_64-pc-windows-msvc.zip",
+    nsis: "Torben App_0.0.1_x64-setup.exe",
+    msi: "Torben App_0.0.1_x64_en-US.msi",
+    cli: "torben-0.0.1-x86_64-pc-windows-msvc.zip",
   };
   for (const [kind, name] of Object.entries(files)) {
     writeFileSync(join(source, name), `${kind}-fixture`);

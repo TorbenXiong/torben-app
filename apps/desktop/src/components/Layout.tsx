@@ -6,6 +6,7 @@ import {
   Boxes,
   CheckCircle2,
   Command,
+  GripVertical,
   Minus,
   PanelLeftClose,
   PanelLeftOpen,
@@ -28,6 +29,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { NavLink, useNavigate } from "react-router";
+import { comparePluginOrder, movePlugin, normalizePluginOrder } from "../pluginOrder";
 import type { ApplicationDescriptor, PluginSummary } from "../types";
 import {
   JavaIcon,
@@ -44,7 +46,7 @@ const primaryNavigation = [{ to: "/plugins", key: "plugins", icon: Boxes }] as c
 const logsNavigation = { to: "/logs", key: "logs", icon: ScrollText };
 const diagnosticsNavigation = { to: "/diagnostics", key: "diagnostics", icon: CheckCircle2 };
 const settingsNavigation = { to: "/settings", key: "settings", icon: Settings };
-const appVersion = "0.1.0";
+const appVersion = "0.0.1";
 
 const supportedApplicationRoutes = new Set([
   "node",
@@ -119,6 +121,45 @@ function SidebarLink({
   );
 }
 
+function SortableSidebarLink({
+  collapsed,
+  dragging,
+  dropTarget,
+  item,
+  label,
+  onDrop,
+  onEnter,
+  onStart,
+}: {
+  collapsed: boolean;
+  dragging: boolean;
+  dropTarget: boolean;
+  item: NavigationItem;
+  label: string;
+  onDrop: () => void;
+  onEnter: () => void;
+  onStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
+}) {
+  return (
+    <div
+      className={cn("sortable-nav-item", dragging && "is-dragging", dropTarget && "is-drop-target")}
+      onPointerEnter={onEnter}
+      onPointerUp={onDrop}
+    >
+      <SidebarLink child collapsed={collapsed} item={item} label={label} />
+      <button
+        aria-label={`Reorder ${label} in sidebar`}
+        className="nav-drag-handle"
+        onPointerDown={onStart}
+        title="Drag to reorder"
+        type="button"
+      >
+        <GripVertical aria-hidden="true" size={14} />
+      </button>
+    </div>
+  );
+}
+
 export function commandShortcut(platform: string) {
   const apple = /mac|iphone|ipad|ipod/i.test(platform);
   return apple ? { aria: "Meta+K", label: "⌘ K" } : { aria: "Control+K", label: "Ctrl K" };
@@ -127,11 +168,15 @@ export function commandShortcut(platform: string) {
 export function Layout({
   applications,
   children,
+  pluginOrder,
   plugins,
+  onPluginOrderChange = async () => undefined,
 }: {
   applications: ApplicationDescriptor[];
   children: ReactNode;
+  pluginOrder: string[];
   plugins: PluginSummary[];
+  onPluginOrderChange?: (pluginOrder: string[]) => Promise<void>;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -142,6 +187,40 @@ export function Layout({
   const navigate = useNavigate();
   const commandListId = useId();
   const commandInput = useRef<HTMLInputElement>(null);
+  const [localPluginOrder, setLocalPluginOrder] = useState(() =>
+    normalizePluginOrder(pluginOrder, plugins),
+  );
+  const [draggingPlugin, setDraggingPlugin] = useState<string | null>(null);
+  const [dropTargetPlugin, setDropTargetPlugin] = useState<string | null>(null);
+  const draggingPluginRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setLocalPluginOrder(normalizePluginOrder(pluginOrder, plugins));
+  }, [pluginOrder, plugins]);
+
+  useEffect(() => {
+    const finishDrag = () => {
+      draggingPluginRef.current = null;
+      setDraggingPlugin(null);
+      setDropTargetPlugin(null);
+    };
+    window.addEventListener("pointerup", finishDrag);
+    window.addEventListener("pointercancel", finishDrag);
+    return () => {
+      window.removeEventListener("pointerup", finishDrag);
+      window.removeEventListener("pointercancel", finishDrag);
+    };
+  }, []);
+
+  const reorderSidebarPlugin = (pluginId: string, targetPluginId: string) => {
+    const source = normalizePluginOrder(localPluginOrder, plugins);
+    const next = movePlugin(source, pluginId, targetPluginId);
+    if (next.every((value, index) => value === source[index])) return;
+    setLocalPluginOrder(next);
+    void onPluginOrderChange(next).catch(() => {
+      setLocalPluginOrder(normalizePluginOrder(pluginOrder, plugins));
+    });
+  };
   const shortcut = commandShortcut(
     typeof navigator === "undefined" ? "" : navigator.platform || navigator.userAgent,
   );
@@ -166,28 +245,66 @@ export function Layout({
   const postgresqlEnabled = plugins.some(
     (plugin) => plugin.id === "app.torben.plugin.postgresql" && plugin.enabled,
   );
-  const runtimePages = useMemo<NavigationItem[]>(() => {
-    const runtimePages = [];
-    if (nodeEnabled) runtimePages.push({ to: "/node", key: "node", icon: NodeIcon });
+  const runtimePages = useMemo<(NavigationItem & { pluginId: string })[]>(() => {
+    const runtimePages: (NavigationItem & { pluginId: string })[] = [];
+    if (nodeEnabled)
+      runtimePages.push({
+        to: "/node",
+        key: "node",
+        icon: NodeIcon,
+        pluginId: "app.torben.plugin.node",
+      });
     if (temurinEnabled) {
-      runtimePages.push({ to: "/java", key: "java", icon: JavaIcon });
+      runtimePages.push({
+        to: "/java",
+        key: "java",
+        icon: JavaIcon,
+        pluginId: "app.torben.plugin.temurin",
+      });
     }
     if (pythonEnabled) {
-      runtimePages.push({ to: "/python", key: "python", icon: PythonIcon });
+      runtimePages.push({
+        to: "/python",
+        key: "python",
+        icon: PythonIcon,
+        pluginId: "app.torben.plugin.python",
+      });
     }
     if (rustEnabled) {
-      runtimePages.push({ to: "/rust", key: "rust", icon: RustIcon });
+      runtimePages.push({
+        to: "/rust",
+        key: "rust",
+        icon: RustIcon,
+        pluginId: "app.torben.plugin.rust",
+      });
     }
     if (mysqlEnabled) {
-      runtimePages.push({ to: "/mysql", key: "mysql", icon: MysqlIcon });
+      runtimePages.push({
+        to: "/mysql",
+        key: "mysql",
+        icon: MysqlIcon,
+        pluginId: "app.torben.plugin.mysql",
+      });
     }
     if (redisEnabled) {
-      runtimePages.push({ to: "/redis", key: "redis", icon: RedisIcon });
+      runtimePages.push({
+        to: "/redis",
+        key: "redis",
+        icon: RedisIcon,
+        pluginId: "app.torben.plugin.redis",
+      });
     }
     if (postgresqlEnabled) {
-      runtimePages.push({ to: "/postgresql", key: "postgresql", icon: PostgresqlIcon });
+      runtimePages.push({
+        to: "/postgresql",
+        key: "postgresql",
+        icon: PostgresqlIcon,
+        pluginId: "app.torben.plugin.postgresql",
+      });
     }
-    return runtimePages;
+    return runtimePages.sort((left, right) =>
+      comparePluginOrder(left.pluginId, right.pluginId, localPluginOrder),
+    );
   }, [
     mysqlEnabled,
     nodeEnabled,
@@ -196,6 +313,7 @@ export function Layout({
     redisEnabled,
     rustEnabled,
     temurinEnabled,
+    localPluginOrder,
   ]);
   const navigation = useMemo(
     () => [
@@ -520,12 +638,37 @@ export function Layout({
                 <div className="installed-plugin-nav">
                   <span className="nav-section-label">{t("layout.installedPlugins")}</span>
                   {runtimePages.map((item) => (
-                    <SidebarLink
-                      child
+                    <SortableSidebarLink
                       collapsed={collapsed}
+                      dragging={draggingPlugin === item.pluginId}
+                      dropTarget={dropTargetPlugin === item.pluginId}
                       item={item}
                       key={item.to}
                       label={t(item.key)}
+                      onDrop={() => {
+                        const source = draggingPluginRef.current;
+                        if (source && source !== item.pluginId) {
+                          reorderSidebarPlugin(source, item.pluginId);
+                        }
+                        draggingPluginRef.current = null;
+                        setDraggingPlugin(null);
+                        setDropTargetPlugin(null);
+                      }}
+                      onEnter={() => {
+                        if (
+                          draggingPluginRef.current &&
+                          draggingPluginRef.current !== item.pluginId
+                        ) {
+                          setDropTargetPlugin(item.pluginId);
+                        }
+                      }}
+                      onStart={(event) => {
+                        if (event.button !== 0) return;
+                        event.preventDefault();
+                        draggingPluginRef.current = item.pluginId;
+                        setDraggingPlugin(item.pluginId);
+                        setDropTargetPlugin(null);
+                      }}
                     />
                   ))}
                 </div>

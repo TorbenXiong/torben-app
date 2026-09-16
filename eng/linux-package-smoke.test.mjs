@@ -65,8 +65,8 @@ async function artifactFixture(root, format) {
   const artifacts = join(root, "artifacts");
   mkdirSync(artifacts);
   const suffix = { appimage: ".AppImage", deb: ".deb", rpm: ".rpm" }[format];
-  writeFileSync(join(artifacts, `Torben-App_0.1.0_x86_64${suffix}`), `fixture-${format}`);
-  writeElf(join(artifacts, "torben-0.1.0-x86_64-unknown-linux-gnu"));
+  writeFileSync(join(artifacts, `Torben-App_0.0.1_x86_64${suffix}`), `fixture-${format}`);
+  writeElf(join(artifacts, "torben-0.0.1-x86_64-unknown-linux-gnu"));
   await createReleaseMetadata({
     artifacts,
     target: "x86_64-unknown-linux-gnu",

@@ -184,7 +184,7 @@ impl RedisProvider {
                 &staging_for_task,
                 &cancellation,
             )
-            .map(|()| staging_for_task)
+            .and_then(|()| find_redis_prefix(&staging_for_task))
         })
         .await
         .map_err(|error| {
@@ -414,7 +414,11 @@ pub(crate) fn configure_command_environment(
     data_root: &Path,
     bin: &Path,
 ) -> TorbenResult<()> {
-    std::fs::create_dir_all(data_root).map_err(io_error)?;
+    let client_root = data_root.join("client");
+    let default_instance = data_root.join("instances").join("default");
+    for directory in [&client_root, &default_instance] {
+        std::fs::create_dir_all(directory).map_err(io_error)?;
+    }
     let inherited = std::env::var_os("PATH").unwrap_or_default();
     let path = std::env::join_paths(
         [bin.to_path_buf()]
@@ -438,9 +442,9 @@ pub(crate) fn configure_command_environment(
         bin
     };
     command.env("REDIS_HOME", redis_home);
-    command.env("REDISCLI_HISTFILE", data_root.join("redis_history"));
+    command.env("REDISCLI_HISTFILE", client_root.join("history"));
     command.env("PATH", path);
-    command.current_dir(data_root);
+    command.current_dir(default_instance);
     Ok(())
 }
 
@@ -448,6 +452,47 @@ fn distribution_spec(version: &ExactVersion) -> Option<&'static DistributionSpec
     DISTRIBUTIONS
         .iter()
         .find(|spec| spec.version == version.to_string())
+}
+
+fn find_redis_prefix(root: &Path) -> TorbenResult<PathBuf> {
+    let mut prefixes = BTreeSet::new();
+    for entry in walkdir::WalkDir::new(root).follow_links(false) {
+        let entry = entry.map_err(|error| {
+            TorbenError::new(
+                "redis_archive_layout_invalid",
+                "Could not inspect the extracted Redis archive.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+        if entry.file_type().is_file()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case("redis-server.exe"))
+        {
+            let parent = entry.path().parent().unwrap_or(root);
+            let prefix = parent
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| name.eq_ignore_ascii_case("bin"))
+                .and_then(|_| parent.parent())
+                .unwrap_or(parent);
+            if ["redis-cli.exe", "redis-benchmark.exe"]
+                .iter()
+                .all(|name| prefix.join("bin").join(name).is_file() || prefix.join(name).is_file())
+            {
+                prefixes.insert(prefix.to_path_buf());
+            }
+        }
+    }
+    if prefixes.len() != 1 {
+        return Err(TorbenError::new(
+            "redis_archive_layout_invalid",
+            "The Redis archive did not contain one usable runtime prefix.",
+        )
+        .with_detail("prefixCount", prefixes.len().to_string()));
+    }
+    Ok(prefixes.pop_first().expect("one Redis prefix was checked"))
 }
 fn parse_redis_version(output: &str) -> Option<ExactVersion> {
     output.split_whitespace().find_map(|token| {
@@ -559,12 +604,15 @@ mod tests {
 
         configure_command_environment(&mut command, &data_root, &bin).unwrap();
 
-        assert_eq!(command.get_current_dir(), Some(data_root.as_path()));
+        assert_eq!(
+            command.get_current_dir(),
+            Some(data_root.join("instances").join("default").as_path())
+        );
         let history = command
             .get_envs()
             .find(|(key, _)| *key == OsStr::new("REDISCLI_HISTFILE"))
             .and_then(|(_, value)| value);
-        let expected_history = data_root.join("redis_history");
+        let expected_history = data_root.join("client").join("history");
         assert_eq!(history, Some(expected_history.as_os_str()));
         let redis_home = command
             .get_envs()

@@ -90,6 +90,29 @@ impl TorbenPaths {
                     | "cargo"
                     | "rustdoc"
                     | "rustfmt"
+                    | "mysql"
+                    | "mysqld"
+                    | "mysqladmin"
+                    | "mysqldump"
+                    | "redis-server"
+                    | "redis-cli"
+                    | "redis-benchmark"
+                    | "postgres"
+                    | "psql"
+                    | "pg_ctl"
+                    | "initdb"
+                    | "pg_isready"
+                    | "createdb"
+                    | "dropdb"
+                    | "createuser"
+                    | "dropuser"
+                    | "pg_dump"
+                    | "pg_dumpall"
+                    | "pg_restore"
+                    | "pg_basebackup"
+                    | "pgbench"
+                    | "vacuumdb"
+                    | "reindexdb"
                     | "git"
                     | "code"
                     | "codex"
@@ -222,6 +245,8 @@ impl TorbenPaths {
             &self.config,
             &self.cache,
             &self.logs,
+            &self.application_data_dir(),
+            &self.package_managers_dir(),
             &self.staging_dir(),
             &self.operation_dir(),
             &self.shim_dir(),
@@ -257,6 +282,44 @@ impl TorbenPaths {
 
     pub fn log_dir(&self) -> &Path {
         &self.logs
+    }
+
+    /// Root for mutable state owned by language package managers.
+    pub fn package_managers_dir(&self) -> PathBuf {
+        self.data.join("package-managers")
+    }
+
+    /// Root for mutable application state and explicitly managed data instances.
+    pub fn application_data_dir(&self) -> PathBuf {
+        self.data.join("application-data")
+    }
+
+    pub fn mysql_data_dir(&self) -> PathBuf {
+        self.application_data_dir().join("mysql")
+    }
+
+    pub fn redis_data_dir(&self) -> PathBuf {
+        self.application_data_dir().join("redis")
+    }
+
+    pub fn postgresql_data_dir(&self) -> PathBuf {
+        self.application_data_dir().join("postgresql")
+    }
+
+    pub fn npm_data_dir(&self) -> PathBuf {
+        self.package_managers_dir().join("node").join("npm")
+    }
+
+    pub fn pnpm_data_dir(&self) -> PathBuf {
+        self.package_managers_dir().join("node").join("pnpm")
+    }
+
+    pub fn pip_data_dir(&self) -> PathBuf {
+        self.package_managers_dir().join("python").join("pip")
+    }
+
+    pub fn cargo_data_dir(&self) -> PathBuf {
+        self.package_managers_dir().join("rust").join("cargo")
     }
 
     pub fn state_database(&self) -> PathBuf {
@@ -361,6 +424,10 @@ mod tests {
             "userData/tools/shims/npm.exe",
             "userData/tools/shims/pnpm.exe",
             "userData/tools/shims/codex.exe",
+            "userData/tools/shims/mysqld.exe",
+            "userData/tools/shims/redis-server.exe",
+            "userData/tools/shims/postgres.exe",
+            "userData/tools/shims/pg_dump.exe",
             "USERDATA/TOOLS/SHIMS/NODE.EXE",
         ] {
             let paths =
@@ -378,6 +445,42 @@ mod tests {
             assert_eq!(paths.app_library(), root.path().join("userData/apps"));
             assert_eq!(paths.shim_dir(), root.path().join("userData/tools/shims"));
             assert_eq!(paths.plugin_dir(), root.path().join("userData/plugins"));
+            assert_eq!(
+                paths.package_managers_dir(),
+                root.path().join("userData/package-managers")
+            );
+            assert_eq!(
+                paths.application_data_dir(),
+                root.path().join("userData/application-data")
+            );
+            assert_eq!(
+                paths.mysql_data_dir(),
+                root.path().join("userData/application-data/mysql")
+            );
+            assert_eq!(
+                paths.redis_data_dir(),
+                root.path().join("userData/application-data/redis")
+            );
+            assert_eq!(
+                paths.postgresql_data_dir(),
+                root.path().join("userData/application-data/postgresql")
+            );
+            assert_eq!(
+                paths.npm_data_dir(),
+                root.path().join("userData/package-managers/node/npm")
+            );
+            assert_eq!(
+                paths.pnpm_data_dir(),
+                root.path().join("userData/package-managers/node/pnpm")
+            );
+            assert_eq!(
+                paths.pip_data_dir(),
+                root.path().join("userData/package-managers/python/pip")
+            );
+            assert_eq!(
+                paths.cargo_data_dir(),
+                root.path().join("userData/package-managers/rust/cargo")
+            );
             assert!(!paths.is_isolated());
         }
     }

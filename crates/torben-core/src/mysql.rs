@@ -50,6 +50,13 @@ const DISTRIBUTIONS: &[DistributionSpec] = &[
         released_at: "2026-04-22",
         lts: false,
     },
+    DistributionSpec {
+        version: "5.7.44",
+        stream: "MySQL-5.7",
+        sha256: "aed661fe8120254a1dc30f5a4d5de346681922f4847cf025e2d4084eca78e70e",
+        released_at: "2023-10-25",
+        lts: false,
+    },
 ];
 
 #[derive(Debug, Clone)]
@@ -401,7 +408,11 @@ pub(crate) fn configure_command_environment(
     data_root: &Path,
     bin: &Path,
 ) -> TorbenResult<()> {
-    std::fs::create_dir_all(data_root).map_err(io_error)?;
+    let client_root = data_root.join("client");
+    let config_root = data_root.join("config");
+    for directory in [&client_root, &config_root, &data_root.join("instances")] {
+        std::fs::create_dir_all(directory).map_err(io_error)?;
+    }
     let inherited = std::env::var_os("PATH").unwrap_or_default();
     let path = std::env::join_paths(
         [bin.to_path_buf()]
@@ -415,8 +426,8 @@ pub(crate) fn configure_command_environment(
         )
         .with_detail("reason", error.to_string())
     })?;
-    command.env("MYSQL_HOME", bin.parent().unwrap_or(bin));
-    command.env("MYSQL_HISTFILE", data_root.join("mysql_history"));
+    command.env("MYSQL_HOME", config_root);
+    command.env("MYSQL_HISTFILE", client_root.join("history"));
     command.env("PATH", path);
     Ok(())
 }
@@ -488,8 +499,9 @@ fn timestamp() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MysqlProvider, parse_mysql_version};
-    use std::str::FromStr;
+    use super::{MysqlProvider, configure_command_environment, parse_mysql_version};
+    use std::{ffi::OsStr, str::FromStr};
+    use tempfile::tempdir;
     use torben_contracts::ExactVersion;
 
     #[test]
@@ -511,6 +523,16 @@ mod tests {
         assert_eq!(legacy.archive_name, "mysql-8.0.46-winx64.zip");
         assert_eq!(legacy.archive_url.host_str(), Some("cdn.mysql.com"));
         assert_eq!(legacy.checksum.len(), 64);
+
+        let mysql57 = provider
+            .distribution(&ExactVersion::from_str("5.7.44").unwrap())
+            .unwrap();
+        assert_eq!(mysql57.archive_name, "mysql-5.7.44-winx64.zip");
+        assert_eq!(
+            mysql57.archive_url.as_str(),
+            "https://cdn.mysql.com/Downloads/MySQL-5.7/mysql-5.7.44-winx64.zip"
+        );
+        assert_eq!(mysql57.checksum.len(), 64);
     }
 
     #[test]
@@ -521,5 +543,35 @@ mod tests {
         .unwrap();
         assert_eq!(version, ExactVersion::from_str("8.4.6").unwrap());
         assert!(parse_mysql_version("mysqld: unknown option").is_none());
+    }
+
+    #[test]
+    fn managed_commands_separate_mysql_client_state_from_instances() {
+        let root = tempdir().unwrap();
+        let data_root = root.path().join("userData/application-data/mysql");
+        let bin = root.path().join("apps/mysql/8.4.6/bin");
+        let mut command = std::process::Command::new("mysql");
+
+        configure_command_environment(&mut command, &data_root, &bin).unwrap();
+
+        let environment = command
+            .get_envs()
+            .map(|(key, value)| (key.to_owned(), value.map(OsStr::to_owned)))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            environment
+                .get(OsStr::new("MYSQL_HOME"))
+                .unwrap()
+                .as_deref(),
+            Some(data_root.join("config").as_os_str())
+        );
+        assert_eq!(
+            environment
+                .get(OsStr::new("MYSQL_HISTFILE"))
+                .unwrap()
+                .as_deref(),
+            Some(data_root.join("client").join("history").as_os_str())
+        );
+        assert!(data_root.join("instances").is_dir());
     }
 }

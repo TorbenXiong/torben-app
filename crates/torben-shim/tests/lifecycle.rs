@@ -174,7 +174,7 @@ fn compile_fixture_node_tools(install_path: &Path, version: &ExactVersion) {
             .ancestors()
             .nth(3)
             .expect("resolve fixture data root");
-        let global = data_root.join("node/global");
+        let global = data_root.join("package-managers/node/npm/global");
         std::fs::create_dir_all(&global).expect("create fixture Node.js global directory");
         std::fs::write(
             global.join("pnpm.cmd"),
@@ -190,7 +190,7 @@ fn compile_fixture_node_tools(install_path: &Path, version: &ExactVersion) {
             .ancestors()
             .nth(3)
             .expect("resolve fixture data root");
-        let global = data_root.join("node/global/bin");
+        let global = data_root.join("package-managers/node/npm/global/bin");
         std::fs::create_dir_all(&global).expect("create fixture Node.js global bin directory");
         std::fs::copy(&node, global.join("pnpm")).expect("write fixture pnpm command");
     }
@@ -232,7 +232,7 @@ fn assert_new_terminal_commands(shim_directory: &Path, root: &Path, expected: &E
         String::from_utf8_lossy(&output.stderr)
     );
     let environment = String::from_utf8(output.stdout).unwrap();
-    let data = root.join("data/node");
+    let data = root.join("data/package-managers/node/npm");
     for (name, relative) in [
         ("npm_config_cache", "cache"),
         ("npm_config_prefix", "global"),

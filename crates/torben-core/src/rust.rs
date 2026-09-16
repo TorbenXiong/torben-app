@@ -80,7 +80,10 @@ impl RustProvider {
             .collect::<Vec<_>>();
         versions.sort_by(|left, right| right.version.cmp(&left.version));
         versions.dedup_by(|left, right| left.version == right.version);
-        versions.truncate(8);
+        // Keep the catalog focused on the most useful toolchains while still
+        // allowing callers to install any exact version supported by the
+        // upstream distribution metadata.
+        versions.truncate(3);
         if versions.is_empty() {
             return Err(TorbenError::new(
                 "rust_metadata_invalid",
@@ -95,11 +98,7 @@ impl RustProvider {
 
     pub async fn resolve_version(&self, requested: &str) -> TorbenResult<ExactVersion> {
         if let Ok(exact) = ExactVersion::from_str(requested) {
-            return self
-                .distribution(&exact)
-                .await
-                .map(|_| exact)
-                .map_err(|_| version_not_found(requested));
+            return self.distribution(&exact).await.map(|_| exact);
         }
         let versions = self.list_versions().await?;
         match requested.trim().to_ascii_lowercase().as_str() {
@@ -113,13 +112,12 @@ impl RustProvider {
 
     pub async fn distribution(&self, version: &ExactVersion) -> TorbenResult<RustDistribution> {
         let archive_name = format!("rust-{version}-{RUST_TARGET}.msi");
-        let archive_url = self.dist_base.join(&archive_name).map_err(url_error)?;
         let manifest_url = self
             .dist_base
             .join(&format!("channel-rust-{version}.toml"))
             .map_err(url_error)?;
         let manifest = self.fetch_text(&manifest_url).await?;
-        let checksum = checksum_from_manifest(&manifest, &archive_name)?;
+        let (archive_url, checksum) = distribution_from_manifest(&manifest, &archive_name)?;
         Ok(RustDistribution {
             archive_name,
             archive_url,
@@ -350,6 +348,15 @@ impl RustProvider {
             .await
             .map_err(network_error)?;
         validate_origin(&response, url)?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND
+            && let Some(version) = url
+                .path_segments()
+                .and_then(|mut segments| segments.next_back())
+                .and_then(|name| name.strip_prefix("channel-rust-"))
+                .and_then(|name| name.strip_suffix(".toml"))
+        {
+            return Err(version_not_found(version));
+        }
         let bytes = response
             .error_for_status()
             .map_err(network_error)?
@@ -400,13 +407,33 @@ impl RustProvider {
         destination: &Path,
         cancellation: &CancellationProbe,
     ) -> TorbenResult<()> {
-        let response = self
-            .client
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(network_error)?;
-        validate_origin(&response, url)?;
+        let mut candidates = vec![url.clone()];
+        if is_china_locale()
+            && url.host_str() == Some("static.rust-lang.org")
+            && let Ok(mirror) = Url::parse(&url.as_str().replacen(
+                "https://static.rust-lang.org/dist/",
+                "https://mirrors.ustc.edu.cn/rust-static/dist/",
+                1,
+            ))
+        {
+            candidates.insert(0, mirror);
+        }
+        let mut response = None;
+        let mut last_error = None;
+        for candidate in candidates {
+            match self.client.get(candidate).send().await {
+                Ok(value) if value.status().is_success() => {
+                    response = Some(value);
+                    break;
+                }
+                Ok(value) => last_error = Some(network_error_status(value.status())),
+                Err(error) => last_error = Some(network_error(error)),
+            }
+        }
+        let response = response.ok_or_else(|| {
+            last_error.unwrap_or_else(|| network_error_status(reqwest::StatusCode::NOT_FOUND))
+        })?;
+        validate_archive_origin(&response, url)?;
         let response = response.error_for_status().map_err(network_error)?;
         if response
             .content_length()
@@ -444,7 +471,7 @@ pub(crate) fn configure_command_environment(
     data_root: &Path,
     bin: &Path,
 ) -> TorbenResult<()> {
-    let cargo_home = data_root.join("cargo-home");
+    let cargo_home = data_root.join("home");
     let temp = data_root.join("temp");
     for directory in [cargo_home.clone(), cargo_home.join("bin"), temp.clone()] {
         std::fs::create_dir_all(directory).map_err(io_error)?;
@@ -566,23 +593,37 @@ fn find_rust_prefix(root: &Path) -> TorbenResult<PathBuf> {
     Ok(prefixes.pop_first().expect("one prefix was checked"))
 }
 
-fn checksum_from_manifest(manifest: &str, archive_name: &str) -> TorbenResult<String> {
+fn distribution_from_manifest(manifest: &str, archive_name: &str) -> TorbenResult<(Url, String)> {
     let lines = manifest.lines().collect::<Vec<_>>();
     for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if trimmed.contains(archive_name)
             && (trimmed.starts_with("gz_url") || trimmed.starts_with("url"))
         {
+            let archive_url = trimmed
+                .split_once('"')
+                .and_then(|(_, value)| value.split_once('"').map(|(url, _)| url))
+                .and_then(|value| Url::parse(value).ok());
             for candidate in lines.iter().skip(index + 1).take(4) {
                 if let Some(value) = candidate
                     .trim()
                     .strip_prefix("gz_hash = \"")
                     .or_else(|| candidate.trim().strip_prefix("hash = \""))
+                    .or_else(|| candidate.trim().strip_prefix("hash-sha256 = \""))
                     .and_then(|value| value.strip_suffix('"'))
                     && value.len() == 64
                     && value.bytes().all(|byte| byte.is_ascii_hexdigit())
                 {
-                    return Ok(value.to_ascii_lowercase());
+                    let Some(archive_url) = archive_url.clone() else {
+                        continue;
+                    };
+                    if archive_url.host_str() != Some("static.rust-lang.org") {
+                        return Err(TorbenError::new(
+                            "rust_metadata_invalid",
+                            "The Rust channel manifest points outside the official distribution host.",
+                        ));
+                    }
+                    return Ok((archive_url, value.to_ascii_lowercase()));
                 }
             }
         }
@@ -613,6 +654,30 @@ fn validate_origin(response: &reqwest::Response, expected: &Url) -> TorbenResult
     Ok(())
 }
 
+fn validate_archive_origin(response: &reqwest::Response, expected: &Url) -> TorbenResult<()> {
+    let host = response.url().host_str();
+    let allowed_mirror = is_china_locale() && host == Some("mirrors.ustc.edu.cn");
+    if response.url().scheme() != expected.scheme()
+        || (host != expected.host_str() && !allowed_mirror)
+    {
+        return Err(TorbenError::new(
+            "unexpected_download_origin",
+            "Rust archive redirected outside the approved distribution origins.",
+        ));
+    }
+    Ok(())
+}
+
+fn is_china_locale() -> bool {
+    ["TORBEN_REGION", "LC_ALL", "LANG", "LANGUAGE"]
+        .into_iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .any(|value| {
+            let value = value.to_ascii_lowercase();
+            value.contains("zh_cn") || value.contains("zh-cn") || value.contains("china")
+        })
+}
+
 fn invalid_plan(field: &str) -> TorbenError {
     TorbenError::new(
         "plugin_install_plan_invalid",
@@ -633,6 +698,13 @@ fn network_error(error: reqwest::Error) -> TorbenError {
         "A Rust metadata or archive request failed.",
     )
     .with_detail("reason", error.to_string())
+}
+fn network_error_status(status: reqwest::StatusCode) -> TorbenError {
+    TorbenError::new(
+        "rust_network_error",
+        "A Rust metadata or archive request failed.",
+    )
+    .with_detail("status", status.to_string())
 }
 fn url_error(error: url::ParseError) -> TorbenError {
     TorbenError::new("rust_url_invalid", "The Rust provider URL is invalid.")

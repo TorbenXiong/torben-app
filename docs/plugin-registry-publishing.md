@@ -24,7 +24,7 @@ The config is strict JSON:
   "schemaVersion": 1,
   "sequence": 1,
   "generatedAt": "2026-08-23T00:00:00Z",
-  "minimumHostVersion": "0.1.0",
+  "minimumHostVersion": "0.0.1",
   "publishers": [
     {
       "id": "example.publisher",

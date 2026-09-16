@@ -6435,7 +6435,7 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "torben-cli"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "clap",
  "serde",
@@ -6448,7 +6448,7 @@ dependencies = [
 
 [[package]]
 name = "torben-contracts"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "semver",
  "serde",
@@ -6459,7 +6459,7 @@ dependencies = [
 
 [[package]]
 name = "torben-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "directories",
  "flate2",
@@ -6488,7 +6488,7 @@ dependencies = [
 
 [[package]]
 name = "torben-desktop"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "base64 0.23.1",
  "minisign-verify",
@@ -6509,7 +6509,7 @@ dependencies = [
 
 [[package]]
 name = "torben-plugin-codex"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6520,7 +6520,7 @@ dependencies = [
 
 [[package]]
 name = "torben-plugin-git"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6531,7 +6531,7 @@ dependencies = [
 
 [[package]]
 name = "torben-plugin-host"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek 3.0.0",
@@ -6546,7 +6546,7 @@ dependencies = [
 
 [[package]]
 name = "torben-plugin-mysql"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6557,7 +6557,7 @@ dependencies = [
 
 [[package]]
 name = "torben-plugin-node"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6568,7 +6568,7 @@ dependencies = [
 
 [[package]]
 name = "torben-plugin-postgresql"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6579,7 +6579,7 @@ dependencies = [
 
 [[package]]
 name = "torben-plugin-python"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6590,7 +6590,7 @@ dependencies = [
 
 [[package]]
 name = "torben-plugin-redis"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6601,7 +6601,7 @@ dependencies = [
 
 [[package]]
 name = "torben-plugin-rust"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6612,7 +6612,7 @@ dependencies = [
 
 [[package]]
 name = "torben-plugin-temurin"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6623,7 +6623,7 @@ dependencies = [
 
 [[package]]
 name = "torben-plugin-vscode"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6634,7 +6634,7 @@ dependencies = [
 
 [[package]]
 name = "torben-release-tools"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "base64 0.23.1",
  "minisign-verify",
@@ -6643,7 +6643,7 @@ dependencies = [
 
 [[package]]
 name = "torben-shim"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "torben-contracts",
  "torben-core",

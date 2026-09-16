@@ -51,18 +51,21 @@ identifiers (including `cargo` and `pip` for toolchain-aware plugins). These dec
 plugin or prove that it cannot access undeclared resources.
 
 First-party runtime and database plugins keep writable tool state they expose on the managed command
-path. Node's `npm` uses `userData/node`; Python's `pip` uses `userData/python` for its cache,
+path. Node's `npm` uses `userData/package-managers/node/npm` and `pnpm` uses
+`userData/package-managers/node/pnpm`; Python's `pip` uses `userData/package-managers/python/pip` for its cache,
 configuration, temporary files, and `--user` packages. Node's optional `pnpm` command is resolved
 from the same Torben-owned global prefix and uses a provider-owned pnpm store. Project-local dependencies and virtual
 environments remain owned by the project. A plugin that needs to download an installation-time
 resource must express it in its Core install plan so the host can apply the normal download,
 verification, transaction, progress, and recovery rules; plugins do not perform hidden secondary
-downloads. MySQL and Redis command history resolves below `userData/mysql` and `userData/redis`;
-Redis also uses its provider data directory as the default server working directory. Neither plugin
+downloads. Mutable database application state is kept separately below `userData/application-data`.
+MySQL and Redis command history resolves below each application's `client` directory; Redis uses
+`application-data/redis/instances/default` as its default server working directory. MySQL does not
+receive an implicit data directory. Neither plugin
 installs a Windows service. PostgreSQL uses EDB's installer only as a verified `extract-only`
 payload; Core does not permit the plugin to install services, pgAdmin, StackBuilder, drivers, or
 other secondary components. `PGPASSFILE`, `PGSERVICEFILE`, and `PGSYSCONFDIR` resolve below
-`userData/postgresql`, while `PGDATA` and cluster initialization remain explicit to prevent implicit
+`userData/application-data/postgresql/client`, while `PGDATA` and cluster initialization remain explicit to prevent implicit
 cross-major data upgrades. The current Java plugin does not include Maven or Gradle.
 
 Official packages are assembled with the repository-owned publisher described in

@@ -498,11 +498,11 @@ impl NodeProvider {
     /// pnpm is intentionally installed as a user-selected package (`npm
     /// install --global pnpm@<version>`), while the global prefix itself is
     /// owned by Torben and shared by selected Node.js versions.
-    pub fn pnpm_command_path(&self, data_root: &Path) -> TorbenResult<PathBuf> {
+    pub fn pnpm_command_path(&self, npm_data_root: &Path) -> TorbenResult<PathBuf> {
         let path = if cfg!(windows) {
-            data_root.join("global").join("pnpm.cmd")
+            npm_data_root.join("global").join("pnpm.cmd")
         } else {
-            data_root.join("global/bin/pnpm")
+            npm_data_root.join("global/bin/pnpm")
         };
         if path.is_file() {
             Ok(path)
@@ -702,13 +702,14 @@ where
 
 pub(crate) fn configure_command_environment(
     command: &mut std::process::Command,
-    data_root: &Path,
+    npm_data_root: &Path,
+    pnpm_data_root: &Path,
     bin: &Path,
 ) -> TorbenResult<()> {
     let global = if cfg!(windows) {
-        data_root.join("global")
+        npm_data_root.join("global")
     } else {
-        data_root.join("global/bin")
+        npm_data_root.join("global/bin")
     };
     // Keep mutable npm state separate from versioned installations so switching or
     // uninstalling a runtime preserves packages and configuration.
@@ -719,9 +720,8 @@ pub(crate) fn configure_command_environment(
         "temp",
         "compile-cache",
         "node-gyp",
-        "pnpm-store",
     ] {
-        std::fs::create_dir_all(data_root.join(directory)).map_err(|error| {
+        std::fs::create_dir_all(npm_data_root.join(directory)).map_err(|error| {
             TorbenError::new(
                 "node_environment_failed",
                 "Could not prepare managed Node.js data.",
@@ -736,8 +736,8 @@ pub(crate) fn configure_command_environment(
         )
         .with_detail("reason", error.to_string())
     })?;
-    for directory in ["config/pnpm-state", "cache/pnpm"] {
-        std::fs::create_dir_all(data_root.join(directory)).map_err(|error| {
+    for directory in ["store", "state", "cache"] {
+        std::fs::create_dir_all(pnpm_data_root.join(directory)).map_err(|error| {
             TorbenError::new(
                 "node_environment_failed",
                 "Could not prepare managed pnpm data.",
@@ -746,27 +746,33 @@ pub(crate) fn configure_command_environment(
         })?;
     }
     for (name, relative) in [
-        ("npm_config_cache", "cache"),
-        ("npm_config_prefix", "global"),
-        ("npm_config_userconfig", "config/npmrc"),
-        ("npm_config_globalconfig", "config/global-npmrc"),
-        ("npm_package_config_node_gyp_devdir", "node-gyp"),
-        ("NODE_REPL_HISTORY", "repl-history"),
-        ("NODE_COMPILE_CACHE", "compile-cache"),
-        ("TEMP", "temp"),
-        ("TMP", "temp"),
-        ("TMPDIR", "temp"),
+        ("npm_config_cache", npm_data_root.join("cache")),
+        ("npm_config_prefix", npm_data_root.join("global")),
+        ("npm_config_userconfig", npm_data_root.join("config/npmrc")),
+        (
+            "npm_config_globalconfig",
+            npm_data_root.join("config/global-npmrc"),
+        ),
+        (
+            "npm_package_config_node_gyp_devdir",
+            npm_data_root.join("node-gyp"),
+        ),
+        ("NODE_REPL_HISTORY", npm_data_root.join("repl-history")),
+        ("NODE_COMPILE_CACHE", npm_data_root.join("compile-cache")),
+        ("TEMP", npm_data_root.join("temp")),
+        ("TMP", npm_data_root.join("temp")),
+        ("TMPDIR", npm_data_root.join("temp")),
     ] {
-        command.env(name, data_root.join(relative));
+        command.env(name, relative);
     }
     // npm's update notifier performs an unsolicited registry request. Package
     // downloads should be initiated by the user's command and use the managed
     // cache above.
     command.env("npm_config_update_notifier", "false");
-    command.env("pnpm_config_store_dir", data_root.join("pnpm-store"));
+    command.env("pnpm_config_store_dir", pnpm_data_root.join("store"));
     command.env("pnpm_config_global_bin_dir", &global);
-    command.env("pnpm_config_state_dir", data_root.join("config/pnpm-state"));
-    command.env("pnpm_config_cache_dir", data_root.join("cache/pnpm"));
+    command.env("pnpm_config_state_dir", pnpm_data_root.join("state"));
+    command.env("pnpm_config_cache_dir", pnpm_data_root.join("cache"));
     let inherited = std::env::var_os("PATH").unwrap_or_default();
     let path = std::env::join_paths(
         [bin.to_path_buf(), global]
@@ -811,7 +817,7 @@ fn run_health_command(command: &str, executable: &Path, path: &OsString) -> Torb
     ));
     let mut process = process::command(executable);
     let result = (|| {
-        configure_command_environment(&mut process, &data, &bin)?;
+        configure_command_environment(&mut process, &data.join("npm"), &data.join("pnpm"), &bin)?;
         process
             .arg("--version")
             .env("PATH", path)
@@ -1278,8 +1284,8 @@ mod tests {
     };
 
     use super::{
-        ArchiveKind, NodeProvider, checksum_for, resolve_from_versions, sha256_file,
-        validate_package_manager_version,
+        ArchiveKind, NodeProvider, checksum_for, configure_command_environment,
+        resolve_from_versions, sha256_file, validate_package_manager_version,
     };
     use crate::{
         StateStore, TorbenCore, TorbenPaths,
@@ -1304,6 +1310,46 @@ mod tests {
             error.details.get("command").map(String::as_str),
             Some("npm")
         );
+    }
+
+    #[test]
+    fn separates_npm_and_pnpm_state_directories() {
+        let root = tempdir().unwrap();
+        let npm = root.path().join("package-managers/node/npm");
+        let pnpm = root.path().join("package-managers/node/pnpm");
+        let bin = root.path().join("apps/node/current");
+        let mut command = std::process::Command::new("node");
+
+        configure_command_environment(&mut command, &npm, &pnpm, &bin).unwrap();
+
+        let env = command
+            .get_envs()
+            .filter_map(|(name, value)| {
+                value.map(|value| (name.to_string_lossy().into_owned(), value.to_owned()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(env["npm_config_cache"], npm.join("cache").into_os_string());
+        assert_eq!(
+            env["npm_config_prefix"],
+            npm.join("global").into_os_string()
+        );
+        assert_eq!(
+            env["pnpm_config_store_dir"],
+            pnpm.join("store").into_os_string()
+        );
+        assert_eq!(
+            env["pnpm_config_state_dir"],
+            pnpm.join("state").into_os_string()
+        );
+        assert_eq!(
+            env["pnpm_config_cache_dir"],
+            pnpm.join("cache").into_os_string()
+        );
+        assert!(npm.join("cache").is_dir());
+        assert!(npm.join("global").is_dir());
+        assert!(pnpm.join("store").is_dir());
+        assert!(pnpm.join("state").is_dir());
+        assert!(pnpm.join("cache").is_dir());
     }
 
     #[test]

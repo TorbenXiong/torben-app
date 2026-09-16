@@ -9,15 +9,17 @@ use minisign_verify::PublicKey;
 use serde::Serialize;
 use tauri::State;
 use torben_contracts::{
-    AppId, ApplicationDescriptor, ExactVersion, InstallRecord, ManagedLibraryMigrationResult,
+    AppId, ApplicationDescriptor, BackupDatabaseInstanceRequest, CreateDatabaseInstanceRequest,
+    DatabaseBackup, DatabaseEngine, DatabaseInstance, DatabaseInstanceTarget,
+    DeleteDatabaseInstanceRequest, ExactVersion, InstallRecord, ManagedLibraryMigrationResult,
     ManagedLibraryStatus, ManagedToPackageMigrationPlan, ManagedToPackageMigrationResult,
     ManagedUpdateCheck, ManagedUpdateResult, OperationEvent, OperationId, PackageCoordinate,
     PackageInstallationRecord, PackageToManagedMigrationPlan, PackageToManagedMigrationRequest,
-    PackageToManagedMigrationResult, PluginId, SelectionRecord, ShellIntegrationStatus,
-    SourceAction, SourceAdapterKind, SourceAdapterStatus, SourceExecutionRequest,
-    SourceExecutionResult, SourceMigrationPlan, SourceMigrationRequest, SourceMigrationResult,
-    SourceOperationPlan, SourcePackageKind, SourcePackageVersion, TorbenError, UserSettings,
-    VersionDescriptor,
+    PackageToManagedMigrationResult, PluginId, RestoreDatabaseInstanceRequest, SelectionRecord,
+    ShellIntegrationStatus, SourceAction, SourceAdapterKind, SourceAdapterStatus,
+    SourceExecutionRequest, SourceExecutionResult, SourceMigrationPlan, SourceMigrationRequest,
+    SourceMigrationResult, SourceOperationPlan, SourcePackageKind, SourcePackageVersion,
+    TorbenError, UserSettings, VersionDescriptor,
     plugin::{PluginRegistryStatus, PluginSummary, SchemaActionResult, SchemaPage},
 };
 #[cfg(all(windows, not(debug_assertions)))]
@@ -349,6 +351,94 @@ async fn uninstall_app_for_core(
 ) -> Result<(), TorbenError> {
     core.uninstall(&AppId::new(app_id)?, &ExactVersion::from_str(&version)?)
         .await
+}
+
+#[tauri::command]
+async fn list_database_instances(
+    core: State<'_, Arc<TorbenCore>>,
+    engine: Option<DatabaseEngine>,
+) -> Result<Vec<DatabaseInstance>, TorbenError> {
+    let core = Arc::clone(core.inner());
+    run_database_task(move || core.database_instances(engine)).await
+}
+
+#[tauri::command]
+async fn create_database_instance(
+    core: State<'_, Arc<TorbenCore>>,
+    request: CreateDatabaseInstanceRequest,
+) -> Result<DatabaseInstance, TorbenError> {
+    let core = Arc::clone(core.inner());
+    run_database_task(move || core.create_database_instance(request)).await
+}
+
+#[tauri::command]
+async fn start_database_instance(
+    core: State<'_, Arc<TorbenCore>>,
+    target: DatabaseInstanceTarget,
+) -> Result<DatabaseInstance, TorbenError> {
+    let core = Arc::clone(core.inner());
+    run_database_task(move || core.start_database_instance(target)).await
+}
+
+#[tauri::command]
+async fn stop_database_instance(
+    core: State<'_, Arc<TorbenCore>>,
+    target: DatabaseInstanceTarget,
+) -> Result<DatabaseInstance, TorbenError> {
+    let core = Arc::clone(core.inner());
+    run_database_task(move || core.stop_database_instance(target)).await
+}
+
+#[tauri::command]
+async fn database_instance_status(
+    core: State<'_, Arc<TorbenCore>>,
+    target: DatabaseInstanceTarget,
+) -> Result<DatabaseInstance, TorbenError> {
+    let core = Arc::clone(core.inner());
+    run_database_task(move || core.database_instance_status(target)).await
+}
+
+#[tauri::command]
+async fn backup_database_instance(
+    core: State<'_, Arc<TorbenCore>>,
+    request: BackupDatabaseInstanceRequest,
+) -> Result<DatabaseBackup, TorbenError> {
+    let core = Arc::clone(core.inner());
+    run_database_task(move || core.backup_database_instance(request)).await
+}
+
+#[tauri::command]
+async fn restore_database_instance(
+    core: State<'_, Arc<TorbenCore>>,
+    request: RestoreDatabaseInstanceRequest,
+) -> Result<DatabaseInstance, TorbenError> {
+    let core = Arc::clone(core.inner());
+    run_database_task(move || core.restore_database_instance(request)).await
+}
+
+#[tauri::command]
+async fn delete_database_instance(
+    core: State<'_, Arc<TorbenCore>>,
+    request: DeleteDatabaseInstanceRequest,
+) -> Result<(), TorbenError> {
+    let core = Arc::clone(core.inner());
+    run_database_task(move || core.delete_database_instance(request)).await
+}
+
+async fn run_database_task<T, F>(task: F) -> Result<T, TorbenError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, TorbenError> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|error| {
+            TorbenError::new(
+                "database_instance_task_failed",
+                "The database instance task could not complete.",
+            )
+            .with_detail("reason", error.to_string())
+        })?
 }
 
 #[tauri::command]
@@ -1059,18 +1149,26 @@ fn prepare_windows_application(
     let target_executable = application_directory.join("TorbenApp.exe");
     if !same_windows_path(executable, &target_executable) {
         replace_windows_executable(executable, &target_executable)?;
-        std::process::Command::new(&target_executable)
+        let mut relaunch = std::process::Command::new(&target_executable);
+        relaunch
             .arg("--torben-relocated-source")
             .arg(executable)
-            .spawn()
-            .map_err(|error| {
-                TorbenError::new(
-                    "application_relaunch_failed",
-                    "The relocated Torben App could not be started.",
-                )
-                .with_detail("path", target_executable.display().to_string())
-                .with_detail("reason", error.to_string())
-            })?;
+            .current_dir(application_directory)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // The source process exits immediately after the replacement. Detach the new process
+        // from inherited handles so Explorer/terminal shutdown cannot close the relaunched app.
+        use std::os::windows::process::CommandExt;
+        relaunch.creation_flags(0x0000_0008); // DETACHED_PROCESS
+        relaunch.spawn().map_err(|error| {
+            TorbenError::new(
+                "application_relaunch_failed",
+                "The relocated Torben App could not be started.",
+            )
+            .with_detail("path", target_executable.display().to_string())
+            .with_detail("reason", error.to_string())
+        })?;
         return Ok(None);
     }
 
@@ -1473,6 +1571,14 @@ fn configure_core_commands(
             select_version,
             clear_selection,
             uninstall_app,
+            list_database_instances,
+            create_database_instance,
+            start_database_instance,
+            stop_database_instance,
+            database_instance_status,
+            backup_database_instance,
+            restore_database_instance,
+            delete_database_instance,
             check_managed_updates,
             apply_managed_update,
             set_managed_auto_update,

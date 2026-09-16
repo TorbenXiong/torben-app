@@ -10,11 +10,10 @@ const repositoryRoot = dirname(scriptDirectory);
 const desktopRoot = join(repositoryRoot, "apps", "desktop");
 const releaseRoot = join(repositoryRoot, "target", "release");
 const outputRoot = join(repositoryRoot, "artifacts", "torben-app-portable-windows-x64");
-const packageManager = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "pnpm";
-
-function packageManagerArgs(args) {
-  return process.platform === "win32" ? ["/d", "/s", "/c", "pnpm.cmd", ...args] : args;
-}
+const nodeExecutable = process.execPath;
+const tauriCli = join(desktopRoot, "node_modules", "@tauri-apps", "cli", "tauri.js");
+const typescriptCli = join(desktopRoot, "node_modules", "typescript", "bin", "tsc");
+const viteCli = join(desktopRoot, "node_modules", "vite", "bin", "vite.js");
 
 if (process.platform !== "win32") {
   throw new Error("The Windows portable bundle can only be built on Windows.");
@@ -28,6 +27,7 @@ execFileSync(
     "build",
     "--release",
     "--locked",
+    "--offline",
     "-p",
     "torben-plugin-node",
     "-p",
@@ -50,19 +50,29 @@ execFileSync(
     stdio: "inherit",
   },
 );
+execFileSync(nodeExecutable, [typescriptCli, "--noEmit"], {
+  cwd: desktopRoot,
+  stdio: "inherit",
+});
+execFileSync(nodeExecutable, [viteCli, "build"], {
+  cwd: desktopRoot,
+  stdio: "inherit",
+});
 execFileSync(
-  packageManager,
-  packageManagerArgs([
-    "exec",
-    "tauri",
+  nodeExecutable,
+  [
+    tauriCli,
     "build",
     "--ci",
     "--no-bundle",
     "--config",
     "src-tauri/tauri.bundle.conf.json",
+    "--config",
+    '{"build":{"beforeBuildCommand":null}}',
     "--",
     "--locked",
-  ]),
+    "--offline",
+  ],
   {
     cwd: desktopRoot,
     stdio: "inherit",

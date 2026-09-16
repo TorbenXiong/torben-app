@@ -2,15 +2,16 @@ use std::{path::PathBuf, str::FromStr, sync::Mutex};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use torben_contracts::{
-    AppId, ApplicationDescriptor, ExactVersion, InstallRecord, InstallScope, InstallSource,
-    OperationId, OperationKind, OperationState, PackageCoordinate, PackageInstallationRecord,
-    PluginId, SelectionRecord, SourceAdapterKind, SourceId, SourcePackageKind,
-    SourcePackageVersion, TorbenError, TorbenResult, UserSettings, plugin::PluginOrigin,
+    AppId, ApplicationDescriptor, DatabaseEngine, DatabaseInstance, DatabaseInstanceName,
+    DatabaseInstanceState, ExactVersion, InstallRecord, InstallScope, InstallSource, OperationId,
+    OperationKind, OperationState, PackageCoordinate, PackageInstallationRecord, PluginId,
+    SelectionRecord, SourceAdapterKind, SourceId, SourcePackageKind, SourcePackageVersion,
+    TorbenError, TorbenResult, UserSettings, plugin::PluginOrigin,
 };
 
 const USER_SETTINGS_KEY: &str = "user_preferences";
 const MANAGED_LIBRARY_KEY: &str = "managed_library_path";
-const CURRENT_SCHEMA_VERSION: i64 = 4;
+const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 pub struct StateStore {
     connection: Mutex<Connection>,
@@ -151,6 +152,7 @@ impl StateStore {
             .map_err(database_error)?;
         apply_package_installation_migration(&connection)?;
         apply_application_catalog_migration(&connection)?;
+        apply_database_instance_migration(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -370,6 +372,141 @@ impl StateStore {
             )
             .map_err(database_error)?;
         Ok(())
+    }
+
+    pub fn add_database_instance(&self, instance: &DatabaseInstance) -> TorbenResult<()> {
+        let connection = self.lock()?;
+        connection
+            .execute(
+                "INSERT INTO database_instances
+                 (engine, name, runtime_version, port, data_path, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    instance.engine.as_str(),
+                    instance.name.as_str(),
+                    instance.runtime_version.to_string(),
+                    i64::from(instance.port),
+                    instance.data_path,
+                    instance.created_at,
+                ],
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::SqliteFailure(ref failure, _)
+                    if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    TorbenError::new(
+                        "database_instance_conflict",
+                        "The instance name or network port is already managed.",
+                    )
+                    .with_detail("engine", instance.engine.to_string())
+                    .with_detail("name", instance.name.to_string())
+                    .with_detail("port", instance.port.to_string())
+                }
+                _ => database_error(error),
+            })?;
+        Ok(())
+    }
+
+    pub fn get_database_instance(
+        &self,
+        engine: DatabaseEngine,
+        name: &DatabaseInstanceName,
+    ) -> TorbenResult<Option<DatabaseInstance>> {
+        let connection = self.lock()?;
+        let raw = connection
+            .query_row(
+                "SELECT engine, name, runtime_version, port, data_path, created_at
+                 FROM database_instances WHERE engine=?1 AND name=?2",
+                params![engine.as_str(), name.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(database_error)?;
+        raw.map(parse_database_instance).transpose()
+    }
+
+    pub fn list_database_instances(
+        &self,
+        engine: Option<DatabaseEngine>,
+    ) -> TorbenResult<Vec<DatabaseInstance>> {
+        let connection = self.lock()?;
+        let sql = if engine.is_some() {
+            "SELECT engine, name, runtime_version, port, data_path, created_at
+             FROM database_instances WHERE engine=?1 ORDER BY name"
+        } else {
+            "SELECT engine, name, runtime_version, port, data_path, created_at
+             FROM database_instances ORDER BY engine, name"
+        };
+        let mut statement = connection.prepare(sql).map_err(database_error)?;
+        let collect = |row: &rusqlite::Row<'_>| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        };
+        let rows = match engine {
+            Some(engine) => statement.query_map([engine.as_str()], collect),
+            None => statement.query_map([], collect),
+        }
+        .map_err(database_error)?;
+        rows.map(|row| {
+            row.map_err(database_error)
+                .and_then(parse_database_instance)
+        })
+        .collect()
+    }
+
+    pub fn remove_database_instance(
+        &self,
+        engine: DatabaseEngine,
+        name: &DatabaseInstanceName,
+    ) -> TorbenResult<()> {
+        let connection = self.lock()?;
+        let changed = connection
+            .execute(
+                "DELETE FROM database_instances WHERE engine=?1 AND name=?2",
+                params![engine.as_str(), name.as_str()],
+            )
+            .map_err(database_error)?;
+        if changed == 0 {
+            return Err(TorbenError::new(
+                "database_instance_not_found",
+                "The database instance is not managed by Torben App.",
+            )
+            .with_detail("engine", engine.to_string())
+            .with_detail("name", name.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn database_runtime_is_referenced(
+        &self,
+        engine: DatabaseEngine,
+        version: &ExactVersion,
+    ) -> TorbenResult<bool> {
+        let connection = self.lock()?;
+        let count = connection
+            .query_row(
+                "SELECT COUNT(*) FROM database_instances
+                 WHERE engine=?1 AND runtime_version=?2",
+                params![engine.as_str(), version.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(database_error)?;
+        Ok(count > 0)
     }
 
     pub fn upsert_package_installation(
@@ -1109,7 +1246,7 @@ impl StateStore {
                 settings.validate().map_err(|error| {
                     TorbenError::new(
                         "settings_state_invalid",
-                        "The saved user settings violate an update preference invariant.",
+                        "The saved user settings violate a settings invariant.",
                     )
                     .with_detail("key", USER_SETTINGS_KEY)
                     .with_detail("reason", format!("{}: {}", error.code, error.message))
@@ -1463,6 +1600,50 @@ fn apply_application_catalog_migration(connection: &Connection) -> TorbenResult<
     Ok(())
 }
 
+fn apply_database_instance_migration(connection: &Connection) -> TorbenResult<()> {
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS database_instances (
+               engine TEXT NOT NULL CHECK(engine IN ('mysql', 'redis', 'postgresql')),
+               name TEXT NOT NULL,
+               runtime_version TEXT NOT NULL,
+               port INTEGER NOT NULL UNIQUE CHECK(port BETWEEN 1 AND 65535),
+               data_path TEXT NOT NULL UNIQUE,
+               created_at TEXT NOT NULL,
+               PRIMARY KEY (engine, name),
+               FOREIGN KEY (engine, runtime_version)
+                 REFERENCES installations(app_id, version) ON DELETE RESTRICT
+             );
+             INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+               VALUES (5, datetime('now'));",
+        )
+        .map_err(database_error)?;
+    Ok(())
+}
+
+fn parse_database_instance(
+    raw: (String, String, String, i64, String, String),
+) -> TorbenResult<DatabaseInstance> {
+    let port = u16::try_from(raw.3).map_err(|error| {
+        TorbenError::new(
+            "database_instance_state_invalid",
+            "A managed database instance has an invalid port.",
+        )
+        .with_detail("port", raw.3.to_string())
+        .with_detail("reason", error.to_string())
+    })?;
+    Ok(DatabaseInstance {
+        engine: raw.0.parse()?,
+        name: DatabaseInstanceName::new(raw.1)?,
+        runtime_version: ExactVersion::from_str(&raw.2)?,
+        port,
+        data_path: raw.4,
+        created_at: raw.5,
+        state: DatabaseInstanceState::Stopped,
+        pid: None,
+    })
+}
+
 fn database_error(error: rusqlite::Error) -> TorbenError {
     TorbenError::new("database_error", "The state database operation failed.")
         .with_detail("reason", error.to_string())
@@ -1474,7 +1655,8 @@ mod tests {
 
     use tempfile::tempdir;
     use torben_contracts::{
-        AppId, ApplicationDescriptor, ExactVersion, InstallRecord, InstallScope, InstallSource,
+        AppId, ApplicationDescriptor, DatabaseEngine, DatabaseInstance, DatabaseInstanceName,
+        DatabaseInstanceState, ExactVersion, InstallRecord, InstallScope, InstallSource,
         LanguagePreference, PackageCoordinate, PackageInstallationRecord, SourceAdapterKind,
         SourceId, SourcePackageKind, SourcePackageVersion, ThemePreference, UpdatePreferences,
         UserSettings, plugin::PluginOrigin,
@@ -1497,7 +1679,63 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
 
-        assert_eq!(versions, [1, 2, 3, CURRENT_SCHEMA_VERSION]);
+        assert_eq!(versions, [1, 2, 3, 4, CURRENT_SCHEMA_VERSION]);
+    }
+
+    #[test]
+    fn database_instances_bind_a_unique_port_to_an_installed_runtime() {
+        let directory = tempdir().unwrap();
+        let store = StateStore::open(directory.path().join("state.db")).unwrap();
+        let runtime = InstallRecord {
+            app_id: AppId::new("redis").unwrap(),
+            version: ExactVersion::from_str("8.2.1").unwrap(),
+            source_id: SourceId::new("redis.windows-community").unwrap(),
+            scope: InstallScope::Managed,
+            install_path: directory.path().join("redis").display().to_string(),
+            installed_at: "fixture".to_owned(),
+            health: "healthy".to_owned(),
+        };
+        store.add_installation(&runtime).unwrap();
+        let instance = DatabaseInstance {
+            engine: DatabaseEngine::Redis,
+            name: DatabaseInstanceName::new("local").unwrap(),
+            runtime_version: runtime.version.clone(),
+            port: 6379,
+            data_path: directory.path().join("data").display().to_string(),
+            created_at: "fixture".to_owned(),
+            state: DatabaseInstanceState::Stopped,
+            pid: None,
+        };
+        store.add_database_instance(&instance).unwrap();
+
+        assert_eq!(
+            store
+                .get_database_instance(DatabaseEngine::Redis, &instance.name)
+                .unwrap(),
+            Some(instance.clone())
+        );
+        assert!(
+            store
+                .database_runtime_is_referenced(DatabaseEngine::Redis, &runtime.version)
+                .unwrap()
+        );
+
+        let mut conflict = instance.clone();
+        conflict.name = DatabaseInstanceName::new("other").unwrap();
+        conflict.data_path = directory.path().join("other").display().to_string();
+        assert_eq!(
+            store.add_database_instance(&conflict).unwrap_err().code,
+            "database_instance_conflict"
+        );
+
+        store
+            .remove_database_instance(DatabaseEngine::Redis, &instance.name)
+            .unwrap();
+        assert!(
+            !store
+                .database_runtime_is_referenced(DatabaseEngine::Redis, &runtime.version)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -1529,14 +1767,20 @@ mod tests {
         let directory = tempdir().unwrap();
         let path = directory.path().join("state.db");
         let connection = rusqlite::Connection::open(&path).unwrap();
+        let future_version = CURRENT_SCHEMA_VERSION + 1;
         connection
             .execute_batch(
                 "CREATE TABLE schema_migrations (
                    version INTEGER PRIMARY KEY,
                    applied_at TEXT NOT NULL
-                 );
-                 INSERT INTO schema_migrations(version, applied_at)
-                   VALUES (5, datetime('now'));",
+                 );",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO schema_migrations(version, applied_at)
+                 VALUES (?1, datetime('now'))",
+                [future_version],
             )
             .unwrap();
         drop(connection);
@@ -1546,7 +1790,7 @@ mod tests {
         };
 
         assert_eq!(error.code, "database_schema_newer");
-        assert_eq!(error.details["databaseVersion"], "5");
+        assert_eq!(error.details["databaseVersion"], future_version.to_string());
         assert_eq!(
             error.details["supportedVersion"],
             CURRENT_SCHEMA_VERSION.to_string()
@@ -1911,6 +2155,7 @@ mod tests {
             theme: ThemePreference::Light,
             language: LanguagePreference::SimplifiedChinese,
             updates: UpdatePreferences::default(),
+            ..UserSettings::default()
         };
 
         store.save_user_settings(&settings).unwrap();
