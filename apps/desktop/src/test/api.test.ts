@@ -10,9 +10,13 @@ vi.mock("@tauri-apps/plugin-updater", () => ({ check: vi.fn() }));
 
 import {
   backupDatabaseInstance,
+  checkDatabaseInstancePort,
   clearSelection,
   createDatabaseInstance,
   deleteDatabaseInstance,
+  getDatabaseConnectionInfo,
+  getDatabaseInstanceDataPath,
+  getDatabaseInstanceLogPath,
   getOperationEvents,
   getVersions,
   installApp,
@@ -20,6 +24,7 @@ import {
   installBundledPythonPlugin,
   listDatabaseInstances,
   onVersionCatalogUpdated,
+  openDatabaseShell,
   refreshDatabaseInstanceStatus,
   restoreDatabaseInstance,
   selectVersion,
@@ -97,6 +102,42 @@ describe("Tauri application lifecycle command mapping", () => {
       ["restore_database_instance", { request: { ...target, source: "C:/backup/local.rdb" } }],
       ["stop_database_instance", { target }],
       ["delete_database_instance", { request: { ...target, confirm: true } }],
+    ]);
+  });
+
+  it("maps database instance connection and diagnostic actions", async () => {
+    const target = { engine: "postgresql", name: "local" } as const;
+    const connectionInfo = {
+      engine: "postgresql",
+      host: "127.0.0.1",
+      port: 5432,
+      username: "postgres",
+      database: "postgres",
+      connectionString: "postgresql://postgres@127.0.0.1:5432/postgres",
+      shellCommand: "psql --host=127.0.0.1 --port=5432 --username=postgres --dbname=postgres",
+    } as const;
+    const portStatus = { port: 5432, listening: true, available: false } as const;
+    invokeMock
+      .mockResolvedValueOnce(connectionInfo)
+      .mockResolvedValueOnce(portStatus)
+      .mockResolvedValueOnce(
+        "C:/Torben/application-data/postgresql/instances/local/logs/postgresql.log",
+      )
+      .mockResolvedValueOnce("C:/Torben/application-data/postgresql/instances/local/data")
+      .mockResolvedValueOnce(undefined);
+
+    await expect(getDatabaseConnectionInfo(target)).resolves.toEqual(connectionInfo);
+    await expect(checkDatabaseInstancePort(target)).resolves.toEqual(portStatus);
+    await expect(getDatabaseInstanceLogPath(target)).resolves.toContain("postgresql.log");
+    await expect(getDatabaseInstanceDataPath(target)).resolves.toContain("/data");
+    await openDatabaseShell(target);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["database_connection_info", { target }],
+      ["database_instance_port_status", { target }],
+      ["database_instance_log_path", { target }],
+      ["database_instance_data_path", { target }],
+      ["open_database_shell", { target }],
     ]);
   });
 

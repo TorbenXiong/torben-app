@@ -10,11 +10,12 @@ use serde::Serialize;
 use tauri::State;
 use torben_contracts::{
     AppId, ApplicationDescriptor, BackupDatabaseInstanceRequest, CreateDatabaseInstanceRequest,
-    DatabaseBackup, DatabaseEngine, DatabaseInstance, DatabaseInstanceTarget,
-    DeleteDatabaseInstanceRequest, ExactVersion, InstallRecord, ManagedLibraryMigrationResult,
-    ManagedLibraryStatus, ManagedToPackageMigrationPlan, ManagedToPackageMigrationResult,
-    ManagedUpdateCheck, ManagedUpdateResult, OperationEvent, OperationId, PackageCoordinate,
-    PackageInstallationRecord, PackageToManagedMigrationPlan, PackageToManagedMigrationRequest,
+    DatabaseBackup, DatabaseConnectionInfo, DatabaseEngine, DatabaseInstance,
+    DatabaseInstanceTarget, DatabasePortStatus, DeleteDatabaseInstanceRequest, ExactVersion,
+    InstallRecord, ManagedLibraryMigrationResult, ManagedLibraryStatus,
+    ManagedToPackageMigrationPlan, ManagedToPackageMigrationResult, ManagedUpdateCheck,
+    ManagedUpdateResult, OperationEvent, OperationId, PackageCoordinate, PackageInstallationRecord,
+    PackageToManagedMigrationPlan, PackageToManagedMigrationRequest,
     PackageToManagedMigrationResult, PluginId, RestoreDatabaseInstanceRequest, SelectionRecord,
     ShellIntegrationStatus, SourceAction, SourceAdapterKind, SourceAdapterStatus,
     SourceExecutionRequest, SourceExecutionResult, SourceMigrationPlan, SourceMigrationRequest,
@@ -396,6 +397,59 @@ async fn database_instance_status(
 ) -> Result<DatabaseInstance, TorbenError> {
     let core = Arc::clone(core.inner());
     run_database_task(move || core.database_instance_status(target)).await
+}
+
+#[tauri::command]
+async fn database_connection_info(
+    core: State<'_, Arc<TorbenCore>>,
+    target: DatabaseInstanceTarget,
+) -> Result<DatabaseConnectionInfo, TorbenError> {
+    let core = Arc::clone(core.inner());
+    run_database_task(move || core.database_connection_info(target)).await
+}
+
+#[tauri::command]
+async fn database_instance_port_status(
+    core: State<'_, Arc<TorbenCore>>,
+    target: DatabaseInstanceTarget,
+) -> Result<DatabasePortStatus, TorbenError> {
+    let core = Arc::clone(core.inner());
+    run_database_task(move || core.database_instance_port_status(target)).await
+}
+
+#[tauri::command]
+async fn database_instance_log_path(
+    core: State<'_, Arc<TorbenCore>>,
+    target: DatabaseInstanceTarget,
+) -> Result<String, TorbenError> {
+    let core = Arc::clone(core.inner());
+    run_database_task(move || {
+        core.database_instance_log_path(target)
+            .map(|path| path.display().to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn database_instance_data_path(
+    core: State<'_, Arc<TorbenCore>>,
+    target: DatabaseInstanceTarget,
+) -> Result<String, TorbenError> {
+    let core = Arc::clone(core.inner());
+    run_database_task(move || {
+        core.database_instance_data_path(target)
+            .map(|path| path.display().to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn open_database_shell(
+    core: State<'_, Arc<TorbenCore>>,
+    target: DatabaseInstanceTarget,
+) -> Result<(), TorbenError> {
+    let core = Arc::clone(core.inner());
+    run_database_task(move || core.open_database_shell(target)).await
 }
 
 #[tauri::command]
@@ -1576,6 +1630,11 @@ fn configure_core_commands(
             start_database_instance,
             stop_database_instance,
             database_instance_status,
+            database_connection_info,
+            database_instance_port_status,
+            database_instance_log_path,
+            database_instance_data_path,
+            open_database_shell,
             backup_database_instance,
             restore_database_instance,
             delete_database_instance,

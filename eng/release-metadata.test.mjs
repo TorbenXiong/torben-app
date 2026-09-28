@@ -14,11 +14,12 @@ import {
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const revision = "a".repeat(40);
+const releaseVersion = workspaceVersion(repositoryRoot).version;
 
 function fixtureDirectory() {
   const root = mkdtempSync(join(tmpdir(), "torben-release-metadata-"));
   mkdirSync(join(root, "cli"));
-  writeFileSync(join(root, "Torben-App_0.0.1_x64-setup.exe"), "desktop-fixture");
+  writeFileSync(join(root, `Torben-App_${releaseVersion}_x64-setup.exe`), "desktop-fixture");
   writeFileSync(join(root, "cli", "torben.exe"), "cli-fixture");
   return root;
 }
@@ -43,7 +44,7 @@ function developmentOptions(artifacts) {
 
 test("workspace user-facing versions remain aligned", () => {
   const result = workspaceVersion(repositoryRoot);
-  assert.equal(result.version, "0.0.1");
+  assert.equal(result.version, releaseVersion);
   assert.equal(new Set(Object.values(result.sources)).size, 1);
 });
 
@@ -59,7 +60,7 @@ test("creates and verifies deterministic SHA-256 release metadata", async () => 
     assert.equal(metadata.signingStatus, "unsigned");
     assert.deepEqual(
       metadata.artifacts.map((artifact) => artifact.path),
-      ["cli/torben.exe", "Torben-App_0.0.1_x64-setup.exe"],
+      ["cli/torben.exe", `Torben-App_${releaseVersion}_x64-setup.exe`],
     );
     assert.equal(
       readFileSync(join(first, "release-metadata.json"), "utf8"),
@@ -109,7 +110,7 @@ test("official metadata fails closed without a signed version tag", async () => 
     await assert.rejects(
       createReleaseMetadata({
         ...developmentOptions(root),
-        sourceRef: "refs/tags/v0.0.1",
+        sourceRef: `refs/tags/v${releaseVersion}`,
         releaseKind: "official",
         signingStatus: "unsigned",
       }),
@@ -122,7 +123,7 @@ test("official metadata fails closed without a signed version tag", async () => 
         releaseKind: "official",
         signingStatus: "signed",
       }),
-      /require source ref refs\/tags\/v0\.0\.1/,
+      new RegExp(`require source ref refs/tags/v${releaseVersion.replaceAll(".", "\\.")}`),
     );
   } finally {
     removeFixture(root);
@@ -169,13 +170,17 @@ test("command-line create and verify entry points round-trip", () => {
       { encoding: "utf8" },
     );
     assert.equal(created.status, 0, created.stderr);
-    assert.match(created.stdout, /Created Torben App 0\.0\.1 x86_64-pc-windows-msvc/);
+    assert.ok(
+      created.stdout.includes(`Created Torben App ${releaseVersion} x86_64-pc-windows-msvc`),
+    );
 
     const verified = spawnSync(process.execPath, [script, "verify", "--artifacts", root], {
       encoding: "utf8",
     });
     assert.equal(verified.status, 0, verified.stderr);
-    assert.match(verified.stdout, /Verified Torben App 0\.0\.1 x86_64-pc-windows-msvc/);
+    assert.ok(
+      verified.stdout.includes(`Verified Torben App ${releaseVersion} x86_64-pc-windows-msvc`),
+    );
   } finally {
     removeFixture(root);
   }

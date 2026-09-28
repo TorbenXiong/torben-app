@@ -49,7 +49,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 const bundledPlugin: PluginSummary = {
   id: "app.torben.plugin.node",
   displayName: "Node.js",
-  version: "0.0.1",
+  version: "0.0.2",
   enabled: true,
   origin: "built_in",
   publisher: "Torben App",
@@ -65,7 +65,7 @@ const bundledPlugin: PluginSummary = {
 const installedTemurinPlugin: PluginSummary = {
   id: "app.torben.plugin.temurin",
   displayName: "Java",
-  version: "0.0.1",
+  version: "0.0.2",
   enabled: true,
   origin: "built_in",
   publisher: "Torben App",
@@ -86,7 +86,7 @@ const availableTemurinPlugin: PluginSummary = {
 const installedPythonPlugin: PluginSummary = {
   id: "app.torben.plugin.python",
   displayName: "Python",
-  version: "0.0.1",
+  version: "0.0.2",
   enabled: true,
   origin: "built_in",
   publisher: "Torben App",
@@ -196,7 +196,7 @@ describe("Torben App shell", () => {
     expect(screen.getByRole("menuitem", { name: "Logs" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "About Torben App" }));
     const aboutDialog = screen.getByRole("dialog", { name: "Torben App" });
-    expect(aboutDialog).toHaveTextContent("Version 0.0.1");
+    expect(aboutDialog).toHaveTextContent("Version 0.0.2");
     expect(aboutDialog).toHaveTextContent("local-first application manager for Windows");
     fireEvent.click(within(aboutDialog).getByText("Close", { selector: "button" }));
     expect(screen.queryByRole("dialog", { name: "Torben App" })).not.toBeInTheDocument();
@@ -760,13 +760,13 @@ describe("Torben App shell", () => {
   it("keeps development builds offline when no updater key was compiled", async () => {
     const configuration = {
       configured: false,
-      currentVersion: "0.0.1",
+      currentVersion: "0.0.2",
       endpoint: "https://github.com/TorbenXiong/torben-app/releases/latest/download/latest.json",
     };
     expect(initialTorbenUpdateStatus(configuration).state).toBe("unconfigured");
     await expect(checkTorbenUpdate(configuration)).resolves.toMatchObject({
       state: "unconfigured",
-      currentVersion: "0.0.1",
+      currentVersion: "0.0.2",
       availableVersion: null,
     });
   });
@@ -2106,13 +2106,13 @@ describe("Torben App shell", () => {
         shellIntegration={disabledShellIntegration}
         updater={{
           configured: true,
-          currentVersion: "0.0.1",
+          currentVersion: "0.0.2",
           endpoint:
             "https://github.com/TorbenXiong/torben-app/releases/latest/download/latest.json",
         }}
         updateStatus={{
           state: "available",
-          currentVersion: "0.0.1",
+          currentVersion: "0.0.2",
           availableVersion: "0.2.0",
           publishedAt: "2026-08-24T00:00:00Z",
           notes: "Signed update fixture",

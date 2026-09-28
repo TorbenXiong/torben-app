@@ -73,7 +73,7 @@ MySQL 插件管理官方 MySQL Community Server Windows x64 ZIP，并提供 `mys
 `userData/application-data/redis/client`。桌面端和 `torben instance` CLI 通过同一套 Core API
 创建、启动、停止、检查、备份、恢复和删除实例。每个实例固定绑定创建时的运行时版本，数据、配置、日志、临时文件和
 内部备份位于 `userData/application-data/<engine>/instances/<name>`；插件卸载和普通运行时升级不会删除实例数据，
-仍被实例引用的运行时版本不能卸载。MySQL 提供 8.4.6（LTS，推荐）、8.0.46 和 5.7.44。
+仍被实例引用的运行时版本不能卸载。MySQL 提供 8.4.11（LTS，推荐）、8.0.46 和 5.7.44。
 
 MySQL、Redis 和 PostgreSQL 的管理页分为“版本管理”和“实例管理”两个页签：前者负责运行时安装、选择和卸载，
 后者负责实例创建、启动、停止、状态检查、备份、恢复和删除。
@@ -85,7 +85,7 @@ PostgreSQL 插件提供 EDB 分发的 Windows x64 PostgreSQL server 和命令行
 `userData/application-data/postgresql/client`。安装或切换运行时不会自动设置共享 `PGDATA` 或创建 cluster；
 只有用户显式执行“创建实例”时，Core 才会在该实例目录运行 `initdb`，并把 cluster 固定到所选 major 版本。
 
-实例 CLI 示例：`torben instance list mysql`、`torben instance create mysql local --version 8.4.6 --port 3306`、
+实例 CLI 示例：`torben instance list mysql`、`torben instance create mysql local --version 8.4.11 --port 3306`、
 `torben instance start mysql local`、`torben instance backup mysql local`、
 `torben instance restore mysql local D:\\backups\\local.sql`、`torben instance stop mysql local` 和
 `torben instance delete mysql local --confirm`。显式备份与恢复路径必须是绝对路径，已有备份文件不会被覆盖。

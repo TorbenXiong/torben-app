@@ -1,7 +1,7 @@
 {
   "id": "app.torben.plugin.temurin",
   "displayName": "Java",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "protocolVersion": 1,
   "minimumHostVersion": "0.0.1",
   "publisher": "Torben App",

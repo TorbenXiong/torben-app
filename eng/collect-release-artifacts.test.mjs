@@ -25,9 +25,11 @@ import {
   createReleaseMetadata,
   supportedTargets,
   verifyReleaseMetadata,
+  workspaceVersion,
 } from "./release-metadata.mjs";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const releaseVersion = workspaceVersion(repositoryRoot).version;
 const revision = "b".repeat(40);
 
 function fixtureRoot() {
@@ -240,7 +242,7 @@ test("copied CLI name includes the workspace version and target", () => {
     });
     assert.equal(
       basename(copied.find((entry) => entry.format === "cli").path),
-      "torben-0.0.1-aarch64-apple-darwin",
+      `torben-${releaseVersion}-aarch64-apple-darwin`,
     );
   } finally {
     removeFixture(root);
@@ -254,7 +256,7 @@ test("rolls back staged packages when a later destination collides", () => {
     const bundleRoot = createBundle(root, target);
     renameSync(
       join(bundleRoot, "nsis", `Torben-App-nsis-${target}.exe`),
-      join(bundleRoot, "nsis", `torben-0.0.1-${target}.exe`),
+      join(bundleRoot, "nsis", `torben-${releaseVersion}-${target}.exe`),
     );
     const output = join(root, "artifacts");
     assert.throws(

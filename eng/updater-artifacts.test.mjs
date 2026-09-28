@@ -19,11 +19,16 @@ import {
   prepareGithubReleaseAssets,
   verifyGithubReleaseAssets,
 } from "./prepare-github-release-assets.mjs";
-import { createReleaseMetadata, officialReleaseTargets } from "./release-metadata.mjs";
+import {
+  createReleaseMetadata,
+  officialReleaseTargets,
+  workspaceVersion,
+} from "./release-metadata.mjs";
 import { createReleaseSet, verifyReleaseSet } from "./verify-release-set.mjs";
 import { verifyUpdaterArtifacts } from "./verify-updater-artifacts.mjs";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const releaseVersion = workspaceVersion(repositoryRoot).version;
 const signature = Buffer.from(
   "untrusted comment: signature from minisign secret key\nfixture\ntrusted comment: fixture\nfixture",
 ).toString("base64");
@@ -96,7 +101,7 @@ async function createOfficialReleaseFixture(root) {
       artifacts: output,
       target,
       revision: "e".repeat(40),
-      sourceRef: "refs/tags/v0.0.1",
+      sourceRef: `refs/tags/v${releaseVersion}`,
       releaseKind: "official",
       signingStatus: "signed",
       repositoryRoot,
@@ -125,8 +130,8 @@ test("collects every updater package/signature pair and creates latest.json", as
       notes: "Official updater fixture",
     });
     assert.equal(Object.keys(manifest.platforms).length, 2);
-    assert.equal(manifest.version, "0.0.1");
-    assert.match(manifest.platforms["windows-x86_64-nsis"].url, /v0\.0\.1/);
+    assert.equal(manifest.version, releaseVersion);
+    assert.ok(manifest.platforms["windows-x86_64-nsis"].url.includes(`v${releaseVersion}`));
     assert.equal(
       JSON.parse(readFileSync(join(releases, "latest.json"), "utf8")).pub_date,
       "2026-08-24T13:00:00Z",
@@ -266,7 +271,7 @@ test("official release sets reject deferred platform targets", async () => {
       artifacts: deferredDirectory,
       target: deferredTarget,
       revision: "e".repeat(40),
-      sourceRef: "refs/tags/v0.0.1",
+      sourceRef: `refs/tags/v${releaseVersion}`,
       releaseKind: "official",
       signingStatus: "signed",
       repositoryRoot,

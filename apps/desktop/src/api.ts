@@ -7,9 +7,11 @@ import type {
   CreateDatabaseInstanceRequest,
   DashboardSnapshot,
   DatabaseBackup,
+  DatabaseConnectionInfo,
   DatabaseEngine,
   DatabaseInstance,
   DatabaseInstanceTarget,
+  DatabasePortStatus,
   DesktopUpdaterConfiguration,
   DoctorCheck,
   InstallRecord,
@@ -135,7 +137,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.rust",
     displayName: "Rust",
-    version: "0.0.1",
+    version: "0.0.2",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -157,7 +159,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.mysql",
     displayName: "MySQL",
-    version: "0.0.1",
+    version: "0.0.2",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -179,7 +181,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.redis",
     displayName: "Redis",
-    version: "0.0.1",
+    version: "0.0.2",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -205,7 +207,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.postgresql",
     displayName: "PostgreSQL",
-    version: "0.0.1",
+    version: "0.0.2",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -244,7 +246,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.temurin",
     displayName: "Java",
-    version: "0.0.1",
+    version: "0.0.2",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -271,7 +273,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.python",
     displayName: "Python",
-    version: "0.0.1",
+    version: "0.0.2",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -293,7 +295,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.node",
     displayName: "Node.js",
-    version: "0.0.1",
+    version: "0.0.2",
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -818,7 +820,7 @@ const mockSnapshot: DashboardSnapshot = {
   packageInstallations: [],
   updater: {
     configured: false,
-    currentVersion: "0.0.1",
+    currentVersion: "0.0.2",
     endpoint: "https://github.com/TorbenXiong/torben-app/releases/latest/download/latest.json",
   },
   settings: {
@@ -971,7 +973,7 @@ export async function getVersions(appId: string): Promise<VersionDescriptor[]> {
   }
   if (appId === "mysql") {
     return [
-      { version: "8.4.6", ltsName: "MySQL LTS", releasedAt: "2025-07-22", recommended: true },
+      { version: "8.4.11", ltsName: "MySQL LTS", releasedAt: "2026-07-28", recommended: true },
       { version: "8.0.46", releasedAt: "2026-04-22", recommended: false },
       { version: "5.7.44", releasedAt: "2023-10-25", recommended: false },
     ];
@@ -1104,6 +1106,45 @@ export async function refreshDatabaseInstanceStatus(
     throw new Error("Database status checks are available in the Tauri desktop runtime.");
   }
   return invoke<DatabaseInstance>("database_instance_status", { target });
+}
+
+export async function getDatabaseConnectionInfo(
+  target: DatabaseInstanceTarget,
+): Promise<DatabaseConnectionInfo> {
+  if (!isTauri()) {
+    throw new Error("Database connection information is available in the Tauri desktop runtime.");
+  }
+  return invoke<DatabaseConnectionInfo>("database_connection_info", { target });
+}
+
+export async function checkDatabaseInstancePort(
+  target: DatabaseInstanceTarget,
+): Promise<DatabasePortStatus> {
+  if (!isTauri()) {
+    throw new Error("Database port checks are available in the Tauri desktop runtime.");
+  }
+  return invoke<DatabasePortStatus>("database_instance_port_status", { target });
+}
+
+export async function getDatabaseInstanceLogPath(target: DatabaseInstanceTarget): Promise<string> {
+  if (!isTauri()) {
+    throw new Error("Database logs are available in the Tauri desktop runtime.");
+  }
+  return invoke<string>("database_instance_log_path", { target });
+}
+
+export async function getDatabaseInstanceDataPath(target: DatabaseInstanceTarget): Promise<string> {
+  if (!isTauri()) {
+    throw new Error("Database data directories are available in the Tauri desktop runtime.");
+  }
+  return invoke<string>("database_instance_data_path", { target });
+}
+
+export async function openDatabaseShell(target: DatabaseInstanceTarget): Promise<void> {
+  if (!isTauri()) {
+    throw new Error("Database Shell is available in the Tauri desktop runtime.");
+  }
+  await invoke("open_database_shell", { target });
 }
 
 export async function backupDatabaseInstance(

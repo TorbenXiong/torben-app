@@ -372,6 +372,26 @@ enum InstanceSubcommand {
         engine: String,
         name: String,
     },
+    Connection {
+        engine: String,
+        name: String,
+    },
+    Port {
+        engine: String,
+        name: String,
+    },
+    Log {
+        engine: String,
+        name: String,
+    },
+    Data {
+        engine: String,
+        name: String,
+    },
+    Shell {
+        engine: String,
+        name: String,
+    },
     Backup {
         engine: String,
         name: String,
@@ -1198,6 +1218,44 @@ async fn run(cli: Cli) -> TorbenResult<Output> {
                     instance,
                 )?)
             }
+            InstanceSubcommand::Connection { engine, name } => {
+                let info = core.database_connection_info(database_target(&engine, &name)?)?;
+                Ok(Output::new(info.connection_string.clone(), info)?)
+            }
+            InstanceSubcommand::Port { engine, name } => {
+                let status =
+                    core.database_instance_port_status(database_target(&engine, &name)?)?;
+                let message = if status.listening {
+                    format!("Port {} is accepting connections", status.port)
+                } else if status.available {
+                    format!("Port {} is available", status.port)
+                } else {
+                    format!("Port {} is occupied by another process", status.port)
+                };
+                Ok(Output::new(message, status)?)
+            }
+            InstanceSubcommand::Log { engine, name } => {
+                let path = core.database_instance_log_path(database_target(&engine, &name)?)?;
+                Ok(Output::new(
+                    path.display().to_string(),
+                    json!({ "path": path }),
+                )?)
+            }
+            InstanceSubcommand::Data { engine, name } => {
+                let path = core.database_instance_data_path(database_target(&engine, &name)?)?;
+                Ok(Output::new(
+                    path.display().to_string(),
+                    json!({ "path": path }),
+                )?)
+            }
+            InstanceSubcommand::Shell { engine, name } => {
+                let target = database_target(&engine, &name)?;
+                core.open_database_shell(target.clone())?;
+                Ok(Output::new(
+                    format!("Opened {} database shell", target.engine),
+                    json!({ "engine": target.engine, "name": target.name }),
+                )?)
+            }
             InstanceSubcommand::Backup {
                 engine,
                 name,
@@ -1625,6 +1683,22 @@ mod tests {
             command.command,
             InstanceSubcommand::Delete { confirm: true, .. }
         ));
+
+        let cli =
+            Cli::try_parse_from(["torben", "instance", "connection", "redis", "local"]).unwrap();
+        let Command::Instance(command) = cli.command else {
+            panic!("expected instance command");
+        };
+        assert!(matches!(
+            command.command,
+            InstanceSubcommand::Connection { .. }
+        ));
+
+        let cli = Cli::try_parse_from(["torben", "instance", "shell", "mysql", "local"]).unwrap();
+        let Command::Instance(command) = cli.command else {
+            panic!("expected instance command");
+        };
+        assert!(matches!(command.command, InstanceSubcommand::Shell { .. }));
     }
 
     #[test]

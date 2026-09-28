@@ -202,6 +202,26 @@ pub struct DatabaseBackup {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseConnectionInfo {
+    pub engine: DatabaseEngine,
+    pub host: String,
+    pub port: u16,
+    pub username: Option<String>,
+    pub database: Option<String>,
+    pub connection_string: String,
+    pub shell_command: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabasePortStatus {
+    pub port: u16,
+    pub listening: bool,
+    pub available: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;

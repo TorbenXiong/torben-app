@@ -46,7 +46,7 @@ const primaryNavigation = [{ to: "/plugins", key: "plugins", icon: Boxes }] as c
 const logsNavigation = { to: "/logs", key: "logs", icon: ScrollText };
 const diagnosticsNavigation = { to: "/diagnostics", key: "diagnostics", icon: CheckCircle2 };
 const settingsNavigation = { to: "/settings", key: "settings", icon: Settings };
-const appVersion = "0.0.1";
+const appVersion = "0.0.2";
 
 const supportedApplicationRoutes = new Set([
   "node",

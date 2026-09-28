@@ -2,7 +2,7 @@ use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
     str::FromStr,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use futures_util::StreamExt;
@@ -25,6 +25,7 @@ const MYSQL_SOURCE_ID: &str = "mysql.official";
 const MYSQL_BASE_URL: &str = "https://cdn.mysql.com/Downloads/";
 const MYSQL_TARGET: &str = "x86_64-pc-windows-msvc";
 const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+const DOWNLOAD_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DistributionSpec {
@@ -37,10 +38,10 @@ struct DistributionSpec {
 
 const DISTRIBUTIONS: &[DistributionSpec] = &[
     DistributionSpec {
-        version: "8.4.6",
+        version: "8.4.11",
         stream: "MySQL-8.4",
-        sha256: "b6c152f9f3aaa7294eb47db698e47974d37b261bf3cab4f90dc1243bb5ecd204",
-        released_at: "2025-07-22",
+        sha256: "a492371d687d2bab088b0062581144a0044b8964baefdf4faa579292b423d25c",
+        released_at: "2026-07-28",
         lts: true,
     },
     DistributionSpec {
@@ -368,39 +369,104 @@ impl MysqlProvider {
         destination: &Path,
         cancellation: &CancellationProbe,
     ) -> TorbenResult<()> {
-        let response = self
-            .client
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(network_error)?;
-        if response.url().host_str() != url.host_str() {
-            return Err(unexpected_origin());
-        }
-        let response = response.error_for_status().map_err(network_error)?;
-        if response
-            .content_length()
-            .is_some_and(|size| size > MAX_ARCHIVE_BYTES)
-        {
-            return Err(archive_too_large());
-        }
         let partial = destination.with_extension("partial");
-        let mut file = tokio::fs::File::create(&partial).await.map_err(io_error)?;
-        let mut stream = response.bytes_stream();
-        let mut total = 0u64;
-        while let Some(chunk) = stream.next().await {
+        for attempt in 0..DOWNLOAD_ATTEMPTS {
             cancellation.check()?;
-            let chunk = chunk.map_err(network_error)?;
-            total = total.saturating_add(chunk.len() as u64);
-            if total > MAX_ARCHIVE_BYTES {
+            let offset = partial_file_size(&partial)?;
+            let mut request = self.client.get(url.clone());
+            if offset > 0 {
+                request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
+            }
+            let response = match request.send().await {
+                Ok(response) => response,
+                Err(_error) if attempt + 1 < DOWNLOAD_ATTEMPTS => {
+                    retry_download(attempt).await;
+                    continue;
+                }
+                Err(error) => return Err(network_error(error)),
+            };
+            if response.url().host_str() != url.host_str() {
+                return Err(unexpected_origin());
+            }
+            if (response.status().is_server_error()
+                || response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || response.status() == reqwest::StatusCode::REQUEST_TIMEOUT)
+                && attempt + 1 < DOWNLOAD_ATTEMPTS
+            {
+                retry_download(attempt).await;
+                continue;
+            }
+            let response = response.error_for_status().map_err(network_error)?;
+            let append = offset > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+            let base = if append { offset } else { 0 };
+            if response
+                .content_length()
+                .is_some_and(|size| size.saturating_add(base) > MAX_ARCHIVE_BYTES)
+            {
                 return Err(archive_too_large());
             }
-            file.write_all(&chunk).await.map_err(io_error)?;
+            let mut file = tokio::fs::OpenOptions::new();
+            file.write(true).create(true);
+            if append {
+                file.append(true);
+            } else {
+                file.truncate(true);
+            }
+            let mut file = file.open(&partial).await.map_err(io_error)?;
+            let mut stream = response.bytes_stream();
+            let mut total = base;
+            let mut stream_error = None;
+            while let Some(chunk) = stream.next().await {
+                cancellation.check()?;
+                let chunk = match chunk {
+                    Ok(chunk) => chunk,
+                    Err(error) => {
+                        stream_error = Some(network_error(error));
+                        break;
+                    }
+                };
+                total = total.saturating_add(chunk.len() as u64);
+                if total > MAX_ARCHIVE_BYTES {
+                    return Err(archive_too_large());
+                }
+                file.write_all(&chunk).await.map_err(io_error)?;
+            }
+            file.flush().await.map_err(io_error)?;
+            file.sync_all().await.map_err(io_error)?;
+            drop(file);
+            if let Some(error) = stream_error {
+                if attempt + 1 < DOWNLOAD_ATTEMPTS {
+                    retry_download(attempt).await;
+                    continue;
+                }
+                return Err(error);
+            }
+            std::fs::rename(&partial, destination).map_err(io_error)?;
+            return Ok(());
         }
-        file.flush().await.map_err(io_error)?;
-        file.sync_all().await.map_err(io_error)?;
-        std::fs::rename(partial, destination).map_err(io_error)
+        Err(TorbenError::new(
+            "mysql_network_error",
+            "A MySQL archive request failed after retries.",
+        ))
     }
+}
+
+fn partial_file_size(path: &Path) -> TorbenResult<u64> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            Ok(metadata.len())
+        }
+        Ok(_) => Err(io_error(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "The MySQL partial download is not a regular file.",
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(io_error(error)),
+    }
+}
+
+async fn retry_download(attempt: usize) {
+    tokio::time::sleep(Duration::from_secs((attempt + 1) as u64)).await;
 }
 
 pub(crate) fn configure_command_environment(
@@ -508,12 +574,12 @@ mod tests {
     fn builds_pinned_official_distribution_for_core_versions() {
         let provider = MysqlProvider::official().unwrap();
         let lts = provider
-            .distribution(&ExactVersion::from_str("8.4.6").unwrap())
+            .distribution(&ExactVersion::from_str("8.4.11").unwrap())
             .unwrap();
-        assert_eq!(lts.archive_name, "mysql-8.4.6-winx64.zip");
+        assert_eq!(lts.archive_name, "mysql-8.4.11-winx64.zip");
         assert_eq!(
             lts.archive_url.as_str(),
-            "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.6-winx64.zip"
+            "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-winx64.zip"
         );
         assert_eq!(lts.checksum.len(), 64);
 
@@ -538,10 +604,10 @@ mod tests {
     #[test]
     fn parses_mysqld_version_output() {
         let version = parse_mysql_version(
-            "C:\\mysql\\bin\\mysqld.exe  Ver 8.4.6 for Win64 on x86_64 (MySQL Community Server - GPL)",
+            "C:\\mysql\\bin\\mysqld.exe  Ver 8.4.11 for Win64 on x86_64 (MySQL Community Server - GPL)",
         )
         .unwrap();
-        assert_eq!(version, ExactVersion::from_str("8.4.6").unwrap());
+        assert_eq!(version, ExactVersion::from_str("8.4.11").unwrap());
         assert!(parse_mysql_version("mysqld: unknown option").is_none());
     }
 
@@ -549,7 +615,7 @@ mod tests {
     fn managed_commands_separate_mysql_client_state_from_instances() {
         let root = tempdir().unwrap();
         let data_root = root.path().join("userData/application-data/mysql");
-        let bin = root.path().join("apps/mysql/8.4.6/bin");
+        let bin = root.path().join("apps/mysql/8.4.11/bin");
         let mut command = std::process::Command::new("mysql");
 
         configure_command_environment(&mut command, &data_root, &bin).unwrap();
