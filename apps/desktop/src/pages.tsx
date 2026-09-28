@@ -1,4 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Badge, Button, Card, EmptyState, PageHeader, ProgressBar } from "@torben-app/ui";
 import {
   Activity,
@@ -7,13 +8,17 @@ import {
   Check,
   CheckCircle2,
   CircleAlert,
+  Clipboard,
   Clock3,
   Database,
   ExternalLink,
+  FileText,
   FolderArchive,
+  FolderOpen,
   GripVertical,
   HardDrive,
   Laptop,
+  Network,
   PackageCheck,
   Play,
   Plus,
@@ -33,6 +38,7 @@ import { Link } from "react-router";
 import {
   backupDatabaseInstance,
   cancelOperation,
+  checkDatabaseInstancePort,
   clearSelection,
   createDatabaseInstance,
   deleteDatabaseInstance,
@@ -41,6 +47,9 @@ import {
   executeSourceMigration,
   executeSourceOperation,
   formatTorbenError,
+  getDatabaseConnectionInfo,
+  getDatabaseInstanceDataPath,
+  getDatabaseInstanceLogPath,
   getPluginSchemaPages,
   getVersions,
   installApp,
@@ -49,6 +58,7 @@ import {
   invokePluginSchemaAction,
   listDatabaseInstances,
   onVersionCatalogUpdated,
+  openDatabaseShell,
   planManagedToPackageMigration,
   planPackageToManagedMigration,
   planSourceMigration,
@@ -641,6 +651,56 @@ function DatabaseInstancesPanel({
     );
   }
 
+  async function copyConnection(instance: DatabaseInstance) {
+    const target = { engine, name: instance.name };
+    setBusy((current) => new Set(current).add(`copy:${instance.name}`));
+    setError(null);
+    try {
+      const info = await getDatabaseConnectionInfo(target);
+      await navigator.clipboard.writeText(info.connectionString);
+      setNotice(t("databaseInstances.connectionCopied", { value: info.connectionString }));
+    } catch (reason) {
+      setError(formatTorbenError(reason));
+    } finally {
+      setBusy((current) => {
+        const next = new Set(current);
+        next.delete(`copy:${instance.name}`);
+        return next;
+      });
+    }
+  }
+
+  async function checkPort(instance: DatabaseInstance) {
+    await run(`port:${instance.name}`, async () => {
+      const status = await checkDatabaseInstancePort({ engine, name: instance.name });
+      setNotice(
+        status.listening
+          ? t("databaseInstances.portListening", { port: status.port })
+          : status.available
+            ? t("databaseInstances.portAvailable", { port: status.port })
+            : t("databaseInstances.portOccupied", { port: status.port }),
+      );
+    });
+  }
+
+  async function openDataDirectory(instance: DatabaseInstance) {
+    await run(`open-data:${instance.name}`, async () => {
+      const path = await getDatabaseInstanceDataPath({ engine, name: instance.name });
+      await revealItemInDir(path);
+    });
+  }
+
+  async function openLog(instance: DatabaseInstance) {
+    await run(`open-log:${instance.name}`, async () => {
+      const path = await getDatabaseInstanceLogPath({ engine, name: instance.name });
+      await openPath(path);
+    });
+  }
+
+  async function launchShell(instance: DatabaseInstance) {
+    await run(`shell:${instance.name}`, () => openDatabaseShell({ engine, name: instance.name }));
+  }
+
   return (
     <Card className="database-instances-panel">
       <div className="section-heading">
@@ -798,6 +858,47 @@ function DatabaseInstancesPanel({
                     variant="ghost"
                   >
                     <RefreshCw size={13} />
+                  </Button>
+                  <Button
+                    aria-label={t("databaseInstances.copyConnection")}
+                    disabled={actionBusy || busy.has(`copy:${instance.name}`)}
+                    onClick={() => void copyConnection(instance)}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    <Clipboard size={13} /> {t("databaseInstances.copyConnection")}
+                  </Button>
+                  <Button
+                    disabled={actionBusy}
+                    onClick={() => void checkPort(instance)}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    <Network size={13} /> {t("databaseInstances.checkPort")}
+                  </Button>
+                  <Button
+                    disabled={actionBusy}
+                    onClick={() => void openDataDirectory(instance)}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    <FolderOpen size={13} /> {t("databaseInstances.openData")}
+                  </Button>
+                  <Button
+                    disabled={actionBusy}
+                    onClick={() => void openLog(instance)}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    <FileText size={13} /> {t("databaseInstances.viewLog")}
+                  </Button>
+                  <Button
+                    disabled={actionBusy || instance.state !== "running"}
+                    onClick={() => void launchShell(instance)}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    <TerminalSquare size={13} /> {t("databaseInstances.shell")}
                   </Button>
                   <Button
                     disabled={actionBusy || instance.state !== "running"}
@@ -3321,12 +3422,12 @@ export function SettingsPage({
   onLibraryMigrate,
   updater = {
     configured: false,
-    currentVersion: "0.0.1",
+    currentVersion: "0.0.2",
     endpoint: "",
   },
   updateStatus = {
     state: "unconfigured",
-    currentVersion: "0.0.1",
+    currentVersion: "0.0.2",
     availableVersion: null,
     publishedAt: null,
     notes: null,

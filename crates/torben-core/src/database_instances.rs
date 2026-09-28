@@ -1,6 +1,7 @@
 use std::{
     fs::{File, OpenOptions},
     io::Write as _,
+    net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -9,9 +10,10 @@ use std::{
 
 use torben_contracts::{
     AppId, BackupDatabaseInstanceRequest, CreateDatabaseInstanceRequest, DatabaseBackup,
-    DatabaseEngine, DatabaseInstance, DatabaseInstanceName, DatabaseInstanceState,
-    DatabaseInstanceTarget, DeleteDatabaseInstanceRequest, ExactVersion, InstallRecord,
-    InstallScope, RestoreDatabaseInstanceRequest, TorbenError, TorbenResult,
+    DatabaseConnectionInfo, DatabaseEngine, DatabaseInstance, DatabaseInstanceName,
+    DatabaseInstanceState, DatabaseInstanceTarget, DatabasePortStatus,
+    DeleteDatabaseInstanceRequest, ExactVersion, InstallRecord, InstallScope,
+    RestoreDatabaseInstanceRequest, TorbenError, TorbenResult,
 };
 
 use crate::{
@@ -54,6 +56,173 @@ impl TorbenCore {
     ) -> TorbenResult<DatabaseInstance> {
         let instance = self.load_database_instance(target.engine, &target.name)?;
         self.probe_database_instance(instance)
+    }
+
+    pub fn database_connection_info(
+        &self,
+        target: DatabaseInstanceTarget,
+    ) -> TorbenResult<DatabaseConnectionInfo> {
+        let instance = self.load_and_validate_database_instance(target.engine, &target.name)?;
+        let host = "127.0.0.1".to_owned();
+        let port = instance.port;
+        let (username, database, connection_string, shell_args) = match instance.engine {
+            DatabaseEngine::Mysql => (
+                Some("root".to_owned()),
+                None,
+                format!("mysql://root@{host}:{port}"),
+                vec![
+                    "--no-defaults".to_owned(),
+                    "--protocol=tcp".to_owned(),
+                    "--host=127.0.0.1".to_owned(),
+                    format!("--port={port}"),
+                    "--user=root".to_owned(),
+                ],
+            ),
+            DatabaseEngine::Redis => (
+                None,
+                Some("0".to_owned()),
+                format!("redis://{host}:{port}/0"),
+                vec![
+                    "-h".to_owned(),
+                    host.clone(),
+                    "-p".to_owned(),
+                    port.to_string(),
+                ],
+            ),
+            DatabaseEngine::Postgresql => (
+                Some("postgres".to_owned()),
+                Some("postgres".to_owned()),
+                format!("postgresql://postgres@{host}:{port}/postgres"),
+                vec![
+                    "--host=127.0.0.1".to_owned(),
+                    format!("--port={port}"),
+                    "--username=postgres".to_owned(),
+                    "--dbname=postgres".to_owned(),
+                ],
+            ),
+        };
+        let command = match instance.engine {
+            DatabaseEngine::Mysql => "mysql",
+            DatabaseEngine::Redis => "redis-cli",
+            DatabaseEngine::Postgresql => "psql",
+        };
+        Ok(DatabaseConnectionInfo {
+            engine: instance.engine,
+            host,
+            port,
+            username,
+            database,
+            connection_string,
+            shell_command: format!("{command} {}", shell_args.join(" ")),
+        })
+    }
+
+    pub fn database_instance_port_status(
+        &self,
+        target: DatabaseInstanceTarget,
+    ) -> TorbenResult<DatabasePortStatus> {
+        let instance = self.load_and_validate_database_instance(target.engine, &target.name)?;
+        let address = std::net::SocketAddr::from(([127, 0, 0, 1], instance.port));
+        let listening = TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok();
+        let available = TcpListener::bind(("127.0.0.1", instance.port)).is_ok();
+        Ok(DatabasePortStatus {
+            port: instance.port,
+            listening,
+            available,
+        })
+    }
+
+    pub fn database_instance_log_path(
+        &self,
+        target: DatabaseInstanceTarget,
+    ) -> TorbenResult<PathBuf> {
+        let instance = self.load_and_validate_database_instance(target.engine, &target.name)?;
+        let root = database_instance_root_from_record(&instance)?;
+        Ok(root.join("logs").join(match instance.engine {
+            DatabaseEngine::Mysql => "mysql-error.log",
+            DatabaseEngine::Redis => "redis.log",
+            DatabaseEngine::Postgresql => "postgresql.log",
+        }))
+    }
+
+    pub fn database_instance_data_path(
+        &self,
+        target: DatabaseInstanceTarget,
+    ) -> TorbenResult<PathBuf> {
+        let instance = self.load_and_validate_database_instance(target.engine, &target.name)?;
+        Ok(PathBuf::from(instance.data_path))
+    }
+
+    pub fn open_database_shell(&self, target: DatabaseInstanceTarget) -> TorbenResult<()> {
+        let instance = self.load_and_validate_database_instance(target.engine, &target.name)?;
+        let executable_name = match instance.engine {
+            DatabaseEngine::Mysql => "mysql",
+            DatabaseEngine::Redis => "redis-cli",
+            DatabaseEngine::Postgresql => "psql",
+        };
+        let database_command = self.database_command(&instance, executable_name)?;
+        let program = database_command.get_program().to_owned();
+        let args = database_command
+            .get_args()
+            .map(std::borrow::ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let environment = database_command
+            .get_envs()
+            .map(|(key, value)| (key.to_owned(), value.map(ToOwned::to_owned)))
+            .collect::<Vec<_>>();
+        let shell_args = match instance.engine {
+            DatabaseEngine::Mysql => vec![
+                "--no-defaults".to_owned(),
+                "--protocol=tcp".to_owned(),
+                "--host=127.0.0.1".to_owned(),
+                format!("--port={}", instance.port),
+                "--user=root".to_owned(),
+            ],
+            DatabaseEngine::Redis => vec![
+                "-h".to_owned(),
+                "127.0.0.1".to_owned(),
+                "-p".to_owned(),
+                instance.port.to_string(),
+            ],
+            DatabaseEngine::Postgresql => vec![
+                "--host=127.0.0.1".to_owned(),
+                format!("--port={}", instance.port),
+                "--username=postgres".to_owned(),
+                "--dbname=postgres".to_owned(),
+            ],
+        };
+        let command_line = std::iter::once(quote_powershell_arg(&program))
+            .chain(args.iter().map(|arg| quote_powershell_arg(arg)))
+            .chain(
+                shell_args
+                    .iter()
+                    .map(|arg| quote_powershell_arg(std::ffi::OsStr::new(arg))),
+            )
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut terminal = if cfg!(windows) {
+            let mut command = Command::new("powershell.exe");
+            command.args(["-NoLogo", "-NoProfile", "-NoExit", "-Command"]);
+            command.arg(format!("& {command_line}"));
+            command
+        } else {
+            let mut command = Command::new(program);
+            command.args(args).args(shell_args);
+            command
+        };
+        for (key, value) in environment {
+            if let Some(value) = value {
+                terminal.env(key, value);
+            } else {
+                terminal.env_remove(key);
+            }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            terminal.creation_flags(0x0000_0010);
+        }
+        terminal.spawn().map(|_| ()).map_err(instance_io_error)
     }
 
     pub fn create_database_instance(
@@ -1191,6 +1360,11 @@ fn instance_io_error(error: std::io::Error) -> TorbenError {
     .with_detail("reason", error.to_string())
 }
 
+fn quote_powershell_arg(value: &std::ffi::OsStr) -> String {
+    let value = value.to_string_lossy();
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -1204,7 +1378,7 @@ mod tests {
 
     use crate::{TorbenCore, TorbenPaths};
 
-    use super::{backup_destination, bounded_output, native_config_path};
+    use super::{backup_destination, bounded_output, native_config_path, quote_powershell_arg};
 
     fn fixture(root: &Path) -> DatabaseInstance {
         DatabaseInstance {
@@ -1254,6 +1428,14 @@ mod tests {
     }
 
     #[test]
+    fn database_shell_quotes_powershell_metacharacters() {
+        assert_eq!(
+            quote_powershell_arg(std::ffi::OsStr::new("C:\\Data & 'Tools'\\mysql.exe")),
+            "'C:\\Data & ''Tools''\\mysql.exe'"
+        );
+    }
+
+    #[test]
     fn redis_instance_create_list_and_delete_share_the_persisted_core_lifecycle() {
         let root = tempdir().unwrap();
         let paths = TorbenPaths::for_test(root.path().to_path_buf());
@@ -1292,6 +1474,24 @@ mod tests {
             .to_path_buf();
         assert!(instance_root.join("config/redis.conf").is_file());
         assert!(instance_root.join("backups").is_dir());
+        let target = torben_contracts::DatabaseInstanceTarget {
+            engine: DatabaseEngine::Redis,
+            name: created.name.clone(),
+        };
+        assert_eq!(
+            core.database_connection_info(target.clone())
+                .unwrap()
+                .connection_string,
+            "redis://127.0.0.1:16379/0"
+        );
+        assert_eq!(
+            core.database_instance_data_path(target.clone()).unwrap(),
+            instance_root.join("data")
+        );
+        assert_eq!(
+            core.database_instance_log_path(target).unwrap(),
+            instance_root.join("logs/redis.log")
+        );
         assert_eq!(
             core.database_instances(Some(DatabaseEngine::Redis))
                 .unwrap(),

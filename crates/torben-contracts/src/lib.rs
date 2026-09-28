@@ -10,8 +10,9 @@ mod storage;
 mod updates;
 
 pub use database::{
-    BackupDatabaseInstanceRequest, CreateDatabaseInstanceRequest, DatabaseBackup, DatabaseEngine,
-    DatabaseInstance, DatabaseInstanceName, DatabaseInstanceState, DatabaseInstanceTarget,
+    BackupDatabaseInstanceRequest, CreateDatabaseInstanceRequest, DatabaseBackup,
+    DatabaseConnectionInfo, DatabaseEngine, DatabaseInstance, DatabaseInstanceName,
+    DatabaseInstanceState, DatabaseInstanceTarget, DatabasePortStatus,
     DeleteDatabaseInstanceRequest, RestoreDatabaseInstanceRequest,
 };
 pub use envelope::{API_SCHEMA_VERSION, ApiEnvelope};

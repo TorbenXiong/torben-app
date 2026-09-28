@@ -26,7 +26,7 @@ Windows x64 gates required for the next supported release.
   installed under `userData/plugins`, and managed runtimes remain under the same `userData` root.
 - Rust uses the official stable MSVC toolchain and shows the three newest stable toolchains by
   default while retaining exact-version installation. MySQL uses official Community Server ZIP
-  archives and exposes 8.4.6, 8.0.46, and 5.7.44.
+  archives and exposes 8.4.11, 8.0.46, and 5.7.44.
   Redis uses SHA-256-pinned Windows x64 community builds from `redis-windows`, because upstream Redis
   does not publish a native Windows Open Source binary. Each plugin supports independent version
   installation, terminal selection, and provider-owned data below `userData`.

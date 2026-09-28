@@ -668,7 +668,7 @@ removing a runtime version while an instance pins it.
 
 The desktop database pages expose separate `Version management` and `Instance management` tabs so
 runtime binaries and mutable local data have distinct workflows. MySQL includes the pinned 5.7.44
-archive, while `stable`/`latest` still select 8.4.6. Rust's default catalog is intentionally limited to the three newest stable toolchains while
+archive, while `stable`/`latest` still select 8.4.11. Rust's default catalog is intentionally limited to the three newest stable toolchains while
 exact-version resolution remains available.
 
 ## Git installation strategy

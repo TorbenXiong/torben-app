@@ -63,6 +63,22 @@ export interface DatabaseBackup {
   createdAt: string;
 }
 
+export interface DatabaseConnectionInfo {
+  engine: DatabaseEngine;
+  host: string;
+  port: number;
+  username: string | null;
+  database: string | null;
+  connectionString: string;
+  shellCommand: string;
+}
+
+export interface DatabasePortStatus {
+  port: number;
+  listening: boolean;
+  available: boolean;
+}
+
 export interface SelectionRecord {
   appId: string;
   version: string;

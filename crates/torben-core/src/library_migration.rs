@@ -42,13 +42,39 @@ struct MigrationReceipt {
 
 pub(crate) fn status(paths: &TorbenPaths) -> TorbenResult<ManagedLibraryStatus> {
     let path = paths.app_library();
-    let bytes_used = manifest(&path)?.iter().map(|entry| entry.size).sum();
+    // Status is part of the dashboard's first snapshot. Do not reuse `manifest` here:
+    // migration verification hashes every managed file, which can turn startup into a
+    // multi-minute blocking operation for a large application library.
+    let bytes_used = directory_bytes(&path)?;
     Ok(ManagedLibraryStatus {
         custom: path != paths.default_app_library(),
         path: path.display().to_string(),
         default_path: paths.default_app_library().display().to_string(),
         bytes_used,
     })
+}
+
+fn directory_bytes(root: &Path) -> TorbenResult<u64> {
+    let mut bytes = 0_u64;
+    for entry in WalkDir::new(root).follow_links(false) {
+        let entry = entry.map_err(|error| io_error(std::io::Error::other(error)))?;
+        if entry.file_type().is_symlink() {
+            return Err(TorbenError::new(
+                "managed_library_symlink_unsupported",
+                "Managed application library migration does not follow symbolic links.",
+            )
+            .with_detail("path", entry.path().display().to_string()));
+        }
+        if entry.file_type().is_file() {
+            bytes = bytes.saturating_add(
+                entry
+                    .metadata()
+                    .map_err(|error| io_error(error.into()))?
+                    .len(),
+            );
+        }
+    }
+    Ok(bytes)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -623,7 +649,7 @@ mod tests {
         AppId, ExactVersion, InstallRecord, InstallScope, OperationId, OperationState, SourceId,
     };
 
-    use super::{canonical_existing_directory, migrate, recover, write_migration_receipt};
+    use super::{canonical_existing_directory, migrate, recover, status, write_migration_receipt};
     use crate::{StateStore, TorbenCore, TorbenPaths, operation::OperationJournal};
 
     fn record(install_path: std::path::PathBuf) -> InstallRecord {
@@ -636,6 +662,25 @@ mod tests {
             installed_at: "fixture".to_owned(),
             health: "healthy".to_owned(),
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn library_status_does_not_open_managed_files() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().join("torben"));
+        paths.ensure_layout().unwrap();
+        let file = paths.app_library().join("locked.bin");
+        std::fs::write(&file, b"managed fixture").unwrap();
+        let _exclusive = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&file)
+            .unwrap();
+
+        assert_eq!(status(&paths).unwrap().bytes_used, 15);
     }
 
     #[test]

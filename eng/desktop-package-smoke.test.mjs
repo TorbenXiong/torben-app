@@ -18,9 +18,10 @@ import {
   runDesktopPackageSmoke,
   safeCanonicalRelative,
 } from "./desktop-package-smoke.mjs";
-import { createReleaseMetadata } from "./release-metadata.mjs";
+import { createReleaseMetadata, workspaceVersion } from "./release-metadata.mjs";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const releaseVersion = workspaceVersion(repositoryRoot).version;
 const sidecars = [
   "torben-plugin-node",
   "torben-plugin-temurin",
@@ -68,16 +69,18 @@ async function windowsFixture(root, format = "nsis", signed = false) {
   const installed = join(root, "installed");
   mkdirSync(artifacts);
   const packageName =
-    format === "msi" ? "Torben-App_0.0.1_x64_en-US.msi" : "Torben-App_0.0.1_x64-setup.exe";
+    format === "msi"
+      ? `Torben-App_${releaseVersion}_x64_en-US.msi`
+      : `Torben-App_${releaseVersion}_x64-setup.exe`;
   writeFileSync(join(artifacts, packageName), `fixture-${format}`);
-  writePe(join(artifacts, "torben-0.0.1-x86_64-pc-windows-msvc.exe"));
+  writePe(join(artifacts, `torben-${releaseVersion}-x86_64-pc-windows-msvc.exe`));
   writePe(join(installed, "torben-desktop.exe"));
   for (const sidecar of sidecars) writePe(join(installed, `${sidecar}.exe`));
   await createReleaseMetadata({
     artifacts,
     target: "x86_64-pc-windows-msvc",
     revision: "a".repeat(40),
-    sourceRef: signed ? "refs/tags/v0.0.1" : "refs/heads/feature/bootstrap",
+    sourceRef: signed ? `refs/tags/v${releaseVersion}` : "refs/heads/feature/bootstrap",
     releaseKind: signed ? "official" : "development",
     signingStatus: signed ? "signed" : "unsigned",
     repositoryRoot,
@@ -90,8 +93,8 @@ async function macosFixture(root, signed = false) {
   const installed = join(root, "Torben App.app");
   const executableDirectory = join(installed, "Contents", "MacOS");
   mkdirSync(artifacts);
-  writeFileSync(join(artifacts, "Torben.App_0.0.1_x64.dmg"), "fixture-dmg");
-  writeMachO(join(artifacts, "torben-0.0.1-x86_64-apple-darwin"));
+  writeFileSync(join(artifacts, `Torben.App_${releaseVersion}_x64.dmg`), "fixture-dmg");
+  writeMachO(join(artifacts, `torben-${releaseVersion}-x86_64-apple-darwin`));
   mkdirSync(join(installed, "Contents"), { recursive: true });
   writeFileSync(join(installed, "Contents", "Info.plist"), "fixture-plist");
   writeMachO(join(executableDirectory, "torben-desktop"));
@@ -100,7 +103,7 @@ async function macosFixture(root, signed = false) {
     artifacts,
     target: "x86_64-apple-darwin",
     revision: "a".repeat(40),
-    sourceRef: signed ? "refs/tags/v0.0.1" : "refs/heads/feature/bootstrap",
+    sourceRef: signed ? `refs/tags/v${releaseVersion}` : "refs/heads/feature/bootstrap",
     releaseKind: signed ? "official" : "development",
     signingStatus: signed ? "signed" : "unsigned",
     repositoryRoot,
@@ -111,7 +114,7 @@ async function macosFixture(root, signed = false) {
 function macosPlistExecutor({ stage }) {
   const values = {
     "plist-CFBundleIdentifier": "io.github.torbenxiong.torbenapp",
-    "plist-CFBundleShortVersionString": "0.0.1",
+    "plist-CFBundleShortVersionString": releaseVersion,
     "plist-CFBundleExecutable": "torben-desktop",
   };
   if (!Object.hasOwn(values, stage)) throw new Error(`Unexpected fixture stage: ${stage}`);

@@ -9083,7 +9083,7 @@ mod tests {
             .paths
             .plugin_dir()
             .join(BUNDLED_TEMURIN_PLUGIN_ID)
-            .join("0.0.1");
+            .join(env!("CARGO_PKG_VERSION"));
         assert!(plugin_root.join("plugin.json").is_file());
         assert!(
             plugin_root
@@ -9120,7 +9120,7 @@ mod tests {
             .paths
             .plugin_dir()
             .join(BUNDLED_TEMURIN_PLUGIN_ID)
-            .join("0.0.1");
+            .join(env!("CARGO_PKG_VERSION"));
 
         core.uninstall_bundled_temurin().unwrap();
 
@@ -9185,7 +9185,7 @@ mod tests {
             .paths
             .plugin_dir()
             .join(BUNDLED_PYTHON_PLUGIN_ID)
-            .join("0.0.1");
+            .join(env!("CARGO_PKG_VERSION"));
         assert!(plugin_root.join("plugin.json").is_file());
         assert!(
             plugin_root
