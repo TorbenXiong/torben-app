@@ -1,13 +1,10 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 
 import { checkLiveCatalogs, officialCatalogApps } from "./check-live-catalogs.mjs";
-
-const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "torben-live-catalogs-"));
@@ -191,24 +188,4 @@ test("rejects empty, duplicate, and unrecommended catalog data", () => {
       removeFixture(current.root);
     }
   }
-});
-
-test("scheduled CI and its manual preflight verify every official provider through the real CLI", () => {
-  const workflow = readFileSync(join(repositoryRoot, ".github", "workflows", "ci.yml"), "utf8");
-  assert.match(
-    workflow,
-    /^ {2}live-official-catalogs:\r?\n {4}if: github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'$/m,
-  );
-  assert.match(
-    workflow,
-    /node eng\/check-live-catalogs\.mjs\s+--cli target\/debug\/torben\.exe\s+--output artifacts\/live-catalogs/,
-  );
-  for (const app of officialCatalogApps) {
-    assert.match(workflow, new RegExp(`-p torben-plugin-${app}`));
-  }
-  assert.doesNotMatch(workflow, /live-node-metadata|curl .*nodejs\.org/);
-  assert.match(
-    workflow,
-    /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7\.0\.1/,
-  );
 });

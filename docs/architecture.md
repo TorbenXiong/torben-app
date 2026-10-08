@@ -332,12 +332,11 @@ always persisted as sideloaded. Builds without a compile-time
 produced by the repository-owned deterministic publisher: it derives publisher public keys from
 offline Ed25519 private-key files, hashes copied target executables, signs the exact Rust-compatible
 manifest and registry payloads, and atomically renames a new output tree. Private keys never enter
-that tree. A protected `workflow_dispatch` on `main` can create a short-lived GitHub Actions
-artifact after independently checking every platform hash and publisher signature, verifying both
-the new and immediately previous registries with the Rust host, matching the configured trust root,
-and emitting a deterministic `SHA256SUMS`. The workflow has read-only repository permission and no
-hosting deployment capability. Public hosting and automatic refresh policy remain outside the
-current bootstrap; refresh is explicit.
+that tree. Local release verification independently checks every platform hash and publisher
+signature, verifies both the new and immediately previous registries with the Rust host, matches
+the configured trust root, and emits a deterministic `SHA256SUMS`. These tools do not deploy a
+public endpoint. Public hosting and automatic refresh policy remain outside the current bootstrap;
+refresh is explicit.
 
 `Failed` is deliberately not a terminal journal state. Core appends `RolledBack` only after it has
 confirmed that filesystem and SQLite state were both restored. Cleanup or restore failures remain

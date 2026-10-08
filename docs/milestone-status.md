@@ -6,9 +6,9 @@ Windows x64 gates required for the next supported release.
 
 ## Approved plan changes
 
-- The current delivery, CI, preview, and official release target is Windows x64. Windows ARM64,
+- The current delivery and official release target is Windows x64. Windows ARM64,
   macOS, and Linux are deferred and do not block feature completion or release. Existing platform
-  implementations, fixtures, and manual cross-platform workflows remain as future engineering
+  implementations, fixtures, and local packaging scripts remain as future engineering
   assets, without a current support or parity commitment.
 - New feature work completes the shared Core and Windows x64 path first. Deferred-platform work is
   resumed only by an explicit milestone change; shared contracts and platform abstractions remain
@@ -117,21 +117,21 @@ Windows x64 gates required for the next supported release.
 
 ### Release and plugin ecosystem
 
-- The required CI and preview workflows validate Windows x64. The official tag workflow publishes
-  only the Windows x64 `TorbenApp.exe`, with an isolated clean-data launch, artifact-transfer
-  verification, SHA-256 in the release notes, and immutable GitHub Release publication. The current
-  portable release is intentionally unsigned and discloses the resulting Windows warning risk.
-- A separate manual development workflow retains the original six-target packaging and native
-  acceptance design. It is future-platform evidence and is not a current release gate.
+- CI, preview, automated release, and scheduled catalog workflows have been removed. Local checks
+  and manual publication now validate the Windows x64 `TorbenApp.exe`, including an isolated
+  clean-data launch, transfer verification, and SHA-256 in release notes. The portable executable
+  remains unsigned and discloses the resulting Windows warning risk.
+- Existing six-target packaging scripts and native acceptance probes remain available for local
+  future-platform validation and are not current release gates.
 - Torben App and managed-application updates default to notification. Managed automatic updates are
   opt-in per application and run only in a foreground desktop session.
 - The official plugin registry has a two-level Ed25519 trust chain, publisher and package
   revocation, minimum-host enforcement, exact per-platform hashes, rollback-resistant sequences,
   bounded HTTPS refresh, verified cache, developer-mode sideloading, and schema-only plugin UI.
-- The deterministic registry publisher and protected main-only artifact workflow keep private keys
-  in temporary runner storage, independently re-verify both signature levels and every target hash,
-  require the immediately previous signed sequence, and upload only a short-lived review artifact.
-  They do not deploy a public registry endpoint.
+- The deterministic local registry publisher keeps private keys outside source and output trees.
+  Local verification independently checks both signature levels and every target hash, requires the
+  immediately previous signed sequence, and writes a deterministic inventory. These tools do not
+  deploy a public registry endpoint.
 
 The authoritative test-to-requirement mapping is maintained in
 [test and acceptance evidence](testing.md). Packaging and publication invariants are maintained in
@@ -139,6 +139,9 @@ The authoritative test-to-requirement mapping is maintained in
 [plugin registry publishing](plugin-registry-publishing.md).
 
 ## Recorded external evidence
+
+The runs below are historical evidence from before workflow removal. They are not current
+repository configuration or validation of later revisions.
 
 - Pull request [#1](https://github.com/TorbenXiong/torben-app/pull/1) merged the reviewed bootstrap
   into `main` as commit `785dfa4423710f29dad10d041bf54d62d854902b` on 2026-08-26.
@@ -185,10 +188,6 @@ The authoritative test-to-requirement mapping is maintained in
   and `codex.json` files. Independent artifact inspection found 863 Node.js, 79 Temurin, 5 Python,
   5 Git, 5 Visual Studio Code, and 5 Codex versions; every non-empty catalog contained at least one
   recommended version.
-- That successful `workflow_dispatch` run is a manual operational preflight, not evidence that the
-  scheduled trigger itself has executed successfully. With the current `17 3 * * 1` schedule, the
-  first eligible scheduled window after this evidence is 2026-08-31 03:17 UTC
-  (2026-08-31 11:17 China Standard Time).
 - Pull request [#16](https://github.com/TorbenXiong/torben-app/pull/16) merged the persistent
   application and source catalog into `main` as squash commit
   `5c5408e75243f4c2dea307313fe8afe1047fe373` on 2026-08-28.
@@ -203,23 +202,18 @@ The authoritative test-to-requirement mapping is maintained in
 The following items are not proven by local source or simulated fixtures and must not be described
 as complete until their authoritative remote evidence exists:
 
-1. For each new version, run the exact-version tag workflow. Published
+1. For each new version, locally verify the exact reviewed tagged revision before manual publication. Published
    [0.0.1](https://github.com/TorbenXiong/torben-app/releases/tag/v0.0.1) and
    [0.0.2](https://github.com/TorbenXiong/torben-app/releases/tag/v0.0.2) are existing portable releases;
    each later version still needs its own clean-data launch and transfer-verification evidence.
-2. Configure the protected `official-plugin-registry` environment with the offline root,
-   publisher keys, and reviewed public trust root. Generate and review an artifact from committed
-   production registry inputs.
+2. Prepare offline root and publisher keys outside the repository, review the public trust root,
+   and locally generate and verify an artifact from reviewed production registry inputs.
 3. Provision an immutable HTTPS origin for the reviewed registry tree, then configure release builds
    with its exact `registry.json` URL and trust root. Refresh and install every published plugin on
    Windows x64. Public hosting is not currently live; deferred-platform acceptance will be added
    when those milestones resume.
-4. Record the first successful `schedule`-triggered read-only check against every official provider
-   catalog. Manual run 33140148036 proves current upstream availability and the same job path, but
-   it does not prove that GitHub invoked the weekly schedule. Local fixtures remain the default test
-   authority for deterministic behavior.
-5. Complete project-name, domain, trademark, and package-registry registration checks before a
+4. Complete project-name, domain, trademark, and package-registry registration checks before a
    public release. The repository's initial name collision search is not legal clearance.
 
 Until these steps are complete, locally built packages are development artifacts. Only the reviewed
-tag workflow may publish the intentionally unsigned official portable executable.
+manual publication process may publish the intentionally unsigned official portable executable.

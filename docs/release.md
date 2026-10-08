@@ -14,7 +14,7 @@ third-party dependency versions. The desktop reads its displayed and preview ver
 
 Add `docs/releases/<version>.md` using the established Chinese headings: `新功能` when applicable,
 `问题修复`, `文档`, and `杂项`. Keep the Windows x64 scope, single-file download, and unsigned-build
-notice. The workflow adds `下载`, the verified `SHA-256`, and the tag-specific `变更日志` link.
+notice. Before publication, manually add `下载`, the verified `SHA-256`, and the tag-specific `变更日志` link.
 
 Run the gates in [testing](testing.md), review the PR, and merge it before creating
 `v<workspace-version>` at the merged revision. Do not reuse a tag or replace an existing Release.
@@ -39,38 +39,28 @@ supported Windows providers and shim into the executable. Output is:
 artifacts/torben-app-portable-windows-x64/TorbenApp.exe
 ```
 
-## Official release workflow
+## Manual publication
 
-`.github/workflows/official-release.yml` is triggered by version tags and is the only publishing
-workflow. Its build job installs the pinned tooling and locked dependencies, verifies the tag and
-release-note file, and runs the Rust and frontend gates before building.
+The repository has no CI, preview, or automated release workflows. Build and verify the exact
+reviewed revision locally before manually publishing a version-tagged Release.
 
 The candidate must pass:
 
 - `refs/tags/v<workspace-version>` matches the workspace and release-note version;
 - ProductVersion, Windows x64 PE target, and the exact single-file inventory match;
 - a ten-second isolated launch creates `userData/state.db` and no nested `tools/shims/userData`;
-- the downloaded artifact is byte-identical to the build job's SHA-256.
+- the transferred executable is byte-identical to the verified build's SHA-256.
 
-The publish job requires review in the protected `official-release` environment. It rechecks the
-downloaded executable, appends the download/hash/changelog sections to the version's notes, and
-calls `gh release create --verify-tag` once. A failed gate or existing Release stops publication.
-Public assets contain only `TorbenApp.exe`; the checksum is in the Release body.
+Run `eng/verify-windows-portable-release.mjs` again after transferring the executable, using
+`--expected-sha256 <verified-build-sha256>`. Publication is a separate manual action after review;
+public assets contain only `TorbenApp.exe`, with the checksum in the Release body.
 
 The current executable is not Authenticode-signed. Windows may show an unknown-publisher or
 SmartScreen warning, which must remain in the release notes. Publisher signing is a separate
 release-engineering decision.
 
-## Preview and deferred workflows
-
-| Workflow | Trigger and purpose | Output |
-| --- | --- | --- |
-| `windows-preview.yml` | Manual, read-only Windows x64 installer acceptance | Separate unsigned NSIS, MSI, and CLI previews, each with a warning and checksum; retained 14 days |
-| `release.yml` | Manual, read-only future-platform acceptance | Six native targets, fourteen package launch jobs, and a verified unsigned development release set; retained 14 days |
-| `plugin-registry-release.yml` | Protected manual registry review | Signed review artifact; see [registry publishing](plugin-registry-publishing.md) |
-
-These workflows preserve the existing package paths for future milestones. They do not publish
-the current portable Release. All external GitHub Actions are pinned to immutable revisions.
+Installer and deferred-platform scripts remain available for local validation. Plugin registry
+artifacts are generated and verified locally; see [registry publishing](plugin-registry-publishing.md).
 
 ## Updates
 
