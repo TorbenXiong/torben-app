@@ -1,8 +1,8 @@
 # Test and acceptance evidence
 
 Torben App separates deterministic fixture coverage, native package acceptance, and read-only live
-catalog monitoring. A configured workflow is not evidence that a particular remote run passed; the
-GitHub run and its artifacts remain the authoritative evidence for Windows x64 publication gates.
+catalog checks. The repository has no CI or automated release workflows; record the exact revision,
+commands, results, and artifact hashes from local verification before manual publication.
 macOS, Linux, and ARM64 evidence is retained for future platform milestones.
 
 ## Offline development gates
@@ -13,9 +13,8 @@ global package/configuration, temporary, compile-cache, and REPL history paths u
 only through unit-test or the default-off `test-fixtures` paths; passing them does not advertise
 current application support.
 
-Ordinary tests must not contact public services. `.github/workflows/ci.yml` currently validates the
-locked workspace on Windows x64 only. macOS and Linux implementations remain future targets and are
-not part of the required preview gate. The required local gates are:
+Ordinary tests must not contact public services. Validate the locked workspace locally on Windows
+x64. macOS and Linux implementations remain future targets. The required local gates are:
 
 ```powershell
 cargo fmt --all --check
@@ -32,11 +31,9 @@ pnpm run test
 
 `pnpm run test:cross-platform` runs the deferred Linux package-probe fixtures explicitly. It is not
 part of the ordinary Windows x64 gate. `pnpm run test:release` retains the complete release-tooling
-fixture suite for manual cross-platform workflow maintenance.
+fixture suite for local packaging-tool maintenance.
 
-`eng/workflow-policy.test.mjs` requires immutable Action revisions, frozen pnpm installation, and
-`--locked` for every direct Cargo build, lint, test, or run command in workflows. The repository
-does not require DCO sign-off trailers.
+The repository does not require DCO sign-off trailers.
 
 The database UI regressions in `apps/desktop/src/test/App.test.tsx` cover independent instance
 runtime selection and resetting form state when the engine changes. The About dialog reads the
@@ -76,7 +73,7 @@ The Node.js first-milestone behaviors are covered by these fixture-backed tests:
 | Plugin progress is bound to the active operation and invalid or unexpected notifications fail closed | JSON-RPC fixture and validation tests in `crates/torben-plugin-host/src/lib.rs`; the event-aware Core callbacks are compiled by the workspace gates |
 | Plugin methods require declared capabilities and malformed permission declarations fail before process use | `scoped_plugin_denies_methods_without_the_declared_capability` and `manifest_rejects_unsafe_and_duplicate_permission_declarations` in `crates/torben-plugin-host/src/lib.rs` |
 | Registry publication produces Rust-compatible signatures and no partial output | `eng/publish-plugin-registry.test.mjs` regenerates the six-target Rust fixture byte for byte and covers exact hashes, revocation, key separation, strict release metadata, CLI use, and staging cleanup |
-| Protected registry artifacts cannot bypass trust-root, sequence, inventory, or workflow boundaries | `eng/plugin-registry-release.test.mjs` independently re-verifies both signature levels, every target hash, exact tree membership, deterministic inventory, protected root equality, and a signed immediate predecessor; `eng/workflow-policy.test.mjs` requires a manual main-only Environment job, immutable Actions, read-only permissions, scoped secrets, locked Cargo verification, and no deployment capability |
+| Registry artifacts cannot bypass trust-root, sequence, or inventory checks | `eng/plugin-registry-release.test.mjs` independently re-verifies both signature levels, every target hash, exact tree membership, deterministic inventory, reviewed root equality, and a signed immediate predecessor |
 | Registry paths cannot exploit platform-specific aliases | `registry_paths_reject_cross_platform_filesystem_aliases`, `registry_package_directories_are_unique_across_windows_case_folding`, and `manifest_targets_cannot_reuse_case_folded_executable_paths` in `crates/torben-plugin-host/src/lib.rs`, with matching publisher failure cases |
 | Each native target appears only after all required packages and its matching CLI have been collected | `eng/collect-release-artifacts.test.mjs` covers all six targets, missing package formats, wrong executable architectures, staging rollback after a late name collision, existing/stale output refusal, and output containment |
 | Updater publication requires exactly 12 safe and unambiguous platform assets, validates paths before invoking Rust signature verification, and never uploads an unchecked or partial flattened directory | `eng/updater-artifacts.test.mjs` covers missing and extra platforms, cross-platform traversal before process launch, duplicate GitHub asset URLs, same-name/different-byte packages, macOS architecture disambiguation, preflight-before-copy behavior, staging cleanup, exact flat asset membership, source-byte divergence, and publishing-checksum verification |
@@ -104,45 +101,34 @@ unexecuted acceptance scenario.
 
 ## Native package acceptance
 
-The official gate builds, launches, transfers, and re-verifies the Windows x64 single-file
-`TorbenApp.exe`. NSIS/MSI and the broader workflows below are retained for explicit future-platform
-and packaging validation and do not block the Windows-first portable milestone:
+Before manual publication, build and launch the Windows x64 single-file `TorbenApp.exe` with fresh
+isolated data, then transfer and re-verify it. Record the SHA-256, version, target, and exact
+single-file inventory. NSIS/MSI and deferred-platform probe scripts remain available for explicit
+future-platform and packaging validation:
 
-- `.github/workflows/desktop-package-acceptance.yml` installs NSIS/MSI on Windows x64 and ARM64,
-  copies the application from DMG on macOS Intel and Apple Silicon, validates the application and
-  every target-supported adjacent sidecar (eleven on Windows x64, seven on deferred macOS),
-  re-verifies installed signatures for signed metadata, and requires a sustained isolated GUI
-  launch.
-- `.github/workflows/linux-package-acceptance.yml` installs or runs AppImage, deb, and rpm artifacts
-  on x86_64 and ARM64 across Ubuntu, Debian, Fedora, and Rocky Linux containers, then performs the
-  same content and launch checks.
+- `eng/desktop-package-smoke.mjs` inspects installed Windows and macOS applications and adjacent
+  sidecars, re-verifies installed signatures for signed metadata, and requires a sustained isolated
+  GUI launch.
+- `eng/linux-package-smoke.mjs` validates extracted or installed AppImage, deb, and rpm artifacts
+  and performs content and launch checks in a suitable native environment.
 
-The manual cross-platform development aggregate depends on all fourteen jobs. The official Windows
-x64 publishing job does not invoke the installer matrix; it performs a dedicated isolated-data
-portable launch before uploading the single executable.
-Local fixture coverage for the probes lives in `eng/desktop-package-smoke.test.mjs` and
-`eng/linux-package-smoke.test.mjs`; those tests validate fail-closed behavior but do not substitute
-for the corresponding native package workflow run.
+Local fixture coverage lives in `eng/desktop-package-smoke.test.mjs` and
+`eng/linux-package-smoke.test.mjs`. Those tests validate fail-closed behavior and do not substitute
+for a native package installation and launch.
 
-Signed desktop fixtures additionally prove that verified metadata activates Authenticode checks
-for one package plus the desktop executable and all eleven installed Windows sidecars, and activates
-`codesign`, stapler, and Gatekeeper checks for macOS. A signature command failure stops the launch
-probe. The Windows fixture asserts the encoded PowerShell command and its complete
-package/executable path input; only native workflow runs with protected signing credentials can
-provide positive trust evidence.
+Signed desktop fixtures prove that verified metadata activates Authenticode checks on Windows and
+`codesign`, stapler, and Gatekeeper checks on macOS. Positive platform trust evidence requires
+native verification with valid signing credentials.
 
 ## Live and official-only evidence
 
-The weekly `live-official-catalogs` job is the only ordinary workflow allowed to query public
-provider catalogs. An explicit `workflow_dispatch` runs the same job as a preflight without adding
-a separate network-capable path. The job builds the real CLI and all six bundled provider plugins,
-validates their stable JSON results, and atomically uploads one complete snapshot artifact. It
-performs no install, selection, package-manager, or system mutation. A successful manual preflight
-does not satisfy the milestone's scheduled-run evidence requirement.
+`eng/check-live-catalogs.mjs` is an explicit manual, read-only check against public provider catalogs.
+With the real CLI and provider plugins already built, it validates stable JSON results and
+atomically writes one complete snapshot. It performs no install, selection, package-manager, or
+system mutation. Ordinary tests use local fixtures; no scheduled catalog job is configured.
 
-An official Windows x64 release additionally requires the protected `official-release` environment.
-The workflow launches `TorbenApp.exe` against fresh isolated data and repeats hash, version, target,
-and single-file inventory checks after artifact transfer. The current portable executable is
-intentionally not Authenticode-signed, so the release notes disclose that Windows can show an
-unknown-publisher or SmartScreen warning. Apple Developer ID, notarization, installers, updater
-signing, and Windows publisher signing are deferred.
+An official Windows x64 release requires a reviewed revision, a fresh-data launch, and repeated
+hash, version, target, and single-file inventory checks after artifact transfer. The current
+portable executable is intentionally not Authenticode-signed, so release notes disclose that
+Windows can show an unknown-publisher or SmartScreen warning. Apple Developer ID, notarization,
+installers, updater signing, and Windows publisher signing are deferred.

@@ -30,5 +30,5 @@ The global Codex rules remain in force. These rules apply specifically to this r
 
 - Rust code must pass `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`.
 - Frontend code must pass `pnpm run check` and `pnpm run test`.
-- Network-dependent tests must use local fixtures by default. Live official metadata checks belong in an explicit scheduled CI job.
+- Network-dependent tests must use local fixtures by default. Live official metadata checks require an explicit manual run.
 - Do not edit generated Tauri output, `target`, `node_modules`, `dist`, or coverage artifacts.

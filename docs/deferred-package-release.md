@@ -6,14 +6,13 @@ x64 portable release is documented in [release engineering](release.md).
 
 ## Native build matrix
 
-Each deferred package target is built on a native GitHub-hosted runner so that desktop packages and
+Build each deferred package target in a native environment so that desktop packages and
 every target-supported native sidecar share one architecture. The package matrix includes ten
 Windows providers plus the command shim; deferred Unix targets retain the original six providers
 plus the shim. The official portable executable instead embeds the seven currently supported
 Windows providers and the shim. `eng/prepare-bundled-tools.mjs` validates the executable header of
 every selected package sidecar against the Rust host target before copying it into Tauri's sidecar
-directory; the package workflow also passes the same explicit target to Tauri and forwards
-`--locked` to Cargo.
+directory. Pass the same explicit target to Tauri and forward `--locked` to Cargo when building.
 
 | Platform | Rust target | Expected packages |
 | --- | --- | --- |
@@ -25,32 +24,25 @@ directory; the package workflow also passes the same explicit target to Tauri an
 | Linux ARM64 | `aarch64-unknown-linux-gnu` | AppImage, deb, rpm, and CLI archive |
 
 Ubuntu 24.04 is the Linux build baseline. Package installation and launch remain separate
-acceptance jobs on every platform; they must not be inferred from a successful package build.
+acceptance steps on every platform; they must not be inferred from a successful package build.
 
-`eng/linux-package-smoke.mjs` is the shared Linux package launch probe for those acceptance jobs.
+`eng/linux-package-smoke.mjs` is the shared Linux package launch probe for local native acceptance.
 It first re-verifies the target release metadata and requires the runner architecture to match the
 package target. It then extracts one AppImage, deb, or rpm into a fresh temporary directory without
 installing it on the host, validates the `Torben App` desktop entry, and checks that the desktop
 executable plus all six bundled application plugins and the shim are adjacent ELF files for the
 same Rust target. The launch runs under `xvfb-run` with isolated XDG data, configuration, cache, and
 runtime directories; success means the GUI remains alive for the bounded probe window. The child
-receives only an allowlisted environment so CI credentials are not forwarded to the application.
+receives only an allowlisted environment so unrelated credentials are not forwarded to the application.
 
 The runner deliberately does not treat extraction as proof that deb/rpm package-manager scripts or
-system installation work. `.github/workflows/linux-package-acceptance.yml` installs and launches
-the packages inside disposable root containers. Its matrix covers x86_64 and ARM64 on Ubuntu
-24.04 for AppImage, Debian 13 for deb, Fedora 44 for rpm, and Rocky Linux 10.2 for rpm. Rocky's
-base repositories do not ship the WebKitGTK 4.1 ABI required by Tauri 2, so the Rocky acceptance
-bootstrap enables the distribution's CRB repository and the community-approved EPEL repository
-before installing the RPM. Ubuntu, Debian, and Fedora run the probe through Xvfb; Rocky 10 uses
-EPEL's Weston with its headless backend and Pixman software renderer because Xvfb is not available
-there. Both paths require the GUI process to remain alive for the bounded probe window. Required
-probe tools are `timeout`, plus `xvfb-run` or `weston`, and `dpkg-deb` for deb or `bash`,
-`rpm2cpio`, and `cpio` for rpm. AppImage extraction uses `--appimage-extract` and does not require
-FUSE.
+system installation work. Run installation and launch checks manually in disposable native
+containers when resuming those milestones. Required probe tools are `timeout`, plus `xvfb-run` or
+`weston`, and `dpkg-deb` for deb or `bash`, `rpm2cpio`, and `cpio` for rpm. AppImage extraction
+uses `--appimage-extract` and does not require FUSE.
 
-The default `--mode extract` never invokes a package manager. The reusable development acceptance
-workflow uses the explicit `--mode install`: AppImage
+The default `--mode extract` never invokes a package manager. Explicit local installation
+acceptance uses `--mode install`: AppImage
 runs the verified portable package with
 `APPIMAGE_EXTRACT_AND_RUN=1`, deb invokes `apt-get`, and rpm invokes `dnf`. System package modes
 require root and are intended only for a disposable container. After the package manager succeeds,
@@ -76,14 +68,11 @@ launches with isolated application data plus an allowlisted environment. On macO
 verifies the bundle identifier, bundle version, executable name, and executable mode from the
 copied `.app`.
 
-`.github/workflows/desktop-package-acceptance.yml` runs six disposable hosted-runner jobs: NSIS and
-MSI on Windows x64 and ARM64, plus DMG on macOS Intel and Apple Silicon. Windows invokes each
-installer silently, discovers the registered installation, runs the probe, and uninstalls in a
-`finally` block. macOS mounts the DMG read-only, copies its sole `.app` into a temporary
-`Applications` directory to model the documented drag-to-install flow, detaches the image, and runs
-the probe against the copy. The manual cross-platform development aggregate depends on these six
-jobs and the eight Linux jobs. The official portable workflow does not invoke this deferred package
-matrix.
+For local Windows acceptance, install NSIS/MSI in a disposable environment, discover the
+registered installation, run the probe, and uninstall after the check. For macOS acceptance, mount
+the DMG read-only, copy its sole `.app` into a temporary `Applications` directory, detach the
+image, and run the probe against the copy. These deferred package checks are separate from current
+Windows x64 portable acceptance.
 
 When verified release metadata declares `signingStatus=signed`, the desktop probe also repeats the
 platform trust checks after artifact transfer and installation. Windows requires valid
@@ -103,10 +92,9 @@ node eng/linux-package-smoke.mjs \
 ELF, or thin Mach-O architecture that differs from the requested Rust target. It also requires
 exactly one package in every format listed above before copying anything into a new or empty
 target-specific artifact directory. The CLI copy is named `torben-<version>-<target>` (plus `.exe`
-on Windows), so it cannot be confused with a package from another matrix job. Before hashing, the
-workflow additionally creates a ZIP on Windows or a `tar.gz` on macOS/Linux. The Unix archive
-preserves the executable bit that GitHub Artifact transport otherwise normalizes; distributed users
-should consume the archived CLI rather than the raw verification copy.
+on Windows), so it cannot be confused with a package for another target. Before hashing, create a
+ZIP on Windows or a `tar.gz` on macOS/Linux. The Unix archive preserves executable mode bits during
+transfer; distributed users should consume the archived CLI rather than the raw verification copy.
 
 ```powershell
 node .\eng\collect-release-artifacts.mjs `
@@ -167,7 +155,7 @@ rename failure removes temporary and partially committed aggregate metadata. Off
 contain a semantically valid `latest.json` whose two Windows x64 installer records exactly reproduce
 the signed mapping files, local signatures, version, and fixed GitHub URLs. Development sets must not contain
 `latest.json`. A future package/update publishing job must run `verify` after artifact download and
-before creating a GitHub Release. The current portable workflow uses the stricter one-file verifier
+before creating a GitHub Release. The current portable release uses the stricter one-file verifier
 instead.
 
 ```powershell

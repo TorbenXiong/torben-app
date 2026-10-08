@@ -1,9 +1,8 @@
 # Plugin registry publishing
 
-Torben App's official plugin registry is a static, signed directory. The repository supports both
-local offline generation and a protected GitHub Actions artifact workflow. Neither path deploys to
-a public endpoint, rotates keys, or changes a build's trust root. The workflow uploads only a
-short-lived review artifact; public HTTPS hosting is not live.
+Torben App's official plugin registry is a static, signed directory. The repository supports
+local offline generation and verification. These tools do not deploy to a public endpoint, rotate
+keys, or change a build's trust root. Public HTTPS hosting is not live.
 
 ## Trust and inputs
 
@@ -88,64 +87,22 @@ The root public key printed by the command is the Base64 value reviewed for
 snapshot changes. Root rotation requires a separate product and release decision because existing
 hosts trust only the key compiled into their build.
 
-## Create a protected review artifact
+## Verify a review artifact locally
 
-`.github/workflows/plugin-registry-release.yml` is a manual `workflow_dispatch` that runs only for
-`main` and enters the protected `official-plugin-registry` GitHub Environment. Configure that
-Environment with:
-
-- secret `TORBEN_PLUGIN_REGISTRY_ROOT_PRIVATE_KEY`: the registry-root Ed25519 private key in PEM
-  form;
-- secret `TORBEN_PLUGIN_REGISTRY_PUBLISHER_PRIVATE_KEYS_JSON`: a JSON object mapping every reviewed
-  publisher ID to its Ed25519 private key PEM;
-- variable `TORBEN_PLUGIN_REGISTRY_ROOT_PUBLIC_KEY`: the exact raw Base64 Ed25519 trust root already
-  reviewed for release builds.
-
-For example, the publisher secret has this shape; the values shown are placeholders, not usable
-keys:
-
-```json
-{
-  "example.publisher": "-----BEGIN PRIVATE KEY-----\n<PRIVATE_KEY>\n-----END PRIVATE KEY-----\n"
-}
-```
-
-Require Environment reviewers and prevent unreviewed branches from deploying to that Environment.
-The workflow itself additionally rejects any ref other than `refs/heads/main`. Its config, source
-directory, and optional previous registry inputs must be relative, non-link paths inside the exact
-checked-out revision. Keep production inputs in reviewed repository paths; do not point this job at
-generated or downloaded content.
-
-The dispatch inputs repeat the security-sensitive release metadata so the workflow can require an
-exact match with both the reviewed config and signed output:
-
-- config path and package source directory;
-- previous signed `registry.json` path, required for every sequence after `1`;
-- sequence, whole-second UTC `generatedAt`, and exact `minimumHostVersion`.
+Use `eng/plugin-registry-release.mjs verify` to independently verify the generated tree against
+its reviewed config and public trust root. Pass `--config`, `--registry`, `--expected-root-key`,
+`--sequence`, `--generated-at`, `--minimum-host-version`, and `--inventory` explicitly. Pass
+`--previous-registry` for every sequence after `1`.
 
 Sequence `1` is the only release allowed without a predecessor. Later releases must advance exactly
-one sequence and use a later timestamp. The predecessor is verified with the same configured root by
-the shipped Rust `RegistryVerifier`; an unsigned, foreign-root, reused, skipped, or rolled-back
-sequence fails the job.
+one sequence and use a later timestamp. Verification checks both signature levels, every manifest
+and target hash and exact tree membership, then writes a new deterministic `SHA256SUMS` inventory. Private keys
+remain outside the source and output trees.
 
-The secret-bearing step invokes only repository-owned Node scripts. It writes keys with restrictive
-permissions beneath an operation-specific `RUNNER_TEMP` directory, passes file paths to the
-publisher, and removes that directory through an exit trap before verification or artifact upload.
-Secrets are not job-level environment variables and are never passed to an Action, package manager,
-Rust process, or uploaded tree.
-
-After generation, the workflow:
-
-1. compares the emitted public key byte-for-byte with the protected Environment variable;
-2. verifies the new registry and predecessor through the Rust host verifier;
-3. independently verifies the root and publisher Ed25519 signatures, reviewed config order and
-   values, every manifest hash, every platform executable hash, and exact tree membership;
-4. writes deterministic `SHA256SUMS` for every signed artifact file;
-5. uploads `plugin-registry-sequence-<sequence>-<revision>` for 14 days.
-
-The workflow has only `contents: read`. It has no GitHub Pages, Release, package publication,
-OIDC, or third-party deployment permission. A successful run means the registry tree is ready for
-review and external hosting; it does not mean a public endpoint exists or changed.
+Also verify the new registry and its predecessor with the shipped Rust `RegistryVerifier` through
+`cargo run --locked -p torben-plugin-host --example verify-plugin-registry -- <registry.json> <root-public-key>`.
+A verified artifact is ready for review and external hosting; generation and verification do not
+publish a public endpoint.
 
 ## Reproducibility and release checks
 
@@ -155,9 +112,8 @@ reordering fields, or editing any signed file invalidates the trust chain.
 
 Before hosting a snapshot:
 
-1. Use the protected artifact workflow, or run both
-   `eng/publish-plugin-registry.test.mjs` and `eng/plugin-registry-release.test.mjs` before a local
-   offline publication.
+1. Run both `eng/publish-plugin-registry.test.mjs` and `eng/plugin-registry-release.test.mjs`,
+   then generate and independently verify the local artifact as described above.
 2. Compare the reviewed config, predecessor, sequence, revocations, `SHA256SUMS`, and target
    inventory with the intended release.
 3. Serve the entire output tree without content transformation from one HTTPS origin.
