@@ -31,6 +31,7 @@ import { useTranslation } from "react-i18next";
 import { NavLink, useNavigate } from "react-router";
 import { comparePluginOrder, movePlugin, normalizePluginOrder } from "../pluginOrder";
 import type { ApplicationDescriptor, PluginSummary } from "../types";
+import { appVersion } from "../version";
 import {
   JavaIcon,
   MysqlIcon,
@@ -46,7 +47,6 @@ const primaryNavigation = [{ to: "/plugins", key: "plugins", icon: Boxes }] as c
 const logsNavigation = { to: "/logs", key: "logs", icon: ScrollText };
 const diagnosticsNavigation = { to: "/diagnostics", key: "diagnostics", icon: CheckCircle2 };
 const settingsNavigation = { to: "/settings", key: "settings", icon: Settings };
-const appVersion = "0.0.2";
 
 const supportedApplicationRoutes = new Set([
   "node",

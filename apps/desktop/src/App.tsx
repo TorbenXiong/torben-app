@@ -250,27 +250,17 @@ export default function App() {
     );
   }
 
-  const temurinEnabled = snapshot.plugins.some(
-    (plugin) => plugin.id === "app.torben.plugin.temurin" && plugin.enabled,
+  const enabledPluginIds = new Set(
+    snapshot.plugins.filter((plugin) => plugin.enabled).map((plugin) => plugin.id),
   );
-  const nodeEnabled = snapshot.plugins.some(
-    (plugin) => plugin.id === "app.torben.plugin.node" && plugin.enabled,
-  );
-  const pythonEnabled = snapshot.plugins.some(
-    (plugin) => plugin.id === "app.torben.plugin.python" && plugin.enabled,
-  );
-  const rustEnabled = snapshot.plugins.some(
-    (plugin) => plugin.id === "app.torben.plugin.rust" && plugin.enabled,
-  );
-  const mysqlEnabled = snapshot.plugins.some(
-    (plugin) => plugin.id === "app.torben.plugin.mysql" && plugin.enabled,
-  );
-  const redisEnabled = snapshot.plugins.some(
-    (plugin) => plugin.id === "app.torben.plugin.redis" && plugin.enabled,
-  );
-  const postgresqlEnabled = snapshot.plugins.some(
-    (plugin) => plugin.id === "app.torben.plugin.postgresql" && plugin.enabled,
-  );
+  const pluginEnabled = (pluginId: string) => enabledPluginIds.has(pluginId);
+  const temurinEnabled = pluginEnabled("app.torben.plugin.temurin");
+  const nodeEnabled = pluginEnabled("app.torben.plugin.node");
+  const pythonEnabled = pluginEnabled("app.torben.plugin.python");
+  const rustEnabled = pluginEnabled("app.torben.plugin.rust");
+  const mysqlEnabled = pluginEnabled("app.torben.plugin.mysql");
+  const redisEnabled = pluginEnabled("app.torben.plugin.redis");
+  const postgresqlEnabled = pluginEnabled("app.torben.plugin.postgresql");
 
   return (
     <Layout

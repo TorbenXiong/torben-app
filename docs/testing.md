@@ -38,6 +38,12 @@ fixture suite for manual cross-platform workflow maintenance.
 `--locked` for every direct Cargo build, lint, test, or run command in workflows. The repository
 does not require DCO sign-off trailers.
 
+The database UI regressions in `apps/desktop/src/test/App.test.tsx` cover independent instance
+runtime selection and resetting form state when the engine changes. The About dialog reads the
+desktop package version; the release metadata test checks the Cargo, package, and Tauri versions.
+The desktop Node.js lifecycle also checks the automatic selection of the first installed version
+and the exact successful operation kinds, including the explicit select and clear commands.
+
 The Node.js first-milestone behaviors are covered by these fixture-backed tests:
 
 | Acceptance behavior | Evidence |

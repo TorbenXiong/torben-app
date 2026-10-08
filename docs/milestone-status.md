@@ -78,12 +78,13 @@ Windows x64 gates required for the next supported release.
   enabled managed sources, plus the winget, Homebrew, apt, and DNF source descriptors into SQLite. App list,
   search, and detail queries read that persisted Core-owned snapshot.
 - The desktop opens on Plugins and exposes installed plugin applications such as Java directly in
-  the sidebar, followed by Logs, Diagnostics, and Settings. The former Overview, Catalog, and
+  the sidebar, with Settings at the bottom and Logs/Diagnostics in the title-bar Help menu. The former Overview, Catalog, and
   Installed routes redirect to Plugins. Theme, English/Simplified Chinese localization, keyboard
   navigation, reduced-motion behavior, and responsive minimum-window layouts are covered by
   frontend tests.
 - Shell integration is explicit and user-level. Windows user `Path` and Unix login profiles use
-  ownership-aware, receipt-backed transactions; system `PATH`, elevation, telemetry, accounts,
+  ownership-aware, receipt-backed transactions. Release builds request UAC through the Windows
+  manifest; shell integration does not elevate itself. System `PATH`, telemetry, accounts,
   cloud synchronization, background services, and project-level version pinning remain outside the
   product boundary.
 
@@ -202,8 +203,10 @@ The authoritative test-to-requirement mapping is maintained in
 The following items are not proven by local source or simulated fixtures and must not be described
 as complete until their authoritative remote evidence exists:
 
-1. Run the exact-version tag workflow. Only a successful protected-environment run can prove the
-   clean-data launch, transfer verification, and immutable GitHub Release publication.
+1. For each new version, run the exact-version tag workflow. Published
+   [0.0.1](https://github.com/TorbenXiong/torben-app/releases/tag/v0.0.1) and
+   [0.0.2](https://github.com/TorbenXiong/torben-app/releases/tag/v0.0.2) are existing portable releases;
+   each later version still needs its own clean-data launch and transfer-verification evidence.
 2. Configure the protected `official-plugin-registry` environment with the offline root,
    publisher keys, and reviewed public trust root. Generate and review an artifact from committed
    production registry inputs.
