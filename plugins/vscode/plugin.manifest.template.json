@@ -1,7 +1,7 @@
 {
   "id": "app.torben.plugin.vscode",
   "displayName": "Visual Studio Code",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "protocolVersion": 1,
   "minimumHostVersion": "0.0.1",
   "publisher": "Torben App",

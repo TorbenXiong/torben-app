@@ -43,6 +43,7 @@ import type {
   UserSettings,
   VersionDescriptor,
 } from "./types";
+import { appVersion } from "./version";
 
 declare global {
   interface Window {
@@ -137,7 +138,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.rust",
     displayName: "Rust",
-    version: "0.0.2",
+    version: appVersion,
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -159,7 +160,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.mysql",
     displayName: "MySQL",
-    version: "0.0.2",
+    version: appVersion,
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -181,7 +182,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.redis",
     displayName: "Redis",
-    version: "0.0.2",
+    version: appVersion,
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -207,7 +208,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.postgresql",
     displayName: "PostgreSQL",
-    version: "0.0.2",
+    version: appVersion,
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -246,7 +247,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.temurin",
     displayName: "Java",
-    version: "0.0.2",
+    version: appVersion,
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -273,7 +274,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.python",
     displayName: "Python",
-    version: "0.0.2",
+    version: appVersion,
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -295,7 +296,7 @@ const mockAvailablePlugins: PluginSummary[] = [
   {
     id: "app.torben.plugin.node",
     displayName: "Node.js",
-    version: "0.0.2",
+    version: appVersion,
     enabled: false,
     origin: "built_in",
     publisher: "Torben App",
@@ -820,7 +821,7 @@ const mockSnapshot: DashboardSnapshot = {
   packageInstallations: [],
   updater: {
     configured: false,
-    currentVersion: "0.0.2",
+    currentVersion: appVersion,
     endpoint: "https://github.com/TorbenXiong/torben-app/releases/latest/download/latest.json",
   },
   settings: {

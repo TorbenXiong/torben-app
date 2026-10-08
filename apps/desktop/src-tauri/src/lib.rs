@@ -1801,7 +1801,7 @@ mod tests {
         };
 
         use serde_json::json;
-        use torben_contracts::{ExactVersion, plugin::PLUGIN_PROTOCOL_VERSION};
+        use torben_contracts::{ExactVersion, OperationKind, plugin::PLUGIN_PROTOCOL_VERSION};
         use torben_core::{
             NodeFixtureConfiguration, NodeProvider, TorbenCore, TorbenPaths, test_fixtures,
         };
@@ -1921,6 +1921,10 @@ mod tests {
                 assert_eq!(installed.version, version);
                 assert_eq!(installed.health, "healthy");
                 assert!(install_path.is_dir());
+                assert_eq!(
+                    core.selections().expect("read automatic selection")[0].version,
+                    version
+                );
 
                 select_version_for_core(&core, "node".to_owned(), VERSION.to_owned())
                     .await
@@ -1949,8 +1953,23 @@ mod tests {
                 let terminal_successes = events
                     .iter()
                     .filter(|event| event.state == torben_contracts::OperationState::Succeeded)
-                    .count();
-                assert_eq!(terminal_successes, 4);
+                    .collect::<Vec<_>>();
+                // The first installation selects its version before the explicit select/clear.
+                assert_eq!(terminal_successes.len(), 5);
+                for (kind, expected) in [
+                    (OperationKind::Install, 1),
+                    (OperationKind::Select, 3),
+                    (OperationKind::Uninstall, 1),
+                ] {
+                    assert_eq!(
+                        terminal_successes
+                            .iter()
+                            .filter(|event| event.kind == Some(kind))
+                            .count(),
+                        expected,
+                        "unexpected number of {kind:?} operations"
+                    );
+                }
             });
         }
 

@@ -19,6 +19,7 @@ import {
   PluginDetailPage,
   PluginsPage,
   PythonDetailPage,
+  RuntimeDetailPage,
   SettingsPage,
   TemurinDetailPage,
 } from "../pages";
@@ -43,13 +44,14 @@ import type {
   UpdatePreferences,
   UserSettings,
 } from "../types";
+import { appVersion } from "../version";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 const bundledPlugin: PluginSummary = {
   id: "app.torben.plugin.node",
   displayName: "Node.js",
-  version: "0.0.2",
+  version: appVersion,
   enabled: true,
   origin: "built_in",
   publisher: "Torben App",
@@ -65,7 +67,7 @@ const bundledPlugin: PluginSummary = {
 const installedTemurinPlugin: PluginSummary = {
   id: "app.torben.plugin.temurin",
   displayName: "Java",
-  version: "0.0.2",
+  version: appVersion,
   enabled: true,
   origin: "built_in",
   publisher: "Torben App",
@@ -86,7 +88,7 @@ const availableTemurinPlugin: PluginSummary = {
 const installedPythonPlugin: PluginSummary = {
   id: "app.torben.plugin.python",
   displayName: "Python",
-  version: "0.0.2",
+  version: appVersion,
   enabled: true,
   origin: "built_in",
   publisher: "Torben App",
@@ -196,7 +198,7 @@ describe("Torben App shell", () => {
     expect(screen.getByRole("menuitem", { name: "Logs" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "About Torben App" }));
     const aboutDialog = screen.getByRole("dialog", { name: "Torben App" });
-    expect(aboutDialog).toHaveTextContent("Version 0.0.2");
+    expect(aboutDialog).toHaveTextContent(`Version ${appVersion}`);
     expect(aboutDialog).toHaveTextContent("local-first application manager for Windows");
     fireEvent.click(within(aboutDialog).getByText("Close", { selector: "button" }));
     expect(screen.queryByRole("dialog", { name: "Torben App" })).not.toBeInTheDocument();
@@ -469,6 +471,92 @@ describe("Torben App shell", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Version management" }));
     expect(screen.getByText("v5.7.44")).toBeInTheDocument();
+  });
+
+  it("resets database instance defaults when switching engines", async () => {
+    vi.spyOn(api, "listDatabaseInstances").mockResolvedValue([]);
+    const runtime: InstallRecord = {
+      appId: "mysql",
+      version: "8.4.11",
+      sourceId: "mysql.official",
+      scope: "managed",
+      installPath: "C:/Torben/mysql/8.4.11",
+      installedAt: "fixture",
+      health: "healthy",
+    };
+    const { rerender } = render(
+      <RuntimeDetailPage
+        appId="mysql"
+        displayName="MySQL"
+        installed={[runtime]}
+        onChanged={async () => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Instance management" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create instance" }));
+    expect(screen.getByLabelText("Port")).toHaveValue(3306);
+    fireEvent.change(screen.getByLabelText("Instance name"), { target: { value: "mysql-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    rerender(
+      <RuntimeDetailPage
+        appId="redis"
+        displayName="Redis"
+        installed={[{ ...runtime, appId: "redis", version: "7.2.0" }]}
+        onChanged={async () => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create instance" }));
+    expect(screen.getByLabelText("Port")).toHaveValue(6379);
+    expect(screen.getByLabelText("Instance name")).toHaveValue("local");
+  });
+
+  it("creates an instance with a runtime other than the terminal selection", async () => {
+    vi.spyOn(api, "listDatabaseInstances").mockResolvedValue([]);
+    const create = vi.spyOn(api, "createDatabaseInstance").mockResolvedValue({
+      engine: "mysql",
+      name: "local",
+      runtimeVersion: "5.7.44",
+      port: 3306,
+      dataPath: "C:/Torben/mysql/instances/local/data",
+      createdAt: "fixture",
+      state: "stopped",
+      pid: null,
+    });
+    const runtime: InstallRecord = {
+      appId: "mysql",
+      version: "8.4.11",
+      sourceId: "mysql.official",
+      scope: "managed",
+      installPath: "C:/Torben/mysql/8.4.11",
+      installedAt: "fixture",
+      health: "healthy",
+    };
+    render(
+      <MysqlDetailPage
+        installed={[runtime, { ...runtime, version: "5.7.44" }]}
+        selected={[runtime]}
+        onChanged={async () => undefined}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("tab", { name: "Instance management" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create instance" }));
+    expect(screen.getByLabelText("Runtime version")).toHaveValue("8.4.11");
+    fireEvent.change(screen.getByLabelText("Runtime version"), { target: { value: "5.7.44" } });
+    expect(screen.getByLabelText("Runtime version")).toHaveValue("5.7.44");
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Create instance" }),
+    );
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith({
+        engine: "mysql",
+        name: "local",
+        runtimeVersion: "5.7.44",
+        port: 3306,
+      }),
+    );
   });
 
   it("keeps Java releases independently installable within the same JDK line", async () => {
@@ -760,13 +848,13 @@ describe("Torben App shell", () => {
   it("keeps development builds offline when no updater key was compiled", async () => {
     const configuration = {
       configured: false,
-      currentVersion: "0.0.2",
+      currentVersion: appVersion,
       endpoint: "https://github.com/TorbenXiong/torben-app/releases/latest/download/latest.json",
     };
     expect(initialTorbenUpdateStatus(configuration).state).toBe("unconfigured");
     await expect(checkTorbenUpdate(configuration)).resolves.toMatchObject({
       state: "unconfigured",
-      currentVersion: "0.0.2",
+      currentVersion: appVersion,
       availableVersion: null,
     });
   });
@@ -2106,13 +2194,13 @@ describe("Torben App shell", () => {
         shellIntegration={disabledShellIntegration}
         updater={{
           configured: true,
-          currentVersion: "0.0.2",
+          currentVersion: appVersion,
           endpoint:
             "https://github.com/TorbenXiong/torben-app/releases/latest/download/latest.json",
         }}
         updateStatus={{
           state: "available",
-          currentVersion: "0.0.2",
+          currentVersion: appVersion,
           availableVersion: "0.2.0",
           publishedAt: "2026-08-24T00:00:00Z",
           notes: "Signed update fixture",

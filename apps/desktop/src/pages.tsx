@@ -120,6 +120,7 @@ import type {
   UserSettings,
   VersionDescriptor,
 } from "./types";
+import { appVersion } from "./version";
 
 const bundledApplicationIds: Record<string, string> = {
   "app.torben.plugin.node": "node",
@@ -557,6 +558,7 @@ export function RuntimeDetailPage({
       )}
       {databaseEngine && activeDatabaseTab === "instances" ? (
         <DatabaseInstancesPanel
+          key={databaseEngine}
           engine={databaseEngine}
           installed={installed.filter((record) => record.appId === databaseEngine)}
           selectedVersion={selectedVersion}
@@ -593,9 +595,12 @@ function DatabaseInstancesPanel({
   const [notice, setNotice] = useState<string | null>(null);
   const [name, setName] = useState("local");
   const [port, setPort] = useState(String(DATABASE_DEFAULT_PORTS[engine]));
-  const [runtimeVersion, setRuntimeVersion] = useState(
-    selectedVersion ?? installed[0]?.version ?? "",
-  );
+  const [requestedRuntimeVersion, setRequestedRuntimeVersion] = useState("");
+  const runtimeVersion = installed.some((record) => record.version === requestedRuntimeVersion)
+    ? requestedRuntimeVersion
+    : installed.some((record) => record.version === selectedVersion)
+      ? (selectedVersion ?? "")
+      : (installed[0]?.version ?? "");
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -612,14 +617,6 @@ function DatabaseInstancesPanel({
     setLoading(true);
     void refresh();
   }, [refresh]);
-
-  useEffect(() => {
-    if (selectedVersion && installed.some((record) => record.version === selectedVersion)) {
-      setRuntimeVersion(selectedVersion);
-    } else if (!installed.some((record) => record.version === runtimeVersion)) {
-      setRuntimeVersion(installed[0]?.version ?? "");
-    }
-  }, [installed, runtimeVersion, selectedVersion]);
 
   async function run(action: string, operation: () => Promise<unknown>) {
     setBusy((current) => new Set(current).add(action));
@@ -732,7 +729,7 @@ function DatabaseInstancesPanel({
               <label className="dialog-field">
                 <span>{t("databaseInstances.runtimeVersion")}</span>
                 <select
-                  onChange={(event) => setRuntimeVersion(event.target.value)}
+                  onChange={(event) => setRequestedRuntimeVersion(event.target.value)}
                   value={runtimeVersion}
                 >
                   {installed.map((record) => (
@@ -3422,12 +3419,12 @@ export function SettingsPage({
   onLibraryMigrate,
   updater = {
     configured: false,
-    currentVersion: "0.0.2",
+    currentVersion: appVersion,
     endpoint: "",
   },
   updateStatus = {
     state: "unconfigured",
-    currentVersion: "0.0.2",
+    currentVersion: appVersion,
     availableVersion: null,
     publishedAt: null,
     notes: null,
