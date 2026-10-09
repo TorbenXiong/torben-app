@@ -328,12 +328,31 @@ async fn select_version_for_core(
 }
 
 #[tauri::command]
-fn clear_selection(core: State<'_, Arc<TorbenCore>>, app_id: String) -> Result<(), TorbenError> {
-    clear_selection_for_core(core.inner(), app_id)
+async fn clear_selection(
+    core: State<'_, Arc<TorbenCore>>,
+    app_id: String,
+) -> Result<(), TorbenError> {
+    clear_selection_for_core(core.inner(), app_id).await
 }
 
-fn clear_selection_for_core(core: &TorbenCore, app_id: String) -> Result<(), TorbenError> {
-    core.clear_selection(&AppId::new(app_id)?)
+async fn clear_selection_for_core(core: &TorbenCore, app_id: String) -> Result<(), TorbenError> {
+    let app_id = AppId::new(app_id)?;
+    let core = core.clone();
+    run_desktop_mutation(move || core.clear_selection(&app_id)).await
+}
+
+async fn run_desktop_mutation<T: Send + 'static>(
+    task: impl FnOnce() -> Result<T, TorbenError> + Send + 'static,
+) -> Result<T, TorbenError> {
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|error| {
+            TorbenError::new(
+                "desktop_mutation_task_failed",
+                "The desktop mutation task stopped unexpectedly.",
+            )
+            .with_detail("reason", error.to_string())
+        })?
 }
 
 #[tauri::command]
@@ -936,12 +955,14 @@ async fn install_official_plugin_from_registry(
 }
 
 #[tauri::command]
-fn set_plugin_enabled(
+async fn set_plugin_enabled(
     core: State<'_, Arc<TorbenCore>>,
     plugin_id: String,
     enabled: bool,
 ) -> Result<(), TorbenError> {
-    core.set_plugin_enabled(&torben_contracts::PluginId::new(plugin_id)?, enabled)
+    let plugin_id = PluginId::new(plugin_id)?;
+    let core = Arc::clone(core.inner());
+    run_desktop_mutation(move || core.set_plugin_enabled(&plugin_id, enabled)).await
 }
 
 #[tauri::command]
@@ -990,15 +1011,19 @@ fn update_settings(
 }
 
 #[tauri::command]
-fn set_shell_integration(
+async fn set_shell_integration(
     core: State<'_, Arc<TorbenCore>>,
     enabled: bool,
 ) -> Result<ShellIntegrationStatus, TorbenError> {
-    if enabled {
-        core.enable_shell_integration()
-    } else {
-        core.disable_shell_integration()
-    }
+    let core = Arc::clone(core.inner());
+    run_desktop_mutation(move || {
+        if enabled {
+            core.enable_shell_integration()
+        } else {
+            core.disable_shell_integration()
+        }
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1935,6 +1960,7 @@ mod tests {
                 );
 
                 clear_selection_for_core(&core, "node".to_owned())
+                    .await
                     .expect("clear Node.js selection through the desktop command boundary");
                 assert!(
                     core.selections()

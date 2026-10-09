@@ -1,6 +1,6 @@
 {
   "id": "app.torben.plugin.mysql",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "protocolVersion": 1,
   "minimumHostVersion": "0.0.1",
   "publisher": "Torben App",
@@ -14,7 +14,7 @@
     "schema_ui"
   ],
   "permissions": {
-    "networkDomains": ["cdn.mysql.com"],
+    "networkDomains": ["cdn.mysql.com", "mirrors.huaweicloud.com", "repo.huaweicloud.com"],
     "filesystemRoots": ["managed_app_library", "download_cache", "staging", "plugin_data"],
     "packageManagers": [],
     "externalCommands": ["mysql", "mysqld", "mysqladmin", "mysqldump"]

@@ -79,6 +79,7 @@ import {
   activeRuntimeOperation,
   RuntimeOperationProgress,
 } from "./components/RuntimeOperationProgress";
+import { useRuntimeOperations } from "./components/RuntimeOperations";
 import i18n from "./i18n";
 import { comparePluginOrder, movePlugin, normalizePluginOrder } from "./pluginOrder";
 import type {
@@ -280,6 +281,7 @@ export function RuntimeDetailPage({
 }) {
   const { t } = useTranslation();
   const runtimeAppId = appId ?? "python";
+  const runtimeOperations = useRuntimeOperations();
   const runtimeDisplayName = displayName ?? "Python";
   const [versions, setVersions] = useState<VersionDescriptor[]>([]);
   const [loading, setLoading] = useState(true);
@@ -334,7 +336,7 @@ export function RuntimeDetailPage({
     setBusy((current) => new Set(current).add(action));
     setError(null);
     try {
-      await operation();
+      await runtimeOperations.run(runtimeAppId, action, operation);
       await onChanged();
     } catch (reason) {
       setError(formatTorbenError(reason));
@@ -351,11 +353,12 @@ export function RuntimeDetailPage({
   const rows = buildRuntimeVersionRows(versions, installed, selected, runtimeAppId);
   const selectedVersion = selected.find((record) => record.appId === runtimeAppId)?.version;
   const databaseEngine = isDatabaseEngine(runtimeAppId) ? runtimeAppId : null;
+  const operationError = error ?? runtimeOperations.errorFor(runtimeAppId);
   return (
     <div className="page-stack">
-      {error ? (
+      {operationError ? (
         <div className="error-banner" role="alert">
-          <CircleAlert size={16} /> {error}
+          <CircleAlert size={16} /> {operationError}
         </div>
       ) : null}
       {databaseEngine ? (
@@ -428,9 +431,14 @@ export function RuntimeDetailPage({
                     operationEvent?.kind === "install" ? operationEvent : undefined;
                   const uninstallEvent =
                     operationEvent?.kind === "uninstall" ? operationEvent : undefined;
-                  const installing = busy.has(installAction) || Boolean(installEvent);
+                  const installing =
+                    busy.has(installAction) ||
+                    runtimeOperations.isPending(runtimeAppId, "install", row.version) ||
+                    Boolean(installEvent);
                   const uninstalling =
-                    busy.has(`uninstall:${row.version}`) || Boolean(uninstallEvent);
+                    busy.has(`uninstall:${row.version}`) ||
+                    runtimeOperations.isPending(runtimeAppId, "uninstall", row.version) ||
+                    Boolean(uninstallEvent);
                   return (
                     <div className="version-row runtime-version-row" key={row.version}>
                       <div className="version-main">
@@ -1080,11 +1088,14 @@ function JavaDetailPage({
     }
   }
 
+  const runtimeOperations = useRuntimeOperations();
+  const operationError = error ?? runtimeOperations.errorFor("temurin");
+
   async function run(action: string, operation: () => Promise<unknown>) {
     setBusy((current) => new Set(current).add(action));
     setError(null);
     try {
-      await operation();
+      await runtimeOperations.run("temurin", action, operation);
       await onChanged();
     } catch (reason) {
       setError(formatTorbenError(reason));
@@ -1193,9 +1204,9 @@ function JavaDetailPage({
 
   return (
     <div className="page-stack">
-      {error ? (
+      {operationError ? (
         <div className="error-banner" role="alert">
-          <CircleAlert size={16} /> {error}
+          <CircleAlert size={16} /> {operationError}
         </div>
       ) : null}
       <div className="detail-grid">
@@ -1234,9 +1245,14 @@ function JavaDetailPage({
                   operationEvent?.kind === "install" ? operationEvent : undefined;
                 const uninstallEvent =
                   operationEvent?.kind === "uninstall" ? operationEvent : undefined;
-                const installing = busy.has(installAction) || Boolean(installEvent);
+                const installing =
+                  busy.has(installAction) ||
+                  runtimeOperations.isPending("temurin", "install", row.version) ||
+                  Boolean(installEvent);
                 const uninstalling =
-                  busy.has(`uninstall:${row.version}`) || Boolean(uninstallEvent);
+                  busy.has(`uninstall:${row.version}`) ||
+                  runtimeOperations.isPending("temurin", "uninstall", row.version) ||
+                  Boolean(uninstallEvent);
                 return (
                   <div className="version-row runtime-version-row" key={row.version}>
                     <div className="version-main">

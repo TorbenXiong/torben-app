@@ -89,7 +89,7 @@ pub struct PostgresqlDistribution {
 
 impl PostgresqlProvider {
     pub fn official() -> TorbenResult<Self> {
-        let client = reqwest::Client::builder()
+        let client = crate::download::client_builder()
             .user_agent(format!("Torben-App/{}", env!("CARGO_PKG_VERSION")))
             .https_only(true)
             .build()
@@ -174,9 +174,10 @@ impl PostgresqlProvider {
         if !installer_path.is_file()
             || sha256_file_checked(&installer_path, Some(&cancellation))? != distribution.checksum
         {
-            self.download(
+            self.download_with_retry(
                 &distribution.installer_url,
                 &installer_path,
+                &distribution.checksum,
                 &cancellation,
                 journal,
             )
@@ -373,6 +374,43 @@ impl PostgresqlProvider {
         Ok(())
     }
 
+    async fn download_with_retry(
+        &self,
+        url: &Url,
+        destination: &Path,
+        checksum: &str,
+        cancellation: &CancellationProbe,
+        journal: &mut OperationJournal,
+    ) -> TorbenResult<()> {
+        for attempt in 0..2 {
+            let future = self.download(url, destination, cancellation, journal);
+            tokio::pin!(future);
+            let result = loop {
+                cancellation.check()?;
+                tokio::select! {
+                    result = &mut future => break result,
+                    () = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+                }
+            };
+            match result {
+                Ok(()) => {
+                    if sha256_file_checked(destination, Some(cancellation))? == checksum {
+                        return Ok(());
+                    }
+                    if attempt == 1 {
+                        return Err(TorbenError::new(
+                            "archive_hash_mismatch",
+                            "The PostgreSQL installer does not match the pinned WinGet SHA-256 checksum.",
+                        ));
+                    }
+                }
+                Err(error) if error.code == "postgresql_network_error" && attempt == 0 => {}
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("the bounded download retry always returns")
+    }
+
     async fn download(
         &self,
         url: &Url,
@@ -386,7 +424,10 @@ impl PostgresqlProvider {
             .send()
             .await
             .map_err(network_error)?;
-        if response.url().host_str() != Some("get.enterprisedb.com") {
+        if response.url().scheme() != "https"
+            || response.url().host_str() != Some("get.enterprisedb.com")
+            || response.url().port_or_known_default() != Some(443)
+        {
             return Err(unexpected_origin());
         }
         let response = response.error_for_status().map_err(network_error)?;
@@ -395,14 +436,16 @@ impl PostgresqlProvider {
             return Err(installer_too_large());
         }
         let partial = destination.with_extension("partial");
-        let mut file = tokio::fs::File::create(&partial).await.map_err(io_error)?;
+        let mut file = crate::download::open_partial(&partial, false).map_err(io_error)?;
         let mut stream = response.bytes_stream();
         let mut total = 0u64;
+        let mut transfer = crate::download::TransferRate::new();
         let mut last_progress = 0.2_f32;
         let mut last_reported_bytes = 0u64;
         while let Some(chunk) = stream.next().await {
             cancellation.check()?;
             let chunk = chunk.map_err(network_error)?;
+            transfer.record(chunk.len(), "postgresql_network_error")?;
             total = total.saturating_add(chunk.len() as u64);
             if total > MAX_INSTALLER_BYTES {
                 return Err(installer_too_large());
@@ -442,6 +485,12 @@ impl PostgresqlProvider {
         }
         file.flush().await.map_err(io_error)?;
         file.sync_all().await.map_err(io_error)?;
+        drop(file);
+        if destination.exists() {
+            tokio::fs::remove_file(destination)
+                .await
+                .map_err(io_error)?;
+        }
         std::fs::rename(partial, destination).map_err(io_error)
     }
 }

@@ -67,7 +67,7 @@ pub struct RedisDistribution {
 
 impl RedisProvider {
     pub fn windows_community() -> TorbenResult<Self> {
-        let client = reqwest::Client::builder()
+        let client = crate::download::client_builder()
             .user_agent(format!("Torben-App/{}", env!("CARGO_PKG_VERSION")))
             .https_only(true)
             .build()
@@ -152,7 +152,7 @@ impl RedisProvider {
         if !archive_path.is_file()
             || sha256_file_checked(&archive_path, Some(&cancellation))? != distribution.checksum
         {
-            self.download(&distribution.archive_url, &archive_path, &cancellation)
+            self.download_verified(&distribution, &archive_path, &cancellation)
                 .await?;
         }
         let actual = sha256_file_checked(&archive_path, Some(&cancellation))?;
@@ -361,6 +361,43 @@ impl RedisProvider {
         Ok(())
     }
 
+    async fn download_verified(
+        &self,
+        distribution: &RedisDistribution,
+        destination: &Path,
+        cancellation: &CancellationProbe,
+    ) -> TorbenResult<()> {
+        let mut alternate = if crate::download::china_region() {
+            match crate::download::try_sources(
+                vec![distribution.archive_url.clone()],
+                Some(cancellation),
+                |url| async move { crate::download::github_asset_url(&self.client, &url).await },
+            )
+            .await
+            {
+                Ok(url) => Some(url),
+                Err(error) if error.code == "operation_cancelled" => return Err(error),
+                Err(error) => {
+                    tracing::warn!(code = %error.code, "GitHub API route unavailable; using the release URL");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        crate::download::verified(
+            &distribution.archive_url,
+            destination,
+            &distribution.checksum,
+            Some(cancellation),
+            |url| {
+                let url = alternate.take().unwrap_or(url);
+                async move { self.download(&url, destination, cancellation).await }
+            },
+        )
+        .await
+    }
+
     async fn download(
         &self,
         url: &Url,
@@ -370,17 +407,21 @@ impl RedisProvider {
         let response = self
             .client
             .get(url.clone())
+            .header(reqwest::header::ACCEPT, "application/octet-stream")
             .send()
             .await
             .map_err(network_error)?;
-        if !matches!(
-            response.url().host_str(),
-            Some(
-                "github.com"
-                    | "objects.githubusercontent.com"
-                    | "release-assets.githubusercontent.com"
+        if response.url().scheme() != "https"
+            || !matches!(
+                response.url().host_str(),
+                Some(
+                    "github.com"
+                        | "api.github.com"
+                        | "objects.githubusercontent.com"
+                        | "release-assets.githubusercontent.com"
+                )
             )
-        ) {
+        {
             return Err(unexpected_origin());
         }
         let response = response.error_for_status().map_err(network_error)?;
@@ -391,12 +432,14 @@ impl RedisProvider {
             return Err(archive_too_large());
         }
         let partial = destination.with_extension("partial");
-        let mut file = tokio::fs::File::create(&partial).await.map_err(io_error)?;
+        let mut file = crate::download::open_partial(&partial, false).map_err(io_error)?;
         let mut stream = response.bytes_stream();
         let mut total = 0u64;
+        let mut transfer = crate::download::TransferRate::new();
         while let Some(chunk) = stream.next().await {
             cancellation.check()?;
             let chunk = chunk.map_err(network_error)?;
+            transfer.record(chunk.len(), "redis_network_error")?;
             total = total.saturating_add(chunk.len() as u64);
             if total > MAX_ARCHIVE_BYTES {
                 return Err(archive_too_large());
@@ -405,6 +448,12 @@ impl RedisProvider {
         }
         file.flush().await.map_err(io_error)?;
         file.sync_all().await.map_err(io_error)?;
+        drop(file);
+        if destination.exists() {
+            tokio::fs::remove_file(destination)
+                .await
+                .map_err(io_error)?;
+        }
         std::fs::rename(partial, destination).map_err(io_error)
     }
 }

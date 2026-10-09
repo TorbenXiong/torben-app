@@ -75,7 +75,7 @@ pub struct MysqlDistribution {
 
 impl MysqlProvider {
     pub fn official() -> TorbenResult<Self> {
-        let client = reqwest::Client::builder()
+        let client = crate::download::client_builder()
             .user_agent(format!("Torben-App/{}", env!("CARGO_PKG_VERSION")))
             .https_only(true)
             .build()
@@ -160,8 +160,22 @@ impl MysqlProvider {
         if !archive_path.is_file()
             || sha256_file_checked(&archive_path, Some(&cancellation))? != distribution.checksum
         {
-            self.download(&distribution.archive_url, &archive_path, &cancellation)
-                .await?;
+            crate::download::verified(
+                &distribution.archive_url,
+                &archive_path,
+                &distribution.checksum,
+                Some(&cancellation),
+                |url| {
+                    let official = &distribution.archive_url;
+                    let destination = &archive_path;
+                    let cancellation = &cancellation;
+                    async move {
+                        self.download(&url, official, destination, cancellation)
+                            .await
+                    }
+                },
+            )
+            .await?;
         }
         let actual = sha256_file_checked(&archive_path, Some(&cancellation))?;
         if actual != distribution.checksum {
@@ -366,6 +380,7 @@ impl MysqlProvider {
     async fn download(
         &self,
         url: &Url,
+        official: &Url,
         destination: &Path,
         cancellation: &CancellationProbe,
     ) -> TorbenResult<()> {
@@ -385,7 +400,11 @@ impl MysqlProvider {
                 }
                 Err(error) => return Err(network_error(error)),
             };
-            if response.url().host_str() != url.host_str() {
+            if !crate::download::mirror_response(official, url, response.url())
+                && (response.url().scheme() != official.scheme()
+                    || response.url().host_str() != official.host_str()
+                    || response.url().port_or_known_default() != official.port_or_known_default())
+            {
                 return Err(unexpected_origin());
             }
             if (response.status().is_server_error()
@@ -405,16 +424,10 @@ impl MysqlProvider {
             {
                 return Err(archive_too_large());
             }
-            let mut file = tokio::fs::OpenOptions::new();
-            file.write(true).create(true);
-            if append {
-                file.append(true);
-            } else {
-                file.truncate(true);
-            }
-            let mut file = file.open(&partial).await.map_err(io_error)?;
+            let mut file = crate::download::open_partial(&partial, append).map_err(io_error)?;
             let mut stream = response.bytes_stream();
             let mut total = base;
+            let mut transfer = crate::download::TransferRate::new();
             let mut stream_error = None;
             while let Some(chunk) = stream.next().await {
                 cancellation.check()?;
@@ -425,6 +438,7 @@ impl MysqlProvider {
                         break;
                     }
                 };
+                transfer.record(chunk.len(), "mysql_network_error")?;
                 total = total.saturating_add(chunk.len() as u64);
                 if total > MAX_ARCHIVE_BYTES {
                     return Err(archive_too_large());
@@ -440,6 +454,11 @@ impl MysqlProvider {
                     continue;
                 }
                 return Err(error);
+            }
+            if destination.exists() {
+                tokio::fs::remove_file(destination)
+                    .await
+                    .map_err(io_error)?;
             }
             std::fs::rename(&partial, destination).map_err(io_error)?;
             return Ok(());

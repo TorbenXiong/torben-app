@@ -203,7 +203,7 @@ struct PythonReleaseFile {
 
 impl PythonProvider {
     pub fn official() -> TorbenResult<Self> {
-        let client = reqwest::Client::builder()
+        let client = crate::download::client_builder()
             .user_agent(format!("Torben-App/{}", env!("CARGO_PKG_VERSION")))
             .https_only(true)
             .build()
@@ -665,12 +665,15 @@ impl PythonProvider {
             .with_detail("reason", error.to_string())
         })?;
         std::fs::write(&config_path, config_bytes).map_err(io_error)?;
+        let source = self
+            .prepare_windows_index(paths, tag, staging, cancellation)
+            .await?;
         run_process(
             &manager,
             &[
                 OsString::from("install"),
                 OsString::from(format!("--config={}", config_path.display())),
-                OsString::from(format!("--source={PYTHON_WINDOWS_INDEX}")),
+                OsString::from(format!("--source={source}")),
                 OsString::from(target),
                 OsString::from(tag),
             ],
@@ -684,6 +687,155 @@ impl PythonProvider {
         // actual CPython prefix instead of assuming that `--target` is the
         // prefix itself.
         find_extracted_python_runtime(&runtime)
+    }
+
+    async fn prepare_windows_index(
+        &self,
+        paths: &TorbenPaths,
+        tag: &str,
+        staging: &Path,
+        cancellation: &CancellationProbe,
+    ) -> TorbenResult<String> {
+        let root = self.windows_index_url()?;
+        let mut url = root.clone();
+        // The official feed is paginated. Older exact releases may be present
+        // only in a later page, so never substitute a mirror's latest version.
+        for _ in 0..32 {
+            let bytes = crate::download::try_sources(
+                vec![url.clone(), url.clone()],
+                Some(cancellation),
+                |url| async move {
+                    self.fetch_bytes(&url, MAX_RELEASE_METADATA_BYTES, cancellation)
+                        .await
+                },
+            )
+            .await?;
+            let index: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+                TorbenError::new(
+                    "python_metadata_invalid",
+                    "The Python Windows index is invalid.",
+                )
+                .with_detail("reason", error.to_string())
+            })?;
+            if let Some(mut entry) = windows_index_entry(&index, tag, &root)? {
+                if entry["hash"]["sha256"].is_null() {
+                    // Legacy NuGet entries have no official SHA-256. Keep the
+                    // manager's original official-source path for those tags
+                    // instead of assigning trust to a mirror checksum.
+                    return Ok(root.to_string());
+                }
+                let archive_url = Url::parse(entry["url"].as_str().expect("validated archive URL"))
+                    .map_err(url_error)?;
+                let checksum = entry["hash"]["sha256"]
+                    .as_str()
+                    .expect("validated checksum")
+                    .to_ascii_lowercase();
+                let archive_name = archive_url
+                    .path_segments()
+                    .and_then(Iterator::last)
+                    .ok_or_else(|| invalid_plan("archive URL"))?;
+                let archive_path = paths.cache_dir().join("python-manager").join(archive_name);
+                if !archive_path.is_file()
+                    || sha256_file_checked(&archive_path, Some(cancellation))? != checksum
+                {
+                    crate::download::verified(
+                        &archive_url,
+                        &archive_path,
+                        &checksum,
+                        Some(cancellation),
+                        |candidate| {
+                            let official = &archive_url;
+                            let destination = &archive_path;
+                            async move {
+                                self.download_windows_archive(
+                                    &candidate,
+                                    official,
+                                    destination,
+                                    cancellation,
+                                )
+                                .await
+                            }
+                        },
+                    )
+                    .await?;
+                }
+                // The manager consumes only a local index and verified local
+                // ZIP, keeping its extraction behavior without hidden fetches.
+                entry["url"] = serde_json::Value::String(
+                    Url::from_file_path(&archive_path)
+                        .map_err(|()| invalid_plan("local archive path"))?
+                        .to_string(),
+                );
+                let local_index = staging.join("python-windows-index.json");
+                std::fs::write(
+                    &local_index,
+                    serde_json::to_vec(&serde_json::json!({"versions": [entry]}))
+                        .map_err(|error| TorbenError::internal(error.to_string()))?,
+                )
+                .map_err(io_error)?;
+                return Ok(local_index.display().to_string());
+            }
+            let Some(next) = index["next"].as_str().filter(|next| !next.is_empty()) else {
+                break;
+            };
+            url = root.join(next).map_err(url_error)?;
+            if !same_origin(&root, &url)
+                || (root.scheme() == "https" && !url.path().starts_with("/ftp/python/"))
+            {
+                return Err(invalid_plan("Windows index next URL"));
+            }
+        }
+        Err(version_not_found(tag))
+    }
+
+    async fn download_windows_archive(
+        &self,
+        url: &Url,
+        official: &Url,
+        destination: &Path,
+        cancellation: &CancellationProbe,
+    ) -> TorbenResult<()> {
+        let response = self
+            .client
+            .get(url.clone())
+            .send()
+            .await
+            .map_err(network_error)?;
+        if !crate::download::mirror_response(official, url, response.url()) {
+            validate_python_ftp_response(&response, official)?;
+        }
+        let response = response.error_for_status().map_err(network_error)?;
+        if response
+            .content_length()
+            .is_some_and(|size| size > MAX_SOURCE_ARCHIVE_BYTES)
+        {
+            return Err(resource_too_large(MAX_SOURCE_ARCHIVE_BYTES));
+        }
+        let partial = destination.with_extension("partial");
+        let mut file = crate::download::open_partial(&partial, false).map_err(io_error)?;
+        let mut stream = response.bytes_stream();
+        let mut received = 0_u64;
+        let mut transfer = crate::download::TransferRate::new();
+        while let Some(chunk) = stream.next().await.transpose().map_err(network_error)? {
+            transfer.record(chunk.len(), "python_network_error")?;
+            cancellation.check()?;
+            received = received.saturating_add(chunk.len() as u64);
+            if received > MAX_SOURCE_ARCHIVE_BYTES {
+                return Err(resource_too_large(MAX_SOURCE_ARCHIVE_BYTES));
+            }
+            file.write_all(&chunk).await.map_err(io_error)?;
+        }
+        file.flush().await.map_err(io_error)?;
+        file.sync_all().await.map_err(io_error)?;
+        drop(file);
+        if destination.exists() {
+            tokio::fs::remove_file(destination)
+                .await
+                .map_err(io_error)?;
+        }
+        tokio::fs::rename(partial, destination)
+            .await
+            .map_err(io_error)
     }
 
     async fn health_check_path(
@@ -875,7 +1027,7 @@ impl PythonProvider {
             return Err(size_mismatch(expected_size, response.content_length()));
         }
         let partial = destination.with_extension("partial");
-        let mut file = tokio::fs::File::create(&partial).await.map_err(io_error)?;
+        let mut file = crate::download::open_partial(&partial, false).map_err(io_error)?;
         let mut received = 0_u64;
         let mut stream = response.bytes_stream();
         let result = async {
@@ -1063,9 +1215,31 @@ impl PythonProvider {
     }
 
     async fn releases(&self) -> TorbenResult<Vec<(ExactVersion, PythonRelease)>> {
+        tokio::time::timeout(Duration::from_secs(25), self.releases_inner())
+            .await
+            .map_err(|_| {
+                TorbenError::new(
+                    "python_network_error",
+                    "Python metadata lookup timed out after retrying the official sources.",
+                )
+                .with_remediation(
+                    "Check the network connection and retry this Python installation.",
+                )
+            })?
+    }
+
+    async fn releases_inner(&self) -> TorbenResult<Vec<(ExactVersion, PythonRelease)>> {
         let url = self.api_base.join("release/").map_err(url_error)?;
         let releases: Vec<PythonRelease> =
-            self.fetch_json(&url, MAX_RELEASE_METADATA_BYTES).await?;
+            match self.fetch_json(&url, MAX_RELEASE_METADATA_BYTES).await {
+                Ok(releases) => releases,
+                Err(error) if cfg!(windows) && error.code == "python_network_error" => {
+                    // The Windows manager feed is an independent official endpoint.
+                    // It also validates exact tags, archive URLs and authoritative hashes.
+                    return self.windows_releases().await;
+                }
+                Err(error) => return Err(error),
+            };
         let mut result = Vec::new();
         for release in releases {
             if !release.is_published || release.pre_release {
@@ -1096,7 +1270,91 @@ impl PythonProvider {
         Ok(result)
     }
 
+    fn windows_index_url(&self) -> TorbenResult<Url> {
+        if self.api_base.host_str() == Some("www.python.org") {
+            Url::parse(PYTHON_WINDOWS_INDEX).map_err(url_error)
+        } else {
+            self.api_base.join("index-windows.json").map_err(url_error)
+        }
+    }
+
+    async fn windows_releases(&self) -> TorbenResult<Vec<(ExactVersion, PythonRelease)>> {
+        let architecture = match std::env::consts::ARCH {
+            "x86_64" => "64",
+            "aarch64" => "arm64",
+            other => return Err(platform_error("architecture", other)),
+        };
+        let root = self.windows_index_url()?;
+        let mut url = root.clone();
+        let mut visited = BTreeSet::new();
+        let mut releases = Vec::new();
+        for _ in 0..32 {
+            if !visited.insert(url.to_string()) {
+                return Err(invalid_plan("Windows index pagination cycle"));
+            }
+            let index: serde_json::Value =
+                self.fetch_json(&url, MAX_RELEASE_METADATA_BYTES).await?;
+            let entries = index["versions"]
+                .as_array()
+                .ok_or_else(|| invalid_plan("Windows index versions"))?;
+            for entry in entries {
+                let Some(version) = entry["sort-version"]
+                    .as_str()
+                    .and_then(|value| ExactVersion::from_str(value).ok())
+                else {
+                    continue;
+                };
+                if version.as_semver().major != 3
+                    || !version.as_semver().pre.is_empty()
+                    || windows_index_entry(&index, &format!("{version}-{architecture}"), &root)?
+                        .is_none()
+                {
+                    continue;
+                }
+                // Windows does not consume the source-release resource URI. The
+                // manager feed has no release date; keep it unknown rather than invent one.
+                releases.push((
+                    version.clone(),
+                    PythonRelease {
+                        resource_uri: String::new(),
+                        name: format!("Python {version}"),
+                        slug: python_release_slug(&version),
+                        pre_release: false,
+                        is_published: true,
+                        release_date: String::new(),
+                    },
+                ));
+            }
+            let Some(next) = index["next"].as_str().filter(|next| !next.is_empty()) else {
+                break;
+            };
+            url = root.join(next).map_err(url_error)?;
+            if !same_origin(&root, &url)
+                || (root.scheme() == "https" && !url.path().starts_with("/ftp/python/"))
+            {
+                return Err(invalid_plan("Windows index next URL"));
+            }
+        }
+        releases.sort_by(|left, right| right.0.cmp(&left.0));
+        releases.dedup_by(|left, right| left.0 == right.0);
+        if releases.is_empty() {
+            return Err(version_not_found("stable Windows Python"));
+        }
+        Ok(releases)
+    }
+
     async fn fetch_json<T: for<'de> Deserialize<'de>>(
+        &self,
+        url: &Url,
+        maximum: u64,
+    ) -> TorbenResult<T> {
+        crate::download::try_sources(vec![url.clone(), url.clone()], None, |url| async move {
+            self.fetch_json_once(&url, maximum).await
+        })
+        .await
+    }
+
+    async fn fetch_json_once<T: for<'de> Deserialize<'de>>(
         &self,
         url: &Url,
         maximum: u64,
@@ -1104,6 +1362,9 @@ impl PythonProvider {
         let response = self
             .client
             .get(url.clone())
+            // Leave room for retry and the independent feed inside the plugin's
+            // 30-second RPC deadline, so the host receives a useful network error.
+            .timeout(Duration::from_secs(6))
             .send()
             .await
             .map_err(network_error)?;
@@ -1137,6 +1398,64 @@ impl PythonProvider {
             .with_detail("reason", error.to_string())
         })
     }
+}
+
+fn windows_index_entry(
+    index: &serde_json::Value,
+    tag: &str,
+    root: &Url,
+) -> TorbenResult<Option<serde_json::Value>> {
+    let (version, architecture) = tag
+        .rsplit_once('-')
+        .ok_or_else(|| invalid_plan("Windows runtime tag"))?;
+    let suffix = match architecture {
+        "64" => "amd64",
+        "32" => "win32",
+        "arm64" => "arm64",
+        _ => return Err(invalid_plan("Windows runtime architecture")),
+    };
+    let expected_url = root
+        .join(&format!("{version}/python-{version}-{suffix}.zip"))
+        .map_err(url_error)?;
+    let legacy_package = match architecture {
+        "64" => "python",
+        "32" => "pythonx86",
+        _ => "pythonarm64",
+    };
+    let legacy_url = format!(
+        "https://api.nuget.org/v3-flatcontainer/{legacy_package}/{version}/{legacy_package}.{version}.nupkg"
+    );
+    let entries = index["versions"].as_array().ok_or_else(|| {
+        TorbenError::new(
+            "python_metadata_invalid",
+            "The Python Windows index contains no versions array.",
+        )
+    })?;
+    for entry in entries {
+        if entry["company"] != "PythonCore"
+            || !entry["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("pythoncore-"))
+            || entry["sort-version"] != version
+            || !entry["install-for"]
+                .as_array()
+                .is_some_and(|tags| tags.iter().any(|value| value == tag))
+        {
+            continue;
+        }
+        let valid_checksum = entry["hash"]["sha256"].as_str().is_some_and(|hash| {
+            hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        });
+        let legacy_without_checksum =
+            entry["url"].as_str() == Some(legacy_url.as_str()) && entry["hash"]["sha256"].is_null();
+        if !matches!(entry["url"].as_str(), Some(url) if url == expected_url.as_str() || url == legacy_url)
+            || (!valid_checksum && !legacy_without_checksum)
+        {
+            return Err(invalid_plan("Windows runtime URL or checksum"));
+        }
+        return Ok(Some(entry.clone()));
+    }
+    Ok(None)
 }
 
 fn find_external_command(command: &str, managed_root: &Path) -> TorbenResult<PathBuf> {
@@ -1562,8 +1881,22 @@ fn platform_error(field: &str, value: &str) -> TorbenError {
 }
 
 fn network_error(error: reqwest::Error) -> TorbenError {
-    TorbenError::new("python_network_error", "A Python metadata request failed.")
+    let cause = if error.is_timeout() {
+        "request timed out".to_owned()
+    } else if let Some(status) = error.status() {
+        format!("HTTP {status}")
+    } else if error.is_connect() {
+        "connection failed".to_owned()
+    } else {
+        "response interrupted".to_owned()
+    };
+    let host = error
+        .url()
+        .and_then(Url::host_str)
+        .unwrap_or("official Python source");
+    TorbenError::new("python_network_error", format!("Python request to {host} failed: {cause}."))
         .with_detail("reason", error.to_string())
+        .with_remediation("Check the network connection and retry this Python installation. Other installations are unaffected.")
 }
 
 fn io_error(error: std::io::Error) -> TorbenError {
@@ -1606,6 +1939,7 @@ fn url_error(error: url::ParseError) -> TorbenError {
 
 #[cfg(test)]
 mod tests {
+    use sha2::Digest;
     use std::{
         collections::BTreeMap,
         io::{Read, Write},
@@ -1626,6 +1960,52 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn windows_index_rejects_wrong_versions_architectures_sources_and_missing_hashes() {
+        let root = Url::parse(PYTHON_WINDOWS_INDEX).unwrap();
+        let entry = serde_json::json!({
+            "id": "pythoncore-3.14-64", "company": "PythonCore", "sort-version": "3.14.7",
+            "install-for": ["3.14.7-64"], "url": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.zip",
+            "hash": {"sha256": "ab".repeat(32)}
+        });
+        let mut index = serde_json::json!({"versions": [entry]});
+        assert!(
+            windows_index_entry(&index, "3.14.7-64", &root)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            windows_index_entry(&index, "3.14.8-64", &root)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            windows_index_entry(&index, "3.14.7-arm64", &root)
+                .unwrap()
+                .is_none()
+        );
+        index["versions"][0]["hash"] = serde_json::Value::Null;
+        assert!(windows_index_entry(&index, "3.14.7-64", &root).is_err());
+        index["versions"][0]["hash"] = serde_json::json!({"sha256": "ab".repeat(32)});
+        index["versions"][0]["url"] =
+            serde_json::json!("https://untrusted.example/python-3.14.7-amd64.zip");
+        assert!(windows_index_entry(&index, "3.14.7-64", &root).is_err());
+    }
+
+    #[test]
+    fn legacy_windows_index_keeps_the_exact_official_nuget_package() {
+        let root = Url::parse(PYTHON_WINDOWS_INDEX).unwrap();
+        let index = serde_json::json!({"versions": [{
+            "id": "pythoncore-3.10-64", "company": "PythonCore", "sort-version": "3.10.11",
+            "install-for": ["3.10.11-64"],
+            "url": "https://api.nuget.org/v3-flatcontainer/python/3.10.11/python.3.10.11.nupkg"
+        }]});
+        let entry = windows_index_entry(&index, "3.10.11-64", &root)
+            .unwrap()
+            .unwrap();
+        assert!(entry["hash"]["sha256"].is_null());
+    }
 
     struct AcceptingVerifier;
 
@@ -1749,7 +2129,7 @@ mod tests {
     async fn windows_manager_target_install_health_checks_and_commits() {
         let root = tempdir().unwrap();
         let manager = compile_fixture_manager(root.path());
-        let (base_url, server) = fixture_server(2);
+        let (base_url, server) = fixture_server(4);
         let provider =
             PythonProvider::with_test_runtime(base_url, Arc::new(AcceptingVerifier), Some(manager))
                 .unwrap();
@@ -1821,7 +2201,7 @@ mod tests {
     async fn windows_fixture_completes_core_install_select_and_uninstall_transaction() {
         let root = tempdir().unwrap();
         let manager = compile_fixture_manager(root.path());
-        let (base_url, server) = fixture_server(1);
+        let (base_url, server) = fixture_server(3);
         let provider =
             PythonProvider::with_test_runtime(base_url, Arc::new(AcceptingVerifier), Some(manager))
                 .unwrap();
@@ -1880,9 +2260,11 @@ fn main() {
         return;
     }
     assert!(arguments.iter().any(|arg| arg == "install"));
-    assert!(arguments
-        .iter()
-        .any(|arg| arg == "--source=https://www.python.org/ftp/python/index-windows.json"));
+    let source = arguments.iter().find_map(|arg| arg.strip_prefix("--source=")).expect("source argument");
+    assert!(source.ends_with("python-windows-index.json"));
+    let index = fs::read_to_string(source).expect("local offline index");
+    assert!(index.contains("file:///"));
+    assert!(index.contains("\"sha256\""));
     assert_eq!(env::var("PYTHON_MANAGER_CONFIRM").as_deref(), Ok("false"));
     let config_path = arguments
         .iter()
@@ -2085,6 +2467,136 @@ fn main() {
         );
     }
 
+    fn metadata_fixture(
+        replies: Vec<(String, u16, serde_json::Value)>,
+    ) -> (Url, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = Url::parse(&format!(
+            "http://{}/api/v2/downloads/",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        let server = thread::spawn(move || {
+            for (path, status, body) in replies {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0_u8; 4096];
+                let count = stream.read(&mut request).unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..count]).starts_with(&format!("GET {path} "))
+                );
+                let body = serde_json::to_vec(&body).unwrap();
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        });
+        (base, server)
+    }
+
+    #[tokio::test]
+    async fn retries_transient_metadata_failure() {
+        let (base, server) = metadata_fixture(vec![
+            (
+                "/api/v2/downloads/release/".to_owned(),
+                503,
+                serde_json::json!({}),
+            ),
+            (
+                "/api/v2/downloads/release/".to_owned(),
+                200,
+                serde_json::json!([]),
+            ),
+        ]);
+        let provider = PythonProvider::with_base_url(base.clone()).unwrap();
+        let releases: Vec<PythonRelease> = provider
+            .fetch_json(&base.join("release/").unwrap(), MAX_RELEASE_METADATA_BYTES)
+            .await
+            .unwrap();
+        assert!(releases.is_empty());
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_metadata_without_network_retry() {
+        let (base, server) = metadata_fixture(vec![(
+            "/api/v2/downloads/release/".to_owned(),
+            200,
+            serde_json::json!({"unexpected": true}),
+        )]);
+        let provider = PythonProvider::with_base_url(base.clone()).unwrap();
+        let error = provider
+            .fetch_json::<Vec<PythonRelease>>(
+                &base.join("release/").unwrap(),
+                MAX_RELEASE_METADATA_BYTES,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "python_metadata_invalid");
+        server.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn falls_back_to_paginated_official_windows_feed_when_release_api_fails() {
+        let (base, server) = metadata_fixture(vec![
+            (
+                "/api/v2/downloads/release/".to_owned(),
+                503,
+                serde_json::json!({}),
+            ),
+            (
+                "/api/v2/downloads/release/".to_owned(),
+                503,
+                serde_json::json!({}),
+            ),
+            (
+                "/api/v2/downloads/index-windows.json".to_owned(),
+                200,
+                serde_json::json!({"versions": [], "next": "older.json"}),
+            ),
+            (
+                "/api/v2/downloads/older.json".to_owned(),
+                200,
+                serde_json::json!({"versions": [{
+                    "id":"pythoncore-3.10-64", "company":"PythonCore", "sort-version":"3.10.11", "install-for":["3.10.11-64"],
+                    "url":"https://api.nuget.org/v3-flatcontainer/python/3.10.11/python.3.10.11.nupkg"
+                }]}),
+            ),
+        ]);
+        let provider = PythonProvider::with_base_url(base).unwrap();
+        assert_eq!(
+            provider
+                .resolve_version("3.10.11")
+                .await
+                .unwrap()
+                .to_string(),
+            "3.10.11"
+        );
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_a_windows_feed_that_changes_origin() {
+        let (base, server) = metadata_fixture(vec![(
+            "/api/v2/downloads/index-windows.json".to_owned(),
+            200,
+            serde_json::json!({"versions": [], "next":"https://untrusted.example/index.json"}),
+        )]);
+        let provider = PythonProvider::with_base_url(base).unwrap();
+        assert_eq!(
+            provider.windows_releases().await.unwrap_err().code,
+            "plugin_install_plan_invalid"
+        );
+        server.join().unwrap();
+    }
+
     fn fixture_server(expected_requests: usize) -> (Url, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -2128,7 +2640,23 @@ fn main() {
                 "sigstore_bundle_file": "https://www.python.org/ftp/python/3.14.7/Python-3.14.7.tgz.sigstore"
             }
         ]);
+        let runtime_archive = b"fixture Python runtime";
+        let runtime_checksum = hex::encode(sha2::Sha256::digest(runtime_archive));
         let routes = BTreeMap::from([
+            (
+                "/api/v2/downloads/index-windows.json".to_owned(),
+                serde_json::to_vec(&serde_json::json!({"versions": [{
+                    "schema": 1, "id": "pythoncore-3.14-64", "company": "PythonCore",
+                    "sort-version": "3.14.7", "tag": "3.14-64", "install-for": ["3.14.7-64"],
+                    "url": format!("{base}3.14.7/python-3.14.7-amd64.zip"),
+                    "hash": {"sha256": runtime_checksum}
+                }]}))
+                .unwrap(),
+            ),
+            (
+                "/api/v2/downloads/3.14.7/python-3.14.7-amd64.zip".to_owned(),
+                runtime_archive.to_vec(),
+            ),
             (
                 "/api/v2/downloads/release/".to_owned(),
                 serde_json::to_vec(&releases).unwrap(),

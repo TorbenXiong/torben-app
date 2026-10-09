@@ -41,6 +41,14 @@ desktop package version; the release metadata test checks the Cargo, package, an
 The desktop Node.js lifecycle also checks the automatic selection of the first installed version
 and the exact successful operation kinds, including the explicit select and clear commands.
 
+Installation regressions additionally cover cross-page row progress and per-plugin errors in
+`RuntimeOperations.test.tsx` and `App.test.tsx`; download candidate mapping, low-speed fallback,
+hash failure and cancellation in `download.rs`; Python official-index fallback and local ZIP
+extraction in `python.rs`; Rust tar component layout in `rust.rs`; Windows file-lock retries and
+custom-library staging in `temurin.rs`; and concurrent automatic selection, failure isolation and
+staging cleanup in Core. The single-thread async-lock test in `workspace_lock.rs` checks executor
+responsiveness. Historical download evidence and its limits are in [China downloads](china-downloads.md).
+
 The Node.js first-milestone behaviors are covered by these fixture-backed tests:
 
 | Acceptance behavior | Evidence |

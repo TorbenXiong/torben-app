@@ -1,7 +1,7 @@
 {
   "id": "app.torben.plugin.temurin",
   "displayName": "Java",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "protocolVersion": 1,
   "minimumHostVersion": "0.0.1",
   "publisher": "Torben App",
@@ -16,9 +16,12 @@
   "permissions": {
     "networkDomains": [
       "api.adoptium.net",
+      "api.github.com",
       "github.com",
       "release-assets.githubusercontent.com",
-      "packages.adoptium.net"
+      "packages.adoptium.net",
+      "mirrors.tuna.tsinghua.edu.cn",
+      "mirror.nju.edu.cn"
     ],
     "filesystemRoots": ["managed_app_library", "download_cache", "staging"],
     "externalCommands": ["java", "javac"],
