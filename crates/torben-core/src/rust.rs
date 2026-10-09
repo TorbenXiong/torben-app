@@ -48,7 +48,7 @@ struct GitHubRelease {
 
 impl RustProvider {
     pub fn official() -> TorbenResult<Self> {
-        let client = reqwest::Client::builder()
+        let client = crate::download::client_builder()
             .user_agent(format!("Torben-App/{}", env!("CARGO_PKG_VERSION")))
             .https_only(true)
             .build()
@@ -111,7 +111,11 @@ impl RustProvider {
     }
 
     pub async fn distribution(&self, version: &ExactVersion) -> TorbenResult<RustDistribution> {
-        let archive_name = format!("rust-{version}-{RUST_TARGET}.msi");
+        // The MSI contains tens of thousands of documentation files and Windows
+        // Installer spends several minutes materializing them. The official
+        // tarball has the same toolchain contents and can be unpacked directly,
+        // avoiding the MSI administrative install path.
+        let archive_name = format!("rust-{version}-{RUST_TARGET}.tar.gz");
         let manifest_url = self
             .dist_base
             .join(&format!("channel-rust-{version}.toml"))
@@ -148,8 +152,22 @@ impl RustProvider {
         if !archive_path.is_file()
             || sha256_file_checked(&archive_path, Some(&cancellation))? != distribution.checksum
         {
-            self.download(&distribution.archive_url, &archive_path, &cancellation)
-                .await?;
+            crate::download::verified(
+                &distribution.archive_url,
+                &archive_path,
+                &distribution.checksum,
+                Some(&cancellation),
+                |url| {
+                    let official = &distribution.archive_url;
+                    let destination = &archive_path;
+                    let cancellation = &cancellation;
+                    async move {
+                        self.download(&url, official, destination, cancellation)
+                            .await
+                    }
+                },
+            )
+            .await?;
         }
         let actual = sha256_file_checked(&archive_path, Some(&cancellation))?;
         if actual != distribution.checksum {
@@ -171,8 +189,27 @@ impl RustProvider {
             "Extracting the Rust toolchain into staging",
             Some(0.6),
         )?;
-        let extracted = extract_windows_msi(&archive_path, &staging, &cancellation).await?;
+        let archive_for_task = archive_path.clone();
+        let staging_for_task = staging.clone();
+        let extraction_cancellation = cancellation.clone();
+        let extracted = tokio::task::spawn_blocking(move || {
+            extract_windows_archive(
+                &archive_for_task,
+                &staging_for_task,
+                &extraction_cancellation,
+            )
+        })
+        .await
+        .map_err(|error| {
+            TorbenError::new(
+                "archive_task_failed",
+                "The Rust archive extraction task failed.",
+            )
+            .with_detail("reason", error.to_string())
+        })??;
+        cancellation.check()?;
         self.health_check_path(&extracted, version)?;
+        cancellation.check()?;
         let final_path = paths.app_version_dir(app_id.as_str(), &version.to_string());
         if final_path.exists() {
             return Err(TorbenError::new(
@@ -404,36 +441,19 @@ impl RustProvider {
     async fn download(
         &self,
         url: &Url,
+        official: &Url,
         destination: &Path,
         cancellation: &CancellationProbe,
     ) -> TorbenResult<()> {
-        let mut candidates = vec![url.clone()];
-        if is_china_locale()
-            && url.host_str() == Some("static.rust-lang.org")
-            && let Ok(mirror) = Url::parse(&url.as_str().replacen(
-                "https://static.rust-lang.org/dist/",
-                "https://mirrors.ustc.edu.cn/rust-static/dist/",
-                1,
-            ))
-        {
-            candidates.insert(0, mirror);
+        let response = self
+            .client
+            .get(url.clone())
+            .send()
+            .await
+            .map_err(network_error)?;
+        if !crate::download::mirror_response(official, url, response.url()) {
+            validate_origin(&response, official)?;
         }
-        let mut response = None;
-        let mut last_error = None;
-        for candidate in candidates {
-            match self.client.get(candidate).send().await {
-                Ok(value) if value.status().is_success() => {
-                    response = Some(value);
-                    break;
-                }
-                Ok(value) => last_error = Some(network_error_status(value.status())),
-                Err(error) => last_error = Some(network_error(error)),
-            }
-        }
-        let response = response.ok_or_else(|| {
-            last_error.unwrap_or_else(|| network_error_status(reqwest::StatusCode::NOT_FOUND))
-        })?;
-        validate_archive_origin(&response, url)?;
         let response = response.error_for_status().map_err(network_error)?;
         if response
             .content_length()
@@ -445,12 +465,14 @@ impl RustProvider {
             ));
         }
         let partial = destination.with_extension("partial");
-        let mut file = tokio::fs::File::create(&partial).await.map_err(io_error)?;
+        let mut file = crate::download::open_partial(&partial, false).map_err(io_error)?;
         let mut stream = response.bytes_stream();
         let mut total = 0u64;
+        let mut transfer = crate::download::TransferRate::new();
         while let Some(chunk) = stream.next().await {
             cancellation.check()?;
             let chunk = chunk.map_err(network_error)?;
+            transfer.record(chunk.len(), "rust_network_error")?;
             total = total.saturating_add(chunk.len() as u64);
             if total > MAX_ARCHIVE_BYTES {
                 return Err(TorbenError::new(
@@ -462,6 +484,12 @@ impl RustProvider {
         }
         file.flush().await.map_err(io_error)?;
         file.sync_all().await.map_err(io_error)?;
+        drop(file);
+        if destination.exists() {
+            tokio::fs::remove_file(destination)
+                .await
+                .map_err(io_error)?;
+        }
         std::fs::rename(partial, destination).map_err(io_error)
     }
 }
@@ -499,7 +527,7 @@ pub(crate) fn configure_command_environment(
     Ok(())
 }
 
-async fn extract_windows_msi(
+fn extract_windows_archive(
     archive: &Path,
     staging: &Path,
     cancellation: &CancellationProbe,
@@ -511,86 +539,94 @@ async fn extract_windows_msi(
         ));
     }
     cancellation.check()?;
-    let system_root = std::env::var_os("SystemRoot").ok_or_else(|| {
-        TorbenError::new(
-            "windows_installer_unavailable",
-            "Windows did not provide its system directory.",
-        )
-    })?;
-    let installer = PathBuf::from(system_root)
-        .join("System32")
-        .join("msiexec.exe");
-    if !installer.is_file() {
+    std::fs::create_dir_all(staging).map_err(io_error)?;
+    let root = crate::node::extract_archive(
+        archive,
+        crate::node::ArchiveKind::TarGz,
+        staging,
+        cancellation,
+    )?;
+    // Rust's tar installer stores each component under its own directory;
+    // unpacking alone does not produce the bin/lib layout used by the MSI.
+    let components = std::fs::read_to_string(root.join("components")).map_err(io_error)?;
+    let prefix = staging.join("toolchain");
+    std::fs::create_dir(&prefix).map_err(io_error)?;
+    let mut seen = BTreeSet::new();
+    for component in components.lines() {
+        if component.is_empty()
+            || !component
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            || !seen.insert(component)
+        {
+            return Err(TorbenError::new(
+                "rust_archive_layout_invalid",
+                "The Rust archive contains an invalid component list.",
+            ));
+        }
+        let component_path = root.join(component);
+        if !component_path
+            .symlink_metadata()
+            .map_err(io_error)?
+            .is_dir()
+        {
+            return Err(TorbenError::new(
+                "rust_archive_layout_invalid",
+                "A Rust component directory is missing.",
+            ));
+        }
+        for entry in std::fs::read_dir(&component_path).map_err(io_error)? {
+            cancellation.check()?;
+            let entry = entry.map_err(io_error)?;
+            if entry.file_name() != "manifest.in" {
+                merge_component_payload(
+                    &entry.path(),
+                    &prefix.join(entry.file_name()),
+                    cancellation,
+                )?;
+            }
+        }
+    }
+    if !prefix.join("bin/rustc.exe").is_file() {
         return Err(TorbenError::new(
-            "windows_installer_unavailable",
-            "Windows Installer is required to unpack the Rust toolchain.",
+            "rust_archive_layout_invalid",
+            "The Rust archive does not contain the compiler.",
         ));
     }
-    let extracted = staging.join("msi");
-    std::fs::create_dir_all(&extracted).map_err(io_error)?;
-    let mut child = crate::process::async_command(&installer)
-        .args([
-            std::ffi::OsString::from("/a"),
-            archive.as_os_str().to_owned(),
-            std::ffi::OsString::from("/qn"),
-            std::ffi::OsString::from(format!("TARGETDIR={}", extracted.display())),
-        ])
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(io_error)?;
-    loop {
-        cancellation.check()?;
-        if let Some(status) = child.try_wait().map_err(io_error)? {
-            if !status.success() {
-                return Err(TorbenError::new(
-                    "rust_msi_extract_failed",
-                    "Windows Installer could not unpack the Rust toolchain.",
-                )
-                .with_detail("status", status.to_string()));
-            }
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    find_rust_prefix(&extracted)
+    Ok(prefix)
 }
 
-fn find_rust_prefix(root: &Path) -> TorbenResult<PathBuf> {
-    let mut prefixes = BTreeSet::new();
-    for entry in walkdir::WalkDir::new(root).follow_links(false) {
-        let entry = entry.map_err(|error| {
-            TorbenError::new(
-                "rust_msi_layout_invalid",
-                "Could not inspect the extracted Rust toolchain.",
-            )
-            .with_detail("reason", error.to_string())
-        })?;
-        if entry.file_type().is_file()
-            && entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.eq_ignore_ascii_case("rustc.exe"))
-            && entry
-                .path()
-                .parent()
-                .and_then(Path::file_name)
-                .is_some_and(|name| {
-                    name.to_str()
-                        .is_some_and(|name| name.eq_ignore_ascii_case("bin"))
-                })
-            && let Some(prefix) = entry.path().parent().and_then(Path::parent)
-        {
-            prefixes.insert(prefix.to_path_buf());
-        }
-    }
-    if prefixes.len() != 1 {
+fn merge_component_payload(
+    source: &Path,
+    destination: &Path,
+    cancellation: &CancellationProbe,
+) -> TorbenResult<()> {
+    cancellation.check()?;
+    let metadata = source.symlink_metadata().map_err(io_error)?;
+    if metadata.file_type().is_symlink() || !(metadata.is_dir() || metadata.is_file()) {
         return Err(TorbenError::new(
-            "rust_msi_layout_invalid",
-            "The Rust installer did not contain one toolchain prefix.",
-        )
-        .with_detail("prefixCount", prefixes.len().to_string()));
+            "archive_path_unsafe",
+            "The Rust component contains a linked or special file.",
+        ));
     }
-    Ok(prefixes.pop_first().expect("one prefix was checked"))
+    if !destination.exists() {
+        return std::fs::rename(source, destination).map_err(io_error);
+    }
+    if !metadata.is_dir() || !destination.is_dir() {
+        return Err(TorbenError::new(
+            "rust_archive_layout_invalid",
+            "Rust components contain conflicting payload paths.",
+        ));
+    }
+    for entry in std::fs::read_dir(source).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        merge_component_payload(
+            &entry.path(),
+            &destination.join(entry.file_name()),
+            cancellation,
+        )?;
+    }
+    std::fs::remove_dir(source).map_err(io_error)
 }
 
 fn distribution_from_manifest(manifest: &str, archive_name: &str) -> TorbenResult<(Url, String)> {
@@ -654,30 +690,6 @@ fn validate_origin(response: &reqwest::Response, expected: &Url) -> TorbenResult
     Ok(())
 }
 
-fn validate_archive_origin(response: &reqwest::Response, expected: &Url) -> TorbenResult<()> {
-    let host = response.url().host_str();
-    let allowed_mirror = is_china_locale() && host == Some("mirrors.ustc.edu.cn");
-    if response.url().scheme() != expected.scheme()
-        || (host != expected.host_str() && !allowed_mirror)
-    {
-        return Err(TorbenError::new(
-            "unexpected_download_origin",
-            "Rust archive redirected outside the approved distribution origins.",
-        ));
-    }
-    Ok(())
-}
-
-fn is_china_locale() -> bool {
-    ["TORBEN_REGION", "LC_ALL", "LANG", "LANGUAGE"]
-        .into_iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .any(|value| {
-            let value = value.to_ascii_lowercase();
-            value.contains("zh_cn") || value.contains("zh-cn") || value.contains("china")
-        })
-}
-
 fn invalid_plan(field: &str) -> TorbenError {
     TorbenError::new(
         "plugin_install_plan_invalid",
@@ -699,13 +711,6 @@ fn network_error(error: reqwest::Error) -> TorbenError {
     )
     .with_detail("reason", error.to_string())
 }
-fn network_error_status(status: reqwest::StatusCode) -> TorbenError {
-    TorbenError::new(
-        "rust_network_error",
-        "A Rust metadata or archive request failed.",
-    )
-    .with_detail("status", status.to_string())
-}
 fn url_error(error: url::ParseError) -> TorbenError {
     TorbenError::new("rust_url_invalid", "The Rust provider URL is invalid.")
         .with_detail("reason", error.to_string())
@@ -721,4 +726,114 @@ fn timestamp() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or_else(|_| String::new(), |value| value.as_secs().to_string())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use std::{io::Write, sync::Arc};
+
+    use super::{distribution_from_manifest, extract_windows_archive};
+    use crate::{StateStore, TorbenPaths, operation::OperationJournal};
+    use torben_contracts::{AppId, OperationKind};
+
+    fn fixture(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        for (path, bytes) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, path, *bytes).unwrap();
+        }
+        let tar = builder.into_inner().unwrap();
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(&tar).unwrap();
+        gzip.finish().unwrap()
+    }
+
+    #[test]
+    fn official_tar_components_form_one_complete_toolchain() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().to_path_buf());
+        paths.ensure_layout().unwrap();
+        let store = Arc::new(StateStore::open(paths.state_database()).unwrap());
+        let journal = OperationJournal::start(
+            &paths,
+            store,
+            OperationKind::Install,
+            &AppId::new("rust").unwrap(),
+            None,
+        )
+        .unwrap();
+        let archive = root.path().join("rust.tar.gz");
+        std::fs::write(
+            &archive,
+            fixture(&[
+                (
+                    "rust/components",
+                    b"rustc\ncargo\nrust-std-x86_64-pc-windows-msvc\nrustfmt-preview\nrust-docs\n",
+                ),
+                ("rust/rustc/manifest.in", b"file:bin/rustc.exe\n"),
+                ("rust/rustc/bin/rustc.exe", b"compiler"),
+                ("rust/rustc/bin/rustdoc.exe", b"rustdoc"),
+                ("rust/cargo/bin/cargo.exe", b"cargo"),
+                (
+                    "rust/rust-std-x86_64-pc-windows-msvc/lib/rustlib/libstd.rlib",
+                    b"standard library",
+                ),
+                ("rust/rustfmt-preview/bin/rustfmt.exe", b"formatter"),
+                (
+                    "rust/rust-docs/share/doc/rust/html/index.html",
+                    b"documentation",
+                ),
+            ]),
+        )
+        .unwrap();
+        let prefix = extract_windows_archive(
+            &archive,
+            &root.path().join("extract"),
+            &journal.cancellation_probe(),
+        )
+        .unwrap();
+        for path in [
+            "bin/rustc.exe",
+            "bin/rustdoc.exe",
+            "bin/cargo.exe",
+            "bin/rustfmt.exe",
+            "lib/rustlib/libstd.rlib",
+            "share/doc/rust/html/index.html",
+        ] {
+            assert!(prefix.join(path).is_file(), "missing {path}");
+        }
+        assert!(!prefix.join("manifest.in").exists());
+        OperationJournal::request_cancellation(
+            &paths,
+            &StateStore::open(paths.state_database()).unwrap(),
+            journal.operation_id(),
+        )
+        .unwrap();
+        assert_eq!(
+            extract_windows_archive(
+                &archive,
+                &root.path().join("cancelled"),
+                &journal.cancellation_probe()
+            )
+            .unwrap_err()
+            .code,
+            "operation_cancelled"
+        );
+    }
+
+    #[test]
+    fn official_gzip_checksum_is_selected_without_using_xz_checksum() {
+        let name = "rust-1.99.0-x86_64-pc-windows-msvc.tar.gz";
+        let hash = "a".repeat(64);
+        let manifest = format!(
+            "url = \"https://static.rust-lang.org/dist/2026-10-01/{name}\"\nhash = \"{hash}\"\nxz_hash = \"{}\"\n",
+            "b".repeat(64)
+        );
+        let (url, checksum) = distribution_from_manifest(&manifest, name).unwrap();
+        assert!(url.path().ends_with(name));
+        assert_eq!(checksum, hash);
+    }
 }

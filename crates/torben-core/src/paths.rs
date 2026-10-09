@@ -356,6 +356,14 @@ impl TorbenPaths {
         self.data.join("staging")
     }
 
+    /// Keep managed-install staging beside the configured library so the final
+    /// directory can be committed with an atomic rename on Windows.
+    pub(crate) fn managed_install_staging_dir(&self, app_id: &str, operation_id: &str) -> PathBuf {
+        self.app_library()
+            .join(".torben-staging")
+            .join(format!("install-{app_id}-{operation_id}"))
+    }
+
     pub fn operation_dir(&self) -> PathBuf {
         self.data.join("operations")
     }
@@ -483,6 +491,21 @@ mod tests {
             );
             assert!(!paths.is_isolated());
         }
+    }
+
+    #[test]
+    fn managed_install_staging_is_next_to_the_configured_library() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().join("workspace"));
+        let custom_library = root.path().join("custom-library");
+        paths.set_app_library(custom_library.clone());
+
+        assert_eq!(
+            paths.managed_install_staging_dir("temurin", "operation-1"),
+            custom_library
+                .join(".torben-staging")
+                .join("install-temurin-operation-1")
+        );
     }
 
     #[test]

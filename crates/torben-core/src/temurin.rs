@@ -99,7 +99,7 @@ struct ReleasePackage {
 
 impl TemurinProvider {
     pub fn official() -> TorbenResult<Self> {
-        let client = reqwest::Client::builder()
+        let client = crate::download::client_builder()
             .user_agent(format!("Torben-App/{}", env!("CARGO_PKG_VERSION")))
             .https_only(true)
             .build()
@@ -249,11 +249,47 @@ impl TemurinProvider {
             && std::fs::metadata(&archive_path).map_err(io_error)?.len() == distribution.size
             && sha256_file_checked(&archive_path, Some(&cancellation))? == distribution.checksum;
         if !cached_valid {
-            self.download_archive(
+            crate::download::verified(
                 &distribution.archive_url,
                 &archive_path,
-                distribution.size,
-                &cancellation,
+                &distribution.checksum,
+                Some(&cancellation),
+                |url| {
+                    let official = &distribution.archive_url;
+                    let destination = &archive_path;
+                    let cancellation = &cancellation;
+                    async move {
+                        let result = self
+                            .download_archive(
+                                &url,
+                                official,
+                                destination,
+                                distribution.size,
+                                cancellation,
+                            )
+                            .await;
+                        if result
+                            .as_ref()
+                            .is_err_and(|error| error.code == "temurin_network_error")
+                            && crate::download::china_region()
+                            && url == *official
+                            && url.host_str() == Some("github.com")
+                        {
+                            let alternate =
+                                crate::download::github_asset_url(&self.client, official).await?;
+                            return self
+                                .download_archive(
+                                    &alternate,
+                                    official,
+                                    destination,
+                                    distribution.size,
+                                    cancellation,
+                                )
+                                .await;
+                        }
+                        result
+                    }
+                },
             )
             .await?;
         }
@@ -300,9 +336,7 @@ impl TemurinProvider {
         cancellation.check()?;
 
         let staging =
-            paths
-                .staging_dir()
-                .join(format!("install-{}-{}", app_id, journal.operation_id()));
+            paths.managed_install_staging_dir(app_id.as_str(), &journal.operation_id().to_string());
         std::fs::create_dir_all(&staging).map_err(io_error)?;
         journal.record(
             OperationState::Running,
@@ -349,13 +383,13 @@ impl TemurinProvider {
         if let Some(parent) = final_path.parent() {
             std::fs::create_dir_all(parent).map_err(io_error)?;
         }
-        std::fs::rename(&extracted_home, &final_path).map_err(|error| {
-            TorbenError::new(
-                "install_commit_failed",
-                "Could not atomically commit the Eclipse Temurin installation.",
-            )
-            .with_detail("reason", error.to_string())
-        })?;
+        journal.record(
+            OperationState::Running,
+            "commit",
+            "Committing the verified Eclipse Temurin JDK",
+            Some(0.95),
+        )?;
+        commit_installation(&extracted_home, &final_path, &cancellation).await?;
         let _ = std::fs::remove_dir_all(&staging);
         Ok(InstallRecord {
             app_id: app_id.clone(),
@@ -702,19 +736,61 @@ impl TemurinProvider {
         kind: AssetKind,
         cancellation: Option<&CancellationProbe>,
     ) -> TorbenResult<Vec<u8>> {
+        let mut urls = vec![url.clone()];
+        if matches!(kind, AssetKind::Release)
+            && crate::download::china_region()
+            && url.host_str() == Some("github.com")
+        {
+            match crate::download::try_sources(
+                vec![url.clone()],
+                cancellation,
+                |official| async move {
+                    crate::download::github_asset_url(&self.client, &official).await
+                },
+            )
+            .await
+            {
+                Ok(alternate) => urls.insert(0, alternate),
+                Err(error) if error.code == "operation_cancelled" => return Err(error),
+                Err(error) => {
+                    tracing::warn!(code = %error.code, "GitHub signature API route unavailable; using the release URL");
+                }
+            }
+        }
+        crate::download::try_sources(urls, cancellation, |candidate| async move {
+            self.fetch_limited_from(&candidate, maximum, kind, cancellation)
+                .await
+        })
+        .await
+    }
+
+    async fn fetch_limited_from(
+        &self,
+        url: &Url,
+        maximum: u64,
+        kind: AssetKind,
+        cancellation: Option<&CancellationProbe>,
+    ) -> TorbenResult<Vec<u8>> {
         if let Some(cancellation) = cancellation {
             cancellation.check()?;
         }
         let mut request = self.client.get(url.clone());
         if matches!(kind, AssetKind::Metadata) {
             request = request.header(reqwest::header::ACCEPT, "application/json");
+        } else if url.host_str() == Some("api.github.com") {
+            request = request.header(reqwest::header::ACCEPT, "application/octet-stream");
         }
         let response = await_with_cancellation(
             async { request.send().await.map_err(network_error) },
             cancellation,
         )
         .await?;
-        validate_response(&response, &self.api_base, kind)?;
+        if !(matches!(kind, AssetKind::Release)
+            && url.host_str() == Some("api.github.com")
+            && response.url() == url)
+        {
+            validate_response(&response, &self.api_base, kind)?;
+        }
         let response = response.error_for_status().map_err(network_error)?;
         if response.content_length().is_some_and(|size| size > maximum) {
             return Err(asset_too_large(maximum));
@@ -745,6 +821,7 @@ impl TemurinProvider {
     async fn download_archive(
         &self,
         url: &Url,
+        official: &Url,
         destination: &Path,
         expected_size: u64,
         cancellation: &CancellationProbe,
@@ -752,16 +829,20 @@ impl TemurinProvider {
         cancellation.check()?;
         let response = await_with_cancellation(
             async {
-                self.client
-                    .get(url.clone())
-                    .send()
-                    .await
-                    .map_err(network_error)
+                let mut request = self.client.get(url.clone());
+                if url.host_str() == Some("api.github.com") {
+                    request = request.header(reqwest::header::ACCEPT, "application/octet-stream");
+                }
+                request.send().await.map_err(network_error)
             },
             Some(cancellation),
         )
         .await?;
-        validate_response(&response, &self.api_base, AssetKind::Release)?;
+        if !(crate::download::mirror_response(official, url, response.url())
+            || (url.host_str() == Some("api.github.com") && response.url() == url))
+        {
+            validate_response(&response, &self.api_base, AssetKind::Release)?;
+        }
         let response = response.error_for_status().map_err(network_error)?;
         if response
             .content_length()
@@ -773,9 +854,10 @@ impl TemurinProvider {
             ));
         }
         let partial = destination.with_extension("partial");
-        let mut file = tokio::fs::File::create(&partial).await.map_err(io_error)?;
+        let mut file = crate::download::open_partial(&partial, false).map_err(io_error)?;
         let mut received = 0_u64;
         let mut stream = response.bytes_stream();
+        let mut transfer = crate::download::TransferRate::new();
         let result = async {
             while let Some(chunk) = await_with_cancellation(
                 async { stream.next().await.transpose().map_err(network_error) },
@@ -783,6 +865,7 @@ impl TemurinProvider {
             )
             .await?
             {
+                transfer.record(chunk.len(), "network_error")?;
                 cancellation.check()?;
                 received = received
                     .checked_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX))
@@ -858,6 +941,74 @@ enum AssetKind {
     Metadata,
     Release,
     PublicKey,
+}
+
+async fn commit_installation(
+    source: &Path,
+    destination: &Path,
+    cancellation: &CancellationProbe,
+) -> TorbenResult<()> {
+    const ATTEMPTS: u32 = 16;
+    for attempt in 1..=ATTEMPTS {
+        cancellation.check()?;
+        // Never replace a directory another operation or the user created.
+        match destination.symlink_metadata() {
+            Ok(_) => {
+                return Err(TorbenError::new(
+                    "install_path_exists",
+                    "The final Eclipse Temurin installation directory already exists.",
+                )
+                .with_detail("path", destination.display().to_string()));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(commit_error(source, destination, attempt, &error)),
+        }
+        match std::fs::rename(source, destination) {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt < ATTEMPTS && transient_commit_error(&error) => {
+                // Health checks have just executed java.exe and javac.exe.
+                // Windows scanners can retain image/directory handles briefly
+                // after those processes exit. Keep the commit atomic and yield
+                // while those handles close, instead of copying into the target.
+                await_with_cancellation(
+                    async {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        Ok(())
+                    },
+                    Some(cancellation),
+                )
+                .await?;
+            }
+            Err(error) => return Err(commit_error(source, destination, attempt, &error)),
+        }
+    }
+    unreachable!("the final rename attempt returns its result")
+}
+
+fn transient_commit_error(error: &std::io::Error) -> bool {
+    // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+    cfg!(windows) && matches!(error.raw_os_error(), Some(5 | 32 | 33))
+}
+
+fn commit_error(
+    source: &Path,
+    destination: &Path,
+    attempt: u32,
+    error: &std::io::Error,
+) -> TorbenError {
+    let mut result = TorbenError::new(
+        "install_commit_failed",
+        format!("Could not atomically commit the Eclipse Temurin installation: {error}"),
+    )
+    .with_detail("source", source.display().to_string())
+    .with_detail("destination", destination.display().to_string())
+    .with_detail("attempts", attempt.to_string())
+    .with_detail("reason", error.to_string())
+    .with_remediation("Close programs using the staged JDK and retry. Check the destination directory permissions if access remains denied.");
+    if let Some(code) = error.raw_os_error() {
+        result = result.with_detail("osError", code.to_string());
+    }
+    result
 }
 
 fn current_api_target() -> TorbenResult<(&'static str, &'static str, ArchiveKind)> {
@@ -1152,11 +1303,25 @@ fn io_error(error: std::io::Error) -> TorbenError {
 }
 
 fn network_error(error: reqwest::Error) -> TorbenError {
+    let cause = if error.is_timeout() {
+        "request timed out".to_owned()
+    } else if let Some(status) = error.status() {
+        format!("HTTP {status}")
+    } else if error.is_connect() {
+        "connection failed".to_owned()
+    } else {
+        "response interrupted".to_owned()
+    };
+    let host = error
+        .url()
+        .and_then(Url::host_str)
+        .unwrap_or("official Temurin source");
     TorbenError::new(
         "temurin_network_error",
-        "An Eclipse Temurin network request failed.",
+        format!("Eclipse Temurin request to {host} failed: {cause}."),
     )
     .with_detail("reason", error.to_string())
+    .with_remediation("Check the network connection and retry this Java installation. Other installations are unaffected.")
 }
 
 fn url_error(error: url::ParseError) -> TorbenError {
@@ -1185,6 +1350,119 @@ mod tests {
     };
 
     use super::*;
+
+    fn commit_fixture() -> (tempfile::TempDir, TorbenPaths, OperationJournal) {
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().join("workspace"));
+        paths.ensure_layout().unwrap();
+        let store = Arc::new(StateStore::open(paths.state_database()).unwrap());
+        let journal = OperationJournal::start(
+            &paths,
+            store,
+            OperationKind::Install,
+            &AppId::new("temurin").unwrap(),
+            Some(&ExactVersion::from_str("21.0.2+13.0.LTS").unwrap()),
+        )
+        .unwrap();
+        (root, paths, journal)
+    }
+
+    #[cfg(windows)]
+    fn hold_directory_without_delete_sharing(path: &Path) -> std::fs::File {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS opens a directory.
+            .open(path)
+            .unwrap()
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn commit_retries_a_real_windows_directory_lock_without_blocking_the_executor() {
+        let (root, _, journal) = commit_fixture();
+        let source = root.path().join("staged-jdk");
+        let destination = root.path().join("installed-jdk");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("verified-payload"), b"jdk").unwrap();
+        let lock = hold_directory_without_delete_sharing(&source);
+        let cancellation = journal.cancellation_probe();
+        let release = async {
+            tokio::time::sleep(Duration::from_millis(450)).await;
+            assert!(source.is_dir());
+            assert!(!destination.exists());
+            drop(lock);
+        };
+        let (result, ()) = tokio::join!(
+            commit_installation(&source, &destination, &cancellation),
+            release,
+        );
+        result.unwrap();
+        assert!(!source.exists());
+        assert_eq!(
+            std::fs::read(destination.join("verified-payload")).unwrap(),
+            b"jdk"
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn commit_wait_can_be_cancelled_without_creating_a_partial_installation() {
+        let (root, paths, journal) = commit_fixture();
+        let source = root.path().join("staged-jdk");
+        let destination = root.path().join("installed-jdk");
+        std::fs::create_dir(&source).unwrap();
+        let _lock = hold_directory_without_delete_sharing(&source);
+        let cancellation = journal.cancellation_probe();
+        let store = StateStore::open(paths.state_database()).unwrap();
+        let cancel = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            OperationJournal::request_cancellation(&paths, &store, journal.operation_id()).unwrap();
+        };
+        let (result, ()) = tokio::join!(
+            commit_installation(&source, &destination, &cancellation),
+            cancel,
+        );
+        assert_eq!(result.unwrap_err().code, "operation_cancelled");
+        assert!(source.is_dir());
+        assert!(!destination.exists());
+    }
+
+    #[tokio::test]
+    async fn commit_preserves_an_existing_destination_and_reports_permanent_errors() {
+        let (root, _, journal) = commit_fixture();
+        let source = root.path().join("staged-jdk");
+        let destination = root.path().join("installed-jdk");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(destination.join("user-file"), b"keep").unwrap();
+        let error = commit_installation(&source, &destination, &journal.cancellation_probe())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "install_path_exists");
+        assert_eq!(
+            std::fs::read(destination.join("user-file")).unwrap(),
+            b"keep"
+        );
+        let absent_source = root.path().join("missing-source");
+        let absent_destination = root.path().join("missing-destination");
+        let error = commit_installation(
+            &absent_source,
+            &absent_destination,
+            &journal.cancellation_probe(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "install_commit_failed");
+        assert_eq!(error.details["attempts"], "1");
+        assert_eq!(error.details["source"], absent_source.display().to_string());
+        assert_eq!(
+            error.details["destination"],
+            absent_destination.display().to_string()
+        );
+        assert!(!absent_destination.exists());
+    }
 
     #[test]
     fn parses_java_version_output_for_modern_and_java_eight() {
@@ -1367,6 +1645,7 @@ mod tests {
             ]),
         };
         let paths = TorbenPaths::for_test(root.path().join("workspace"));
+        paths.set_app_library(root.path().join("custom-library"));
         paths.ensure_layout().unwrap();
         let store = Arc::new(StateStore::open(paths.state_database()).unwrap());
         let mut journal = OperationJournal::start(
@@ -1395,12 +1674,27 @@ mod tests {
             archive
         );
         provider.health_check(&record).unwrap();
+        assert_fixture_installation_paths(&paths, &record, &journal);
+    }
+
+    fn assert_fixture_installation_paths(
+        paths: &TorbenPaths,
+        record: &InstallRecord,
+        journal: &OperationJournal,
+    ) {
         assert!(
             Path::new(&record.install_path)
                 .join("bin")
                 .join(if cfg!(windows) { "java.exe" } else { "java" })
                 .is_file()
         );
+        assert!(Path::new(&record.install_path).starts_with(paths.app_library()));
+        assert!(paths.app_library().join(".torben-staging").is_dir());
+        let staging = paths.managed_install_staging_dir(
+            record.app_id.as_str(),
+            &journal.operation_id().to_string(),
+        );
+        assert!(!staging.exists());
     }
 
     #[tokio::test]

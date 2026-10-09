@@ -17,6 +17,8 @@ Rust 插件使用官方 Rust stable 发行版，为 Windows x64 安装 `rustc`�
 `rustfmt`。每个版本独立安装并可设置主版本；Cargo registry/git 缓存和临时目录统一保存在
 `userData/package-managers/rust/cargo`，项目的 `target` 与 `Cargo.lock` 仍由项目自身管理。界面默认展示最近
 3 个稳定版本，但仍支持按精确版本安装。
+安装使用经官方 manifest SHA-256 校验的 `tar.gz`，直接提取并合并工具链组件，避免
+Windows Installer 管理安装的耗时。镜像、超时与回退规则见[中国地区下载策略](china-downloads.md)。
 
 MySQL 插件管理官方 MySQL Community Server Windows x64 ZIP，并提供 `mysql`、`mysqld`、
 `mysqladmin` 和 `mysqldump`。Redis 官方不提供原生 Windows Open Source 二进制，因此 Redis

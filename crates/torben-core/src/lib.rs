@@ -5,6 +5,7 @@ mod catalog;
 mod codex;
 mod database_instances;
 mod diagnostic_log;
+mod download;
 mod git;
 mod git_signature;
 mod library_migration;
@@ -568,7 +569,8 @@ impl TorbenCore {
         requested_version: &str,
     ) -> TorbenResult<InstallRecord> {
         self.ensure_supported_app(app_id)?;
-        let workspace_lock = WorkspaceLock::acquire_shared(self.paths.workspace_lock())?;
+        let workspace_lock =
+            WorkspaceLock::acquire_shared_async(self.paths.workspace_lock()).await?;
         let mut journal = OperationJournal::start(
             &self.paths,
             Arc::clone(&self.store),
@@ -615,7 +617,7 @@ impl TorbenCore {
             journal.fail_and_rollback(&error)?;
             return Err(error);
         }
-        let installation_lock = match WorkspaceLock::acquire(installation_lock_path) {
+        let installation_lock = match WorkspaceLock::acquire_async(installation_lock_path).await {
             Ok(lock) => lock,
             Err(error) => {
                 let _ = plugin.shutdown().await;
@@ -628,7 +630,7 @@ impl TorbenCore {
             journal.succeed(format!("{app_id} {resolved} is already installed"))?;
             drop(installation_lock);
             drop(workspace_lock);
-            self.select_if_only_managed_version(app_id, &existing.version)
+            self.finish_install_selection(app_id, &existing.version, &mut journal)
                 .await?;
             return Ok(existing);
         }
@@ -668,7 +670,7 @@ impl TorbenCore {
         let record = self.finish_install_transaction(app_id, &mut journal, result)?;
         drop(installation_lock);
         drop(workspace_lock);
-        self.select_if_only_managed_version(app_id, &record.version)
+        self.finish_install_selection(app_id, &record.version, &mut journal)
             .await?;
         Ok(record)
     }
@@ -822,14 +824,7 @@ impl TorbenCore {
             Err(error) => {
                 acknowledge_cancellation_error(journal, &error)?;
                 let cleanup = match journal.version().cloned() {
-                    None => {
-                        let staging = self.paths.staging_dir().join(format!(
-                            "install-{}-{}",
-                            app_id,
-                            journal.operation_id()
-                        ));
-                        remove_managed_directory_if_exists(&staging, journal)
-                    }
+                    None => cleanup_managed_install_staging(&self.paths, app_id, journal),
                     Some(version) => {
                         cleanup_managed_install_artifacts(&self.paths, app_id, &version, journal)
                     }
@@ -962,7 +957,7 @@ impl TorbenCore {
 
     pub async fn select(&self, app_id: &AppId, version: &ExactVersion) -> TorbenResult<()> {
         self.ensure_supported_app(app_id)?;
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let _lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         self.select_locked(app_id, version).await
     }
 
@@ -971,7 +966,9 @@ impl TorbenCore {
         app_id: &AppId,
         version: &ExactVersion,
     ) -> TorbenResult<()> {
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        // Other downloads/extractions can hold shared locks for minutes. Queue
+        // this selection asynchronously rather than abandoning it on a timer.
+        let _lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         if self.store.selected_version(app_id)?.is_some() {
             return Ok(());
         }
@@ -989,13 +986,33 @@ impl TorbenCore {
         Ok(())
     }
 
+    async fn finish_install_selection(
+        &self,
+        app_id: &AppId,
+        version: &ExactVersion,
+        journal: &mut OperationJournal,
+    ) -> TorbenResult<()> {
+        // Another installation can still hold the shared workspace lock.
+        // Selection is a separate mutation after the installation has committed;
+        // its failure must not turn an installed runtime into a failed install.
+        if let Err(error) = self.select_if_only_managed_version(app_id, version).await {
+            journal.record(
+                OperationState::Succeeded,
+                "selection_skipped",
+                format!("Installation completed. Automatic terminal selection failed: {}: {} Select this version manually after other operations finish.", error.code, error.message),
+                Some(1.0),
+            )?;
+        }
+        Ok(())
+    }
+
     async fn select_if_current(
         &self,
         app_id: &AppId,
         expected: &ExactVersion,
         version: &ExactVersion,
     ) -> TorbenResult<bool> {
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let _lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         if self.store.selected_version(app_id)?.as_ref() != Some(expected) {
             return Ok(false);
         }
@@ -1078,7 +1095,7 @@ impl TorbenCore {
 
     pub async fn uninstall(&self, app_id: &AppId, version: &ExactVersion) -> TorbenResult<()> {
         self.ensure_supported_app(app_id)?;
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         let record = self
             .store
             .get_installation(app_id, version)?
@@ -1157,19 +1174,41 @@ impl TorbenCore {
             journal.fail_and_rollback(&error)?;
             return Err(error);
         }
+        self.finish_uninstall_transaction(lock, record, journal)
+            .await
+    }
+
+    async fn finish_uninstall_transaction(
+        &self,
+        lock: WorkspaceLock,
+        record: InstallRecord,
+        mut journal: OperationJournal,
+    ) -> TorbenResult<()> {
+        let source = PathBuf::from(&record.install_path);
         let staged = self.paths.staging_dir().join(format!(
             "uninstall-{}-{}",
-            app_id,
+            record.app_id,
             journal.operation_id()
         ));
-        execute_uninstall_transaction(
-            &self.paths,
-            &self.store,
-            &record,
-            &source,
-            &staged,
-            &mut journal,
-        )
+        let paths = self.paths.clone();
+        let store = Arc::clone(&self.store);
+        tokio::task::spawn_blocking(move || {
+            // Retain the lock through deletion and journal commit, even if the
+            // caller stops waiting for the task.
+            let _lock = lock;
+            execute_uninstall_transaction(&paths, &store, &record, &source, &staged, &mut journal)
+        })
+        .await
+        .map_err(|error| {
+            TorbenError::new(
+                "uninstall_task_failed",
+                "The uninstall transaction stopped unexpectedly.",
+            )
+            .with_detail("reason", error.to_string())
+            .with_remediation(
+                "Restart Torben App to recover the receipt-bound uninstall transaction.",
+            )
+        })?
     }
 
     pub fn clear_selection(&self, app_id: &AppId) -> TorbenResult<()> {
@@ -1275,7 +1314,7 @@ impl TorbenCore {
         service: &source_adapters::SourceAdapterService,
     ) -> TorbenResult<SourceMigrationPlan> {
         self.application(&request.app_id)?;
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let _lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         self.prepare_source_migration_plan(&request, service).await
     }
 
@@ -1310,7 +1349,7 @@ impl TorbenCore {
             .with_remediation("Generate and review a new source migration plan.")
         })?;
         self.application(&request.app_id)?;
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let _lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         let plan = self
             .prepare_source_migration_plan(&request, service)
             .await?;
@@ -1340,7 +1379,7 @@ impl TorbenCore {
         service: &source_adapters::SourceAdapterService,
     ) -> TorbenResult<ManagedToPackageMigrationPlan> {
         self.application(&request.app_id)?;
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let _lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         self.prepare_managed_to_package_plan(&request, service)
             .await
     }
@@ -1361,7 +1400,7 @@ impl TorbenCore {
     ) -> TorbenResult<ManagedToPackageMigrationResult> {
         validate_managed_to_package_approval(&request)?;
         self.application(&request.app_id)?;
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let _lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         let plan = self
             .prepare_managed_to_package_plan(&request, service)
             .await?;
@@ -1392,7 +1431,7 @@ impl TorbenCore {
         service: &source_adapters::SourceAdapterService,
     ) -> TorbenResult<PackageToManagedMigrationPlan> {
         self.application(&request.app_id)?;
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let _lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         self.prepare_package_to_managed_plan(&request, service)
             .await
     }
@@ -1413,7 +1452,7 @@ impl TorbenCore {
     ) -> TorbenResult<PackageToManagedMigrationResult> {
         validate_package_to_managed_approval(&request)?;
         self.application(&request.app_id)?;
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let _lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         let plan = self
             .prepare_package_to_managed_plan(&request, service)
             .await?;
@@ -2417,7 +2456,7 @@ impl TorbenCore {
         service: &source_adapters::SourceAdapterService,
     ) -> TorbenResult<SourceExecutionResult> {
         self.validate_source_execution_request(&request)?;
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let _lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         let prepared = self.prepare_source_operation(&request, service).await?;
         self.execute_prepared_source_operation(&request, service, prepared)
             .await
@@ -3711,7 +3750,7 @@ impl TorbenCore {
         values: BTreeMap<String, String>,
         confirmed: bool,
     ) -> TorbenResult<SchemaActionResult> {
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let _lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         let params = SchemaActionParams {
             plugin_id: plugin_id.clone(),
             page_id: page_id.to_owned(),
@@ -3767,7 +3806,7 @@ impl TorbenCore {
     }
 
     pub async fn refresh_official_plugin_registry(&self) -> TorbenResult<PluginRegistryStatus> {
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let _lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         let key = self
             .official_registry_key
             .as_deref()
@@ -3839,7 +3878,7 @@ impl TorbenCore {
         plugin_id: &PluginId,
         version: Option<&ExactVersion>,
     ) -> TorbenResult<PluginSummary> {
-        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let _lock = WorkspaceLock::acquire_async(self.paths.workspace_lock()).await?;
         let key = self
             .official_registry_key
             .as_deref()
@@ -5819,10 +5858,7 @@ fn cleanup_package_to_managed_payload(
     journal: &mut OperationJournal,
 ) -> TorbenResult<()> {
     let managed_target = validate_package_to_managed_recovery_plan(paths, journal, plan)?;
-    let staging = paths
-        .staging_dir()
-        .join(format!("install-{}-{operation_id}", plan.app_id));
-    remove_managed_directory_if_exists(&staging, journal)?;
+    cleanup_managed_install_staging(paths, &plan.app_id, journal)?;
     let target_present = match managed_target.symlink_metadata() {
         Ok(_) => true,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
@@ -6003,6 +6039,23 @@ fn remove_managed_install_receipt_if_present(
     }
 }
 
+fn cleanup_managed_install_staging(
+    paths: &TorbenPaths,
+    app_id: &AppId,
+    journal: &OperationJournal,
+) -> TorbenResult<()> {
+    let operation_id = journal.operation_id();
+    for staging in [
+        paths.managed_install_staging_dir(app_id.as_str(), &operation_id.to_string()),
+        paths
+            .staging_dir()
+            .join(format!("install-{app_id}-{operation_id}")),
+    ] {
+        remove_managed_directory_if_exists(&staging, journal)?;
+    }
+    Ok(())
+}
+
 fn cleanup_managed_install_artifacts(
     paths: &TorbenPaths,
     app_id: &AppId,
@@ -6019,11 +6072,8 @@ fn cleanup_managed_install_artifacts(
             "The install transaction identity changed before cleanup.",
         ));
     }
-    let staging =
-        paths
-            .staging_dir()
-            .join(format!("install-{}-{}", app_id, journal.operation_id()));
-    remove_managed_directory_if_exists(&staging, journal)?;
+    remove_interrupted_download_partials(paths, app_id, version, journal)?;
+    cleanup_managed_install_staging(paths, app_id, journal)?;
     let final_path = paths.app_version_dir(app_id.as_str(), &version.to_string());
     let final_present = match final_path.symlink_metadata() {
         Ok(_) => true,
@@ -7068,11 +7118,7 @@ fn recover_install(
 ) -> TorbenResult<()> {
     if journal.version().is_none() {
         let app_id = required_recovery_app_id(journal)?.clone();
-        let staged =
-            paths
-                .staging_dir()
-                .join(format!("install-{}-{}", app_id, journal.operation_id()));
-        remove_managed_directory_if_exists(&staged, journal)?;
+        cleanup_managed_install_staging(paths, &app_id, journal)?;
         return journal.recover_rollback(
             "Interrupted installation had not resolved an exact version or mutated managed state",
         );
@@ -7080,9 +7126,6 @@ fn recover_install(
     let app_id = required_recovery_app_id(journal)?.clone();
     let version = required_recovery_version(journal)?.clone();
     let final_path = paths.app_version_dir(app_id.as_str(), &version.to_string());
-    let staged = paths
-        .staging_dir()
-        .join(format!("install-{}-{}", app_id, journal.operation_id()));
     remove_interrupted_download_partials(paths, &app_id, &version, journal)?;
     let installation = store.get_installation(&app_id, &version)?;
 
@@ -7096,7 +7139,7 @@ fn recover_install(
             ));
         }
         ensure_recovery_directory(journal, &final_path, "committed managed installation")?;
-        remove_managed_directory_if_exists(&staged, journal)?;
+        cleanup_managed_install_staging(paths, &app_id, journal)?;
         remove_managed_install_receipt_if_present(paths, journal.operation_id())?;
         journal.succeed("Recovered committed installation after interrupted shutdown")?;
         return Ok(());
@@ -8064,6 +8107,7 @@ mod tests {
         str::FromStr,
         sync::{Arc, Mutex},
         thread,
+        time::Duration,
     };
 
     use sha2::{Digest, Sha256};
@@ -8129,6 +8173,321 @@ mod tests {
             AppId::new("node").unwrap(),
             ExactVersion::from_str("24.19.0").unwrap(),
         )
+    }
+
+    #[test]
+    fn failed_install_cleans_library_and_legacy_staging_without_affecting_other_operations() {
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().join("workspace"));
+        let core = TorbenCore::open(paths.clone()).unwrap();
+        let app = AppId::new("temurin").unwrap();
+        let version = ExactVersion::from_str("21.0.2+13.0.LTS").unwrap();
+        let mut journal = OperationJournal::start(
+            &paths,
+            Arc::clone(&core.store),
+            OperationKind::Install,
+            &app,
+            Some(&version),
+        )
+        .unwrap();
+        let operation_id = journal.operation_id();
+        let library_staging =
+            paths.managed_install_staging_dir(app.as_str(), &operation_id.to_string());
+        let legacy_staging = paths
+            .staging_dir()
+            .join(format!("install-{app}-{operation_id}"));
+        let unrelated = paths.managed_install_staging_dir("node", "other-operation");
+        for directory in [&library_staging, &legacy_staging, &unrelated] {
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(directory.join("payload"), b"fixture").unwrap();
+        }
+        let downloads = paths.download_dir(app.as_str(), &version.to_string());
+        std::fs::create_dir_all(&downloads).unwrap();
+        let partial = downloads.join("runtime.partial");
+        std::fs::write(&partial, b"incomplete download").unwrap();
+        let error = TorbenError::new("install_commit_failed", "commit fixture failure");
+        assert_eq!(
+            core.finish_install_transaction(&app, &mut journal, Err(error))
+                .unwrap_err()
+                .code,
+            "install_commit_failed"
+        );
+        assert!(!library_staging.exists());
+        assert!(!legacy_staging.exists());
+        assert!(!partial.exists());
+        assert!(unrelated.join("payload").is_file());
+        assert_eq!(
+            operation_states(&core, operation_id).last(),
+            Some(&OperationState::RolledBack)
+        );
+    }
+
+    #[test]
+    fn failed_python_payload_does_not_remove_another_install_and_allows_retry() {
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().to_path_buf());
+        let core = TorbenCore::open(paths.clone()).unwrap();
+        let python = AppId::new("python").unwrap();
+        let version = ExactVersion::from_str("3.14.7").unwrap();
+        let mut failed = OperationJournal::start(
+            &paths,
+            Arc::clone(&core.store),
+            OperationKind::Install,
+            &python,
+            Some(&version),
+        )
+        .unwrap();
+        let staging = paths
+            .staging_dir()
+            .join(format!("install-python-{}", failed.operation_id()));
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("partial"), b"partial runtime").unwrap();
+        let (node, node_version) = node_identity();
+        let mut other = OperationJournal::start(
+            &paths,
+            Arc::clone(&core.store),
+            OperationKind::Install,
+            &node,
+            Some(&node_version),
+        )
+        .unwrap();
+        let record = install_record(&paths, &node, &node_version);
+        std::fs::create_dir_all(&record.install_path).unwrap();
+        let payload = Path::new(&record.install_path).join("node.exe");
+        std::fs::write(&payload, b"healthy staged node fixture").unwrap();
+        let error = TorbenError::new(
+            "python_network_error",
+            "Python fixture metadata unavailable",
+        );
+        assert_eq!(
+            core.finish_install_transaction(&python, &mut failed, Err(error))
+                .unwrap_err()
+                .code,
+            "python_network_error"
+        );
+        assert!(!staging.exists());
+        assert!(payload.is_file());
+        assert_eq!(
+            operation_states(&core, other.operation_id()),
+            [OperationState::Running]
+        );
+        core.finish_install_transaction(&node, &mut other, Ok(record))
+            .unwrap();
+        assert!(
+            core.store
+                .get_installation(&node, &node_version)
+                .unwrap()
+                .is_some()
+        );
+        let mut retry = OperationJournal::start(
+            &paths,
+            Arc::clone(&core.store),
+            OperationKind::Install,
+            &python,
+            Some(&version),
+        )
+        .unwrap();
+        let mut record = install_record(&paths, &python, &version);
+        record.source_id = SourceId::new("python.official").unwrap();
+        std::fs::create_dir_all(&record.install_path).unwrap();
+        core.finish_install_transaction(&python, &mut retry, Ok(record))
+            .unwrap();
+        assert!(
+            core.store
+                .get_installation(&python, &version)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_install_selections_wait_beyond_the_old_timeout_and_select_each_app() {
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().to_path_buf());
+        let core = automatic_selection_fixture(&paths);
+        let (node, node_version) = node_identity();
+        let java = AppId::new("temurin").unwrap();
+        let java_version = ExactVersion::from_str("21.0.2+13.0.LTS").unwrap();
+        let mut node_journal = committed_selection_fixture(&core, &node, &node_version);
+        let mut java_journal = committed_selection_fixture(&core, &java, &java_version);
+        let other_install =
+            crate::workspace_lock::WorkspaceLock::acquire_shared(paths.workspace_lock()).unwrap();
+        let release = async {
+            // Exceed the previous four-second deadline while another runtime
+            // is still installing; both completed apps must remain queued.
+            tokio::time::sleep(Duration::from_millis(4200)).await;
+            assert!(core.selections().unwrap().is_empty());
+            drop(other_install);
+        };
+        let (node_result, java_result, ()) = tokio::join!(
+            core.finish_install_selection(&node, &node_version, &mut node_journal),
+            core.finish_install_selection(&java, &java_version, &mut java_journal),
+            release,
+        );
+        node_result.unwrap();
+        java_result.unwrap();
+        assert_eq!(
+            core.store.selected_version(&node).unwrap(),
+            Some(node_version)
+        );
+        assert_eq!(
+            core.store.selected_version(&java).unwrap(),
+            Some(java_version)
+        );
+        let events = core.operation_events().unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.phase == "selection_skipped")
+        );
+        for app in [node, java] {
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event.app_id.as_ref() == Some(&app)
+                        && event.kind == Some(OperationKind::Select)
+                        && event.state == OperationState::Succeeded)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_automatic_selection_preserves_a_manual_selection() {
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().to_path_buf());
+        let core = automatic_selection_fixture(&paths);
+        let (app, version) = node_identity();
+        let mut journal = committed_selection_fixture(&core, &app, &version);
+        let lock = crate::workspace_lock::WorkspaceLock::acquire(paths.workspace_lock()).unwrap();
+        let manual = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let previous = ExactVersion::from_str("22.0.0").unwrap();
+            // Model a manual mutation that already owns the exclusive lock.
+            let _journal = committed_selection_fixture(&core, &app, &previous);
+            core.select_locked(&app, &previous).await.unwrap();
+            drop(lock);
+            previous
+        };
+        let (result, previous) = tokio::join!(
+            core.finish_install_selection(&app, &version, &mut journal),
+            manual
+        );
+        result.unwrap();
+        assert_eq!(core.store.selected_version(&app).unwrap(), Some(previous));
+        assert!(
+            !core
+                .operation_events()
+                .unwrap()
+                .iter()
+                .any(|event| event.phase == "selection_skipped")
+        );
+    }
+
+    #[tokio::test]
+    async fn automatic_selection_failure_keeps_the_installation_successful() {
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().to_path_buf());
+        let mut core = automatic_selection_fixture(&paths);
+        let (app, version) = node_identity();
+        let mut journal = committed_selection_fixture(&core, &app, &version);
+        core.node_plugin = BundledPlugin::node_from_executable(root.path().join("missing-plugin"));
+        core.finish_install_selection(&app, &version, &mut journal)
+            .await
+            .unwrap();
+        assert!(
+            core.store
+                .get_installation(&app, &version)
+                .unwrap()
+                .is_some()
+        );
+        assert!(core.store.selected_version(&app).unwrap().is_none());
+        let events = core.operation_events().unwrap();
+        let last = events
+            .iter()
+            .filter(|event| event.operation_id == journal.operation_id())
+            .max_by_key(|event| event.sequence)
+            .unwrap();
+        assert_eq!(last.state, OperationState::Succeeded);
+        assert_eq!(last.phase, "selection_skipped");
+        assert!(last.message.contains("bundled_plugin_missing"));
+    }
+
+    fn committed_selection_fixture(
+        core: &TorbenCore,
+        app: &AppId,
+        version: &ExactVersion,
+    ) -> OperationJournal {
+        let mut journal = OperationJournal::start(
+            &core.paths,
+            Arc::clone(&core.store),
+            OperationKind::Install,
+            app,
+            Some(version),
+        )
+        .unwrap();
+        let mut record = install_record(&core.paths, app, version);
+        record.source_id = SourceId::new(format!("{app}.official")).unwrap();
+        std::fs::create_dir_all(&record.install_path).unwrap();
+        core.finish_install_transaction(app, &mut journal, Ok(record))
+            .unwrap();
+        journal
+    }
+
+    fn automatic_selection_fixture(paths: &TorbenPaths) -> TorbenCore {
+        let mut core = TorbenCore::open(paths.clone()).unwrap();
+        let node = selection_plugin_fixture(paths.data_dir(), "node");
+        let java = selection_plugin_fixture(paths.data_dir(), "temurin");
+        core.node_plugin = BundledPlugin::node_from_executable(node);
+        core.temurin_plugin = BundledPlugin::temurin_from_executable(java);
+        let shim = paths.data_dir().join("selection-shim-fixture");
+        std::fs::write(&shim, b"selection shim fixture").unwrap();
+        core.bundled_shim = BundledShim::from_executable(shim);
+        core
+    }
+
+    fn selection_plugin_fixture(root: &Path, app: &str) -> PathBuf {
+        // Exercise the real JSON-RPC health check and shim transaction, without
+        // downloading or invoking a real runtime installation.
+        let initialize = serde_json::json!({"jsonrpc":"2.0","id":1,"result": {
+            "protocolVersion":1,"pluginId":format!("app.torben.plugin.{app}"),
+            "pluginVersion":env!("CARGO_PKG_VERSION"),"applications":[{
+                "id":app,"displayName":app,"summary":"selection fixture","categories":["runtime"],
+                "capabilities":["select"],"sources":[{"id":format!("{app}.official"),"displayName":"fixture","managed":true}]
+            }]}}).to_string();
+        // Health check echoes the requested exact version, including the manual
+        // version used by the race regression test.
+        let source = root.join(format!("selection-{app}.rs"));
+        let executable = root.join(format!("selection-{app}{}", std::env::consts::EXE_SUFFIX));
+        let program = format!(
+            r####"
+use std::io::{{self, BufRead, Write}};
+fn main() {{
+    for request in io::stdin().lock().lines() {{
+        let request = request.unwrap();
+        if request.contains("initialize") {{ println!("{{}}", r###"{initialize}"###); }}
+        else if request.contains("health.check") {{
+            let version = request.split("\"version\":\"").nth(1).unwrap().split('"').next().unwrap();
+            println!("{{{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{{{\"healthy\":true,\"actualVersion\":\"{{}}\",\"message\":\"healthy\"}}}}}}}}", version);
+        }} else {{ break; }}
+        io::stdout().flush().unwrap();
+    }}
+}}
+"####
+        );
+        std::fs::write(&source, program).unwrap();
+        let compiler = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let output = std::process::Command::new(compiler)
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "fixture rustc failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        executable
     }
 
     fn install_record(

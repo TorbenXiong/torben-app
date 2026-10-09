@@ -52,6 +52,7 @@ Node.js、Java、Python 和 Rust 的插件详情页支持配置进程级环境�
 不可覆盖，密码、Token 等敏感值不应保存在环境变量设置中。
 
 软件来源、包管理器数据目录和数据库实例 CLI 示例见[软件与实例管理](docs/software-management.md)。
+中国地区的镜像候选、自动回退与覆盖限制见[中国地区下载策略](docs/china-downloads.md)。
 
 ## 仓库结构
 

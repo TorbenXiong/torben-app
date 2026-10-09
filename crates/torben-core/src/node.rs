@@ -32,6 +32,8 @@ use crate::{
 
 const NODE_BASE_URL: &str = "https://nodejs.org/dist/";
 const ACTIVE_LTS_LINES: usize = 5;
+const MAX_METADATA_BYTES: usize = 16 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct NodeProvider {
@@ -66,7 +68,7 @@ struct NodeRelease {
 
 impl NodeProvider {
     pub fn official() -> TorbenResult<Self> {
-        let client = reqwest::Client::builder()
+        let client = crate::download::client_builder()
             .user_agent(format!("Torben-App/{}", env!("CARGO_PKG_VERSION")))
             .https_only(true)
             .build()
@@ -166,11 +168,8 @@ impl NodeProvider {
             "Downloading signed Node.js release metadata",
             Some(0.1),
         )?;
-        let manifest = self
-            .fetch_bytes_checked(&distribution.checksums_url, Some(&cancellation))
-            .await?;
-        let signature = self
-            .fetch_checksum_signature_checked(&distribution.signature_url, Some(&cancellation))
+        let (manifest, signature) = self
+            .fetch_signed_manifest(&distribution, &cancellation)
             .await?;
         cancellation.check()?;
         journal.record(
@@ -198,10 +197,20 @@ impl NodeProvider {
         if !archive_path.is_file()
             || sha256_file_checked(&archive_path, Some(&cancellation))? != expected_hash
         {
-            self.download_archive_checked(
+            crate::download::verified(
                 &distribution.archive_url,
                 &archive_path,
+                &expected_hash,
                 Some(&cancellation),
+                |url| {
+                    let official = &distribution.archive_url;
+                    let destination = &archive_path;
+                    let cancellation = &cancellation;
+                    async move {
+                        self.download_archive_from(&url, official, destination, Some(cancellation))
+                            .await
+                    }
+                },
             )
             .await?;
         }
@@ -544,10 +553,27 @@ impl NodeProvider {
 
     async fn fetch_index(&self) -> TorbenResult<Vec<NodeRelease>> {
         let url = self.base_url.join("index.json").map_err(url_error)?;
-        let response = self.client.get(url).send().await.map_err(network_error)?;
-        validate_official_response(&response, &self.base_url)?;
-        let response = response.error_for_status().map_err(network_error)?;
-        response.json().await.map_err(network_error)
+        crate::download::try_sources(crate::download::candidates(&url), None, |candidate| {
+            let official = &url;
+            async move {
+                let response = self
+                    .client
+                    .get(candidate.clone())
+                    .send()
+                    .await
+                    .map_err(network_error)?;
+                if !crate::download::mirror_response(official, &candidate, response.url()) {
+                    validate_official_response(&response, &self.base_url)?;
+                }
+                let response = response.error_for_status().map_err(network_error)?;
+                let bytes = read_metadata(response, None).await?;
+                serde_json::from_slice(&bytes).map_err(|error| {
+                    TorbenError::new("network_error", "The Node.js version index is invalid.")
+                        .with_detail("reason", error.to_string())
+                })
+            }
+        })
+        .await
     }
 
     #[cfg(test)]
@@ -555,9 +581,24 @@ impl NodeProvider {
         self.fetch_bytes_checked(url, None).await
     }
 
+    #[cfg(test)]
     async fn fetch_bytes_checked(
         &self,
         url: &Url,
+        cancellation: Option<&CancellationProbe>,
+    ) -> TorbenResult<Vec<u8>> {
+        crate::download::try_sources(
+            crate::download::candidates(url),
+            cancellation,
+            |candidate| async move { self.fetch_bytes_from(&candidate, url, cancellation).await },
+        )
+        .await
+    }
+
+    async fn fetch_bytes_from(
+        &self,
+        url: &Url,
+        official: &Url,
         cancellation: Option<&CancellationProbe>,
     ) -> TorbenResult<Vec<u8>> {
         let response = await_with_cancellation(
@@ -571,19 +612,11 @@ impl NodeProvider {
             cancellation,
         )
         .await?;
-        validate_official_response(&response, &self.base_url)?;
+        if !crate::download::mirror_response(official, url, response.url()) {
+            validate_official_response(&response, &self.base_url)?;
+        }
         let response = response.error_for_status().map_err(network_error)?;
-        await_with_cancellation(
-            async {
-                response
-                    .bytes()
-                    .await
-                    .map(|bytes| bytes.to_vec())
-                    .map_err(network_error)
-            },
-            cancellation,
-        )
-        .await
+        read_metadata(response, cancellation).await
     }
 
     #[cfg(test)]
@@ -591,9 +624,55 @@ impl NodeProvider {
         self.fetch_checksum_signature_checked(url, None).await
     }
 
+    #[cfg(test)]
     async fn fetch_checksum_signature_checked(
         &self,
         url: &Url,
+        cancellation: Option<&CancellationProbe>,
+    ) -> TorbenResult<Vec<u8>> {
+        crate::download::try_sources(
+            crate::download::candidates(url),
+            cancellation,
+            |candidate| async move {
+                self.fetch_checksum_signature_from(&candidate, url, cancellation)
+                    .await
+            },
+        )
+        .await
+    }
+
+    async fn fetch_signed_manifest(
+        &self,
+        distribution: &NodeDistribution,
+        cancellation: &CancellationProbe,
+    ) -> TorbenResult<(Vec<u8>, Vec<u8>)> {
+        crate::download::try_sources(
+            crate::download::candidates(&distribution.checksums_url),
+            Some(cancellation),
+            |candidate| async move {
+                let mut signature_url = candidate.clone();
+                signature_url.set_path(&format!("{}.sig", candidate.path()));
+                let manifest = self
+                    .fetch_bytes_from(&candidate, &distribution.checksums_url, Some(cancellation))
+                    .await?;
+                let signature = self
+                    .fetch_checksum_signature_from(
+                        &signature_url,
+                        &distribution.signature_url,
+                        Some(cancellation),
+                    )
+                    .await?;
+                self.verify_checksum_signature(&manifest, &signature)?;
+                Ok((manifest, signature))
+            },
+        )
+        .await
+    }
+
+    async fn fetch_checksum_signature_from(
+        &self,
+        url: &Url,
+        official: &Url,
         cancellation: Option<&CancellationProbe>,
     ) -> TorbenResult<Vec<u8>> {
         let response = await_with_cancellation(
@@ -607,20 +686,23 @@ impl NodeProvider {
             cancellation,
         )
         .await?;
-        validate_official_response(&response, &self.base_url)?;
+        if !crate::download::mirror_response(official, url, response.url()) {
+            validate_official_response(&response, &self.base_url)?;
+        }
         if response.status() == reqwest::StatusCode::NOT_FOUND {
+            if url != official {
+                return Err(network_error(
+                    response.error_for_status().expect_err("404 status"),
+                ));
+            }
             return Err(missing_checksum_signature(url));
         }
         let response = response.error_for_status().map_err(network_error)?;
-        let signature = await_with_cancellation(
-            async { response.bytes().await.map_err(network_error) },
-            cancellation,
-        )
-        .await?;
+        let signature = read_metadata(response, cancellation).await?;
         if signature.is_empty() {
             return Err(missing_checksum_signature(url));
         }
-        Ok(signature.to_vec())
+        Ok(signature)
     }
 
     #[cfg(test)]
@@ -628,9 +710,21 @@ impl NodeProvider {
         self.download_archive_checked(url, destination, None).await
     }
 
+    #[cfg(test)]
     async fn download_archive_checked(
         &self,
         url: &Url,
+        destination: &Path,
+        cancellation: Option<&CancellationProbe>,
+    ) -> TorbenResult<()> {
+        self.download_archive_from(url, url, destination, cancellation)
+            .await
+    }
+
+    async fn download_archive_from(
+        &self,
+        url: &Url,
+        official: &Url,
         destination: &Path,
         cancellation: Option<&CancellationProbe>,
     ) -> TorbenResult<()> {
@@ -650,16 +744,31 @@ impl NodeProvider {
                 cancellation,
             )
             .await?;
-            validate_official_response(&response, &self.base_url)?;
+            if !crate::download::mirror_response(official, url, response.url()) {
+                validate_official_response(&response, &self.base_url)?;
+            }
             let response = response.error_for_status().map_err(network_error)?;
-            let mut file = tokio::fs::File::create(&partial).await.map_err(io_error)?;
+            if response
+                .content_length()
+                .is_some_and(|size| size > MAX_ARCHIVE_BYTES)
+            {
+                return Err(download_too_large());
+            }
+            let mut file = crate::download::open_partial(&partial, false).map_err(io_error)?;
             let mut stream = response.bytes_stream();
+            let mut transfer = crate::download::TransferRate::new();
+            let mut received = 0_u64;
             while let Some(chunk) = await_with_cancellation(
                 async { stream.next().await.transpose().map_err(network_error) },
                 cancellation,
             )
             .await?
             {
+                transfer.record(chunk.len(), "network_error")?;
+                received = received.saturating_add(chunk.len() as u64);
+                if received > MAX_ARCHIVE_BYTES {
+                    return Err(download_too_large());
+                }
                 file.write_all(&chunk).await.map_err(io_error)?;
             }
             file.flush().await.map_err(io_error)?;
@@ -679,6 +788,39 @@ impl NodeProvider {
         }
         result
     }
+}
+
+fn download_too_large() -> TorbenError {
+    TorbenError::new(
+        "network_error",
+        "The Node.js download exceeds the allowed size.",
+    )
+}
+
+async fn read_metadata(
+    response: reqwest::Response,
+    cancellation: Option<&CancellationProbe>,
+) -> TorbenResult<Vec<u8>> {
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_METADATA_BYTES as u64)
+    {
+        return Err(download_too_large());
+    }
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = await_with_cancellation(
+        async { stream.next().await.transpose().map_err(network_error) },
+        cancellation,
+    )
+    .await?
+    {
+        if bytes.len().saturating_add(chunk.len()) > MAX_METADATA_BYTES {
+            return Err(download_too_large());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 async fn await_with_cancellation<F, T>(
@@ -1072,7 +1214,7 @@ pub(crate) fn extract_archive(
     if roots.len() != 1 {
         return Err(TorbenError::new(
             "archive_layout_invalid",
-            "The Node.js archive must contain one top-level directory.",
+            "The archive must contain one top-level directory.",
         )
         .with_detail("directoryCount", roots.len().to_string()));
     }
@@ -1240,11 +1382,8 @@ fn io_error(error: std::io::Error) -> TorbenError {
 }
 
 fn archive_error(reason: String) -> TorbenError {
-    TorbenError::new(
-        "archive_error",
-        "The Node.js archive could not be extracted.",
-    )
-    .with_detail("reason", reason)
+    TorbenError::new("archive_error", "The archive could not be extracted.")
+        .with_detail("reason", reason)
 }
 
 fn invalid_install_plan(reason: &str) -> TorbenError {
@@ -1299,6 +1438,45 @@ mod tests {
     const OFFICIAL_MANIFEST: &[u8] =
         include_bytes!("../assets/node-signature-fixtures/v24.19.0-SHASUMS256.txt");
     const OFFICIAL_SIGNATURE_HEX: &str = "887504001608001D1621045BE8A3F6C8A5C01D106C0AD820B1A390B168D35605026A709B58000A091020B1A390B168D356914300FF4E7E884D9979816A9982E075022E19D56D91F6BAAC4481A2790E53931438CA730100E97B359FC84D02DC2BFB3A3D5E2B754A5E23DC0EC144E6E187D7E977D597D40B";
+
+    #[tokio::test]
+    #[ignore = "manual live metadata verification; never downloads a runtime archive"]
+    async fn live_china_node_metadata_verifies_official_signature() {
+        assert!(crate::download::china_region(), "set TORBEN_REGION=CN");
+        let provider = NodeProvider::official().unwrap();
+        let latest = provider.resolve_version("lts").await.unwrap();
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().to_path_buf());
+        paths.ensure_layout().unwrap();
+        let store = Arc::new(StateStore::open(paths.state_database()).unwrap());
+        let journal = OperationJournal::start(
+            &paths,
+            store,
+            OperationKind::Install,
+            &AppId::new("node").unwrap(),
+            Some(&latest),
+        )
+        .unwrap();
+        // Probe a known release and today's resolved LTS to cover mirror
+        // fallback as well as current upstream signatures.
+        for version in [ExactVersion::from_str("24.19.0").unwrap(), latest] {
+            let distribution = provider.distribution(&version).unwrap();
+            let (manifest, signature) = provider
+                .fetch_signed_manifest(&distribution, &journal.cancellation_probe())
+                .await
+                .unwrap();
+            provider
+                .verify_checksum_signature(&manifest, &signature)
+                .unwrap();
+            let checksum = checksum_for(
+                std::str::from_utf8(&manifest).unwrap(),
+                &distribution.archive_name,
+            )
+            .unwrap();
+            assert_eq!(checksum.len(), 64);
+            println!("Node {version}: official signature and Windows archive checksum verified");
+        }
+    }
 
     #[test]
     fn validates_npm_and_npx_semantic_versions() {

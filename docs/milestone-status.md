@@ -44,7 +44,9 @@ Windows x64 gates required for the next supported release.
   management` tabs.
 - The Python plugin package includes the pinned official Python Install Manager 26.3 MSI on
   Windows x64. Core verifies and extracts it inside operation staging, pins the official index,
-  and invokes it with an exact tag, a Core-owned download directory, and staging `--target`.
+  downloads modern ZIPs against official index hashes with regional transport fallback, and invokes
+  the manager with a local index, an exact tag, and staging `--target`. Legacy NuGet packages
+  without an official hash retain the manager's official download path.
   CPython and pip must pass health checks before atomic commit; `python`, `python3`, `pip`, and
   `pip3` use the shared Torben shim directory.
 - Java discovery keeps only the newest release for each LTS feature line. The desktop reads its
@@ -78,7 +80,9 @@ Windows x64 gates required for the next supported release.
   enabled managed sources, plus the winget, Homebrew, apt, and DNF source descriptors into SQLite. App list,
   search, and detail queries read that persisted Core-owned snapshot.
 - The desktop opens on Plugins and exposes installed plugin applications such as Java directly in
-  the sidebar, with Settings at the bottom and Logs/Diagnostics in the title-bar Help menu. The former Overview, Catalog, and
+  the sidebar, with Settings at the bottom and Logs/Diagnostics in the title-bar Help menu. The
+  sidebar toggle sits immediately before Help. Runtime progress remains in its version row across
+  navigation; operation errors are retained per plugin. The former Overview, Catalog, and
   Installed routes redirect to Plugins. Theme, English/Simplified Chinese localization, keyboard
   navigation, reduced-motion behavior, and responsive minimum-window layouts are covered by
   frontend tests.

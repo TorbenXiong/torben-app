@@ -1,4 +1,7 @@
-use std::{fs::OpenOptions, path::Path};
+use std::{
+    fs::OpenOptions,
+    path::{Path, PathBuf},
+};
 
 use fs4::FileExt;
 use torben_contracts::{TorbenError, TorbenResult};
@@ -8,16 +11,54 @@ pub struct WorkspaceLock {
 }
 
 impl WorkspaceLock {
+    pub(crate) async fn acquire_async(path: PathBuf) -> TorbenResult<Self> {
+        Self::acquire_async_with(path, false).await
+    }
+
+    pub(crate) async fn acquire_shared_async(path: PathBuf) -> TorbenResult<Self> {
+        Self::acquire_async_with(path, true).await
+    }
+
+    async fn acquire_async_with(path: PathBuf, shared: bool) -> TorbenResult<Self> {
+        // Waiting for another mutation must not occupy an async worker thread.
+        tokio::task::spawn_blocking(move || Self::acquire_with(path, shared))
+            .await
+            .map_err(|error| {
+                TorbenError::new(
+                    "workspace_lock_task_failed",
+                    "The workspace lock task stopped unexpectedly.",
+                )
+                .with_detail("reason", error.to_string())
+            })?
+    }
+
     pub fn acquire(path: impl AsRef<Path>) -> TorbenResult<Self> {
         Self::acquire_with(path, false)
     }
 
+    #[cfg(test)]
     pub fn acquire_shared(path: impl AsRef<Path>) -> TorbenResult<Self> {
         Self::acquire_with(path, true)
     }
 
     fn acquire_with(path: impl AsRef<Path>, shared: bool) -> TorbenResult<Self> {
-        let path = path.as_ref();
+        let file = Self::open_file(path.as_ref())?;
+        let lock_result = if shared {
+            FileExt::lock_shared(&file)
+        } else {
+            FileExt::lock(&file)
+        };
+        lock_result.map_err(|error| {
+            TorbenError::new(
+                "workspace_locked",
+                "Another Torben App process is modifying the workspace.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+        Ok(Self { file })
+    }
+
+    fn open_file(path: &Path) -> TorbenResult<std::fs::File> {
         let file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -32,19 +73,7 @@ impl WorkspaceLock {
                 .with_detail("path", path.display().to_string())
                 .with_detail("reason", error.to_string())
             })?;
-        let lock_result = if shared {
-            FileExt::lock_shared(&file)
-        } else {
-            FileExt::lock(&file)
-        };
-        lock_result.map_err(|error| {
-            TorbenError::new(
-                "workspace_locked",
-                "Another Torben App process is modifying the workspace.",
-            )
-            .with_detail("reason", error.to_string())
-        })?;
-        Ok(Self { file })
+        Ok(file)
     }
 }
 
@@ -68,6 +97,31 @@ mod tests {
     use super::WorkspaceLock;
 
     const HELPER_LOCK_PATH: &str = "TORBEN_WORKSPACE_LOCK_HELPER_PATH";
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn waiting_for_an_async_lock_keeps_the_executor_responsive() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("workspace.lock");
+        let holder = WorkspaceLock::acquire(&path).unwrap();
+        let waiter = tokio::spawn(WorkspaceLock::acquire_async(path.clone()));
+        // A watchdog releases the lock if a regression blocks this single async
+        // worker. The heartbeat must run before that release.
+        let (release_tx, release_rx) = mpsc::channel();
+        let holder = thread::spawn(move || {
+            let _ = release_rx.recv_timeout(Duration::from_secs(2));
+            drop(holder);
+        });
+        let started = Instant::now();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(!waiter.is_finished());
+        release_tx.send(()).unwrap();
+        let acquired = waiter.await.unwrap().unwrap();
+        drop(acquired);
+        holder.join().unwrap();
+        let shared = WorkspaceLock::acquire_shared_async(path).await.unwrap();
+        drop(shared);
+    }
 
     #[test]
     #[ignore = "subprocess helper for the cross-process workspace lock test"]

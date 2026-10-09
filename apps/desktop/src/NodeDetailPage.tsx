@@ -17,6 +17,7 @@ import {
   activeRuntimeOperation,
   RuntimeOperationProgress,
 } from "./components/RuntimeOperationProgress";
+import { useRuntimeOperations } from "./components/RuntimeOperations";
 import type {
   InstallRecord,
   OperationEvent,
@@ -108,6 +109,7 @@ export function NodeDetailPage({
   shellIntegration?: ShellIntegrationStatus;
 }) {
   const { t } = useTranslation();
+  const runtimeOperations = useRuntimeOperations();
   const [versions, setVersions] = useState<VersionDescriptor[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
@@ -155,7 +157,7 @@ export function NodeDetailPage({
     setBusy((current) => new Set(current).add(action));
     setError(null);
     try {
-      await operation();
+      await runtimeOperations.run("node", action, operation);
       await onChanged();
     } catch (reason) {
       setError(formatTorbenError(reason));
@@ -170,12 +172,13 @@ export function NodeDetailPage({
   }
 
   const rows = buildNodeVersionRows(versions, installed, selected);
+  const operationError = error ?? runtimeOperations.errorFor("node");
   const selectedVersion = selected.find((record) => record.appId === "node")?.version;
   return (
     <div className="page-stack">
-      {error ? (
+      {operationError ? (
         <div className="error-banner" role="alert">
-          <CircleAlert size={16} /> {error}
+          <CircleAlert size={16} /> {operationError}
         </div>
       ) : null}
       <div className="detail-grid">
@@ -214,9 +217,14 @@ export function NodeDetailPage({
                   operationEvent?.kind === "install" ? operationEvent : undefined;
                 const uninstallEvent =
                   operationEvent?.kind === "uninstall" ? operationEvent : undefined;
-                const installing = busy.has(installAction) || Boolean(installEvent);
+                const installing =
+                  busy.has(installAction) ||
+                  runtimeOperations.isPending("node", "install", row.version) ||
+                  Boolean(installEvent);
                 const uninstalling =
-                  busy.has(`uninstall:${row.version}`) || Boolean(uninstallEvent);
+                  busy.has(`uninstall:${row.version}`) ||
+                  runtimeOperations.isPending("node", "uninstall", row.version) ||
+                  Boolean(uninstallEvent);
                 return (
                   <div className="version-row runtime-version-row" key={row.version}>
                     <div className="version-main">

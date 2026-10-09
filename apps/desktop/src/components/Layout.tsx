@@ -469,23 +469,6 @@ export function Layout({
             <Tooltip.Root>
               <Tooltip.Trigger asChild>
                 <button
-                  aria-label={collapsed ? t("layout.expandSidebar") : t("layout.collapseSidebar")}
-                  className="titlebar-tool"
-                  onClick={() => setCollapsed((value) => !value)}
-                  type="button"
-                >
-                  {collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Portal>
-                <Tooltip.Content className="tooltip" side="bottom" sideOffset={6}>
-                  {collapsed ? t("layout.expandSidebar") : t("layout.collapseSidebar")}
-                </Tooltip.Content>
-              </Tooltip.Portal>
-            </Tooltip.Root>
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
                   aria-label={t("layout.goBack")}
                   className="titlebar-tool"
                   onClick={() => navigate(-1)}
@@ -514,6 +497,23 @@ export function Layout({
               <Tooltip.Portal>
                 <Tooltip.Content className="tooltip" side="bottom" sideOffset={6}>
                   {t("layout.goForward")}
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
+            <Tooltip.Root>
+              <Tooltip.Trigger asChild>
+                <button
+                  aria-label={collapsed ? t("layout.expandSidebar") : t("layout.collapseSidebar")}
+                  className="titlebar-tool"
+                  onClick={() => setCollapsed((value) => !value)}
+                  type="button"
+                >
+                  {collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content className="tooltip" side="bottom" sideOffset={6}>
+                  {collapsed ? t("layout.expandSidebar") : t("layout.collapseSidebar")}
                 </Tooltip.Content>
               </Tooltip.Portal>
             </Tooltip.Root>

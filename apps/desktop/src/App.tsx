@@ -30,6 +30,7 @@ import {
   updateSettings,
 } from "./api";
 import { Layout } from "./components/Layout";
+import { RuntimeOperationsProvider } from "./components/RuntimeOperations";
 import i18n from "./i18n";
 import { NodeDetailPage } from "./NodeDetailPage";
 import {
@@ -54,6 +55,14 @@ import type {
 } from "./types";
 
 export default function App() {
+  return (
+    <RuntimeOperationsProvider>
+      <AppContent />
+    </RuntimeOperationsProvider>
+  );
+}
+
+function AppContent() {
   const { t } = useTranslation();
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);

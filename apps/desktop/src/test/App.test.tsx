@@ -182,13 +182,13 @@ describe("Torben App shell", () => {
     expect(screen.getByRole("button", { name: "Minimize window" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Maximize or restore window" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Close window" })).toBeInTheDocument();
-    expect(collapseButton.compareDocumentPosition(backButton)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
     expect(backButton.compareDocumentPosition(forwardButton)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
-    expect(forwardButton.compareDocumentPosition(helpButton)).toBe(
+    expect(forwardButton.compareDocumentPosition(collapseButton)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(collapseButton.compareDocumentPosition(helpButton)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
     expect(within(primaryNavigation).queryByRole("link", { name: "Logs" })).not.toBeInTheDocument();
