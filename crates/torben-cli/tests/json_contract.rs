@@ -81,6 +81,7 @@ fn query_command_emits_one_success_envelope_on_stdout() {
         [
             "codex",
             "git",
+            "go",
             "mysql",
             "node",
             "postgresql",

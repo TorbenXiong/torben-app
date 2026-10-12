@@ -1,0 +1,25 @@
+{
+  "id": "app.torben.plugin.go",
+  "displayName": "Go",
+  "version": "0.0.5",
+  "protocolVersion": 1,
+  "minimumHostVersion": "0.0.5",
+  "publisher": "Torben App",
+  "capabilities": [
+    "version_discovery",
+    "external_discovery",
+    "managed_install",
+    "global_selection",
+    "managed_uninstall",
+    "schema_ui"
+  ],
+  "permissions": {
+    "networkDomains": ["go.dev", "golang.google.cn", "dl.google.com"],
+    "filesystemRoots": ["managed_app_library", "download_cache", "staging", "plugin_data"],
+    "externalCommands": ["go", "gofmt"],
+    "packageManagers": ["go"]
+  },
+  "targets": [],
+  "signature": null,
+  "revoked": false
+}

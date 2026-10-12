@@ -55,6 +55,7 @@ test("Windows portable builder emits only the desktop executable with embedded p
   assert.match(script, /torben-plugin-temurin/u);
   assert.match(script, /torben-plugin-python/u);
   assert.match(script, /torben-plugin-rust/u);
+  assert.match(script, /torben-plugin-go/u);
   assert.match(script, /torben-plugin-mysql/u);
   assert.match(script, /torben-plugin-redis/u);
   assert.match(script, /torben-plugin-postgresql/u);

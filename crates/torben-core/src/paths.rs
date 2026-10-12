@@ -90,6 +90,8 @@ impl TorbenPaths {
                     | "cargo"
                     | "rustdoc"
                     | "rustfmt"
+                    | "go"
+                    | "gofmt"
                     | "mysql"
                     | "mysqld"
                     | "mysqladmin"
@@ -316,6 +318,10 @@ impl TorbenPaths {
 
     pub fn pip_data_dir(&self) -> PathBuf {
         self.package_managers_dir().join("python").join("pip")
+    }
+
+    pub fn go_data_dir(&self) -> PathBuf {
+        self.package_managers_dir().join("go")
     }
 
     pub fn cargo_data_dir(&self) -> PathBuf {

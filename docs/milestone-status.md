@@ -22,7 +22,7 @@ Windows x64 gates required for the next supported release.
 - Git, Visual Studio Code, and Codex CLI remain temporarily unsupported.
   Production builds publish no capabilities or managed sources for them and reject their Core
   management actions with `capability_not_available`.
-- Node.js, Eclipse Temurin JDK, Python, Rust, MySQL, Redis, and PostgreSQL are restored software plugins. Their provider payloads are
+- Node.js, Eclipse Temurin JDK, Python, Rust, Go, MySQL, Redis, and PostgreSQL are supported software plugins. Their provider payloads are
   installed under `userData/plugins`, and managed runtimes remain under the same `userData` root.
 - Rust uses the official stable MSVC toolchain and shows the three newest stable toolchains by
   default while retaining exact-version installation. MySQL uses official Community Server ZIP
@@ -30,6 +30,8 @@ Windows x64 gates required for the next supported release.
   Redis uses SHA-256-pinned Windows x64 community builds from `redis-windows`, because upstream Redis
   does not publish a native Windows Open Source binary. Each plugin supports independent version
   installation, terminal selection, and provider-owned data below `userData`.
+- Go uses official Windows x64 ZIP archives and metadata hashes, shows the newest patch from three
+  stable minor lines, and keeps module, build, tool, temporary, and telemetry state under its data root.
 - PostgreSQL uses fixed EDB Windows x64 installers whose SHA-256 values are pinned to exact
   Microsoft WinGet manifests. Core invokes only EDB's `extract-only` mode, installs no runtime,
   service, pgAdmin, or StackBuilder component. Runtime installation never initializes a cluster;

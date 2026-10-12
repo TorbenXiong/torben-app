@@ -40,6 +40,11 @@ const TASKS: &[ScheduledTaskDefinition] = &[
         interval: VERSION_CATALOG_REFRESH_INTERVAL,
     },
     ScheduledTaskDefinition {
+        id: "refresh-go-version-catalog",
+        app_id: "go",
+        interval: VERSION_CATALOG_REFRESH_INTERVAL,
+    },
+    ScheduledTaskDefinition {
         id: "refresh-mysql-version-catalog",
         app_id: "mysql",
         interval: VERSION_CATALOG_REFRESH_INTERVAL,

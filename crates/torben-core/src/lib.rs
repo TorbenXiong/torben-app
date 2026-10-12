@@ -8,6 +8,7 @@ mod diagnostic_log;
 mod download;
 mod git;
 mod git_signature;
+mod go;
 mod library_migration;
 mod managed_updates;
 mod mysql;
@@ -47,6 +48,7 @@ use std::{
 
 pub use codex::{CodexDistribution, CodexProvider, CodexSigstoreBundle};
 pub use git::{GitDistribution, GitInstallKind, GitProvider};
+pub use go::{GoDistribution, GoProvider};
 pub use mysql::{MysqlDistribution, MysqlProvider};
 pub use node::{NodeDistribution, NodeProvider};
 pub use paths::{TorbenPaths, WINDOWS_DATA_ROOT_POINTER_FILE};
@@ -76,6 +78,7 @@ use torben_contracts::{
     },
 };
 pub use vscode::{VsCodeDistribution, VsCodeProvider};
+pub use workspace_lock::DesktopInstanceLock;
 
 #[cfg(feature = "test-fixtures")]
 #[derive(Debug, Clone)]
@@ -99,6 +102,7 @@ const BUNDLED_NODE_PLUGIN_MANIFEST: &str =
 const BUNDLED_TEMURIN_PLUGIN_ID: &str = "app.torben.plugin.temurin";
 const BUNDLED_PYTHON_PLUGIN_ID: &str = "app.torben.plugin.python";
 const BUNDLED_RUST_PLUGIN_ID: &str = "app.torben.plugin.rust";
+const BUNDLED_GO_PLUGIN_ID: &str = "app.torben.plugin.go";
 const BUNDLED_MYSQL_PLUGIN_ID: &str = "app.torben.plugin.mysql";
 const BUNDLED_MYSQL_PLUGIN_MANIFEST: &str =
     include_str!("../../../plugins/mysql/plugin.manifest.template.json");
@@ -110,6 +114,8 @@ const BUNDLED_POSTGRESQL_PLUGIN_MANIFEST: &str =
     include_str!("../../../plugins/postgresql/plugin.manifest.template.json");
 const BUNDLED_RUST_PLUGIN_MANIFEST: &str =
     include_str!("../../../plugins/rust/plugin.manifest.template.json");
+const BUNDLED_GO_PLUGIN_MANIFEST: &str =
+    include_str!("../../../plugins/go/plugin.manifest.template.json");
 const PYTHON_MANAGER_PACKAGE_FILENAME: &str = "python-manager-26.3.msi";
 #[cfg(not(test))]
 const PYTHON_MANAGER_PACKAGE_SHA256: &str =
@@ -124,7 +130,7 @@ const MANAGED_INSTALL_RECEIPT_SCHEMA_VERSION: u32 = 1;
 const MANAGED_INSTALL_RECEIPT_MAX_BYTES: u64 = 16 * 1024;
 const MANAGED_UNINSTALL_RECEIPT_SCHEMA_VERSION: u32 = 1;
 const MANAGED_UNINSTALL_RECEIPT_MAX_BYTES: u64 = 16 * 1024;
-const SELECTION_SHIM_RECEIPT_SCHEMA_VERSION: u32 = 1;
+const SELECTION_SHIM_RECEIPT_SCHEMA_VERSION: u32 = 2;
 const SELECTION_SHIM_RECEIPT_MAX_BYTES: u64 = 32 * 1024;
 const PLUGIN_INSTALL_RECEIPT_SCHEMA_VERSION: u32 = 1;
 const PLUGIN_INSTALL_RECEIPT_MAX_BYTES: u64 = 16 * 1024;
@@ -195,6 +201,7 @@ pub struct TorbenCore {
     temurin: TemurinProvider,
     python: PythonProvider,
     rust: RustProvider,
+    go: GoProvider,
     mysql: MysqlProvider,
     redis: RedisProvider,
     postgresql: PostgresqlProvider,
@@ -205,6 +212,7 @@ pub struct TorbenCore {
     temurin_plugin: node_plugin::BundledPlugin,
     python_plugin: node_plugin::BundledPlugin,
     rust_plugin: node_plugin::BundledPlugin,
+    go_plugin: node_plugin::BundledPlugin,
     mysql_plugin: node_plugin::BundledPlugin,
     redis_plugin: node_plugin::BundledPlugin,
     postgresql_plugin: node_plugin::BundledPlugin,
@@ -347,12 +355,13 @@ impl TorbenCore {
         let bundled_shim = BundledShim::discover(&paths)?;
         let node_plugin = node_plugin::BundledPlugin::node()?.with_data_root(&paths);
         let core = Self {
-            paths,
+            paths: paths.clone(),
             store,
             node: NodeProvider::official()?,
             temurin: TemurinProvider::official()?,
             python: PythonProvider::official()?,
             rust: RustProvider::official()?,
+            go: GoProvider::official()?,
             mysql: MysqlProvider::official()?,
             redis: RedisProvider::windows_community()?,
             postgresql: PostgresqlProvider::official()?,
@@ -360,15 +369,16 @@ impl TorbenCore {
             vscode: VsCodeProvider::official()?,
             codex: CodexProvider::official()?,
             node_plugin,
-            temurin_plugin: node_plugin::BundledPlugin::temurin()?,
-            python_plugin: node_plugin::BundledPlugin::python()?,
-            rust_plugin: node_plugin::BundledPlugin::rust()?,
-            mysql_plugin: node_plugin::BundledPlugin::mysql()?,
-            redis_plugin: node_plugin::BundledPlugin::redis()?,
-            postgresql_plugin: node_plugin::BundledPlugin::postgresql()?,
-            git_plugin: node_plugin::BundledPlugin::git()?,
-            vscode_plugin: node_plugin::BundledPlugin::vscode()?,
-            codex_plugin: node_plugin::BundledPlugin::codex()?,
+            temurin_plugin: node_plugin::BundledPlugin::temurin()?.with_data_root(&paths),
+            python_plugin: node_plugin::BundledPlugin::python()?.with_data_root(&paths),
+            rust_plugin: node_plugin::BundledPlugin::rust()?.with_data_root(&paths),
+            go_plugin: node_plugin::BundledPlugin::go()?.with_data_root(&paths),
+            mysql_plugin: node_plugin::BundledPlugin::mysql()?.with_data_root(&paths),
+            redis_plugin: node_plugin::BundledPlugin::redis()?.with_data_root(&paths),
+            postgresql_plugin: node_plugin::BundledPlugin::postgresql()?.with_data_root(&paths),
+            git_plugin: node_plugin::BundledPlugin::git()?.with_data_root(&paths),
+            vscode_plugin: node_plugin::BundledPlugin::vscode()?.with_data_root(&paths),
+            codex_plugin: node_plugin::BundledPlugin::codex()?.with_data_root(&paths),
             bundled_shim,
             shell_integration,
             official_registry_key: option_env!("TORBEN_OFFICIAL_PLUGIN_REGISTRY_KEY")
@@ -449,6 +459,7 @@ impl TorbenCore {
                     "temurin" => Some(BUNDLED_TEMURIN_PLUGIN_ID),
                     "python" => Some(BUNDLED_PYTHON_PLUGIN_ID),
                     "rust" => Some(BUNDLED_RUST_PLUGIN_ID),
+                    "go" => Some(BUNDLED_GO_PLUGIN_ID),
                     "mysql" => Some(BUNDLED_MYSQL_PLUGIN_ID),
                     "redis" => Some(BUNDLED_REDIS_PLUGIN_ID),
                     "postgresql" => Some(BUNDLED_POSTGRESQL_PLUGIN_ID),
@@ -721,6 +732,11 @@ impl TorbenCore {
             }
             "rust" => {
                 self.rust
+                    .install(&self.paths, app_id, version, plan, journal)
+                    .await
+            }
+            "go" => {
+                self.go
                     .install(&self.paths, app_id, version, plan, journal)
                     .await
             }
@@ -2983,6 +2999,7 @@ impl TorbenCore {
             "temurin" => self.temurin.command_path(&install_path, command),
             "python" => self.python.command_path(&install_path, command),
             "rust" => self.rust.command_path(&install_path, command),
+            "go" => self.go.command_path(&install_path, command),
             "mysql" => self.mysql.command_path(&install_path, command),
             "redis" => self.redis.command_path(&install_path, command),
             "postgresql" => self.postgresql.command_path(&install_path, command),
@@ -3030,6 +3047,11 @@ impl TorbenCore {
                 TorbenError::internal("The Rust executable has no parent directory.")
             })?;
             rust::configure_command_environment(&mut process, &self.paths.cargo_data_dir(), bin)?;
+        } else if app_id.as_str() == "go" {
+            let bin = executable.parent().ok_or_else(|| {
+                TorbenError::internal("The Go executable has no parent directory.")
+            })?;
+            go::configure_command_environment(&mut process, &self.paths.go_data_dir(), bin)?;
         } else if app_id.as_str() == "mysql" {
             let bin = executable.parent().ok_or_else(|| {
                 TorbenError::internal("The MySQL executable has no parent directory.")
@@ -3185,6 +3207,16 @@ impl TorbenCore {
             });
         }
         if cfg!(any(test, feature = "test-fixtures"))
+            || self.bundled_plugin_enabled(BUNDLED_GO_PLUGIN_ID)?
+        {
+            let (plugin_healthy, plugin_message) = self.go_plugin.diagnostic();
+            checks.push(DoctorCheck {
+                id: "bundled_plugin.go".to_owned(),
+                healthy: plugin_healthy,
+                message: plugin_message,
+            });
+        }
+        if cfg!(any(test, feature = "test-fixtures"))
             || self.bundled_plugin_enabled(BUNDLED_MYSQL_PLUGIN_ID)?
         {
             let (plugin_healthy, plugin_message) = self.mysql_plugin.diagnostic();
@@ -3291,6 +3323,12 @@ impl TorbenCore {
                     true,
                 )?,
                 bundled_plugin_summary(
+                    BUNDLED_GO_PLUGIN_MANIFEST,
+                    BUNDLED_GO_PLUGIN_ID,
+                    "Go",
+                    true,
+                )?,
+                bundled_plugin_summary(
                     BUNDLED_MYSQL_PLUGIN_MANIFEST,
                     BUNDLED_MYSQL_PLUGIN_ID,
                     "MySQL",
@@ -3345,6 +3383,7 @@ impl TorbenCore {
                     include_str!("../../../plugins/python/plugin.manifest.template.json"),
                 ),
                 (BUNDLED_RUST_PLUGIN_ID, "Rust", BUNDLED_RUST_PLUGIN_MANIFEST),
+                (BUNDLED_GO_PLUGIN_ID, "Go", BUNDLED_GO_PLUGIN_MANIFEST),
                 (
                     BUNDLED_MYSQL_PLUGIN_ID,
                     "MySQL",
@@ -3381,6 +3420,7 @@ impl TorbenCore {
                         | BUNDLED_TEMURIN_PLUGIN_ID
                         | BUNDLED_PYTHON_PLUGIN_ID
                         | BUNDLED_RUST_PLUGIN_ID
+                        | BUNDLED_GO_PLUGIN_ID
                         | BUNDLED_MYSQL_PLUGIN_ID
                         | BUNDLED_REDIS_PLUGIN_ID
                         | BUNDLED_POSTGRESQL_PLUGIN_ID
@@ -3606,6 +3646,28 @@ impl TorbenCore {
 
     pub fn uninstall_bundled_rust(&self) -> TorbenResult<()> {
         self.uninstall_bundled_provider(BUNDLED_RUST_PLUGIN_ID, "Rust", "rust", "Rust toolchain")
+    }
+
+    pub fn install_bundled_go(
+        &self,
+        executable: &[u8],
+        shim_executable: &[u8],
+    ) -> TorbenResult<PluginSummary> {
+        self.install_bundled_provider(
+            BundledProviderPackage {
+                plugin_id: BUNDLED_GO_PLUGIN_ID,
+                provider_name: "Go",
+                binary_name: "go",
+                manifest_template: BUNDLED_GO_PLUGIN_MANIFEST,
+                executable,
+                resources: &[],
+            },
+            shim_executable,
+        )
+    }
+
+    pub fn uninstall_bundled_go(&self) -> TorbenResult<()> {
+        self.uninstall_bundled_provider(BUNDLED_GO_PLUGIN_ID, "Go", "go", "Go toolchain")
     }
 
     pub fn install_bundled_mysql(
@@ -3976,6 +4038,7 @@ impl TorbenCore {
                 | BUNDLED_TEMURIN_PLUGIN_ID
                 | BUNDLED_PYTHON_PLUGIN_ID
                 | BUNDLED_RUST_PLUGIN_ID
+                | BUNDLED_GO_PLUGIN_ID
                 | BUNDLED_MYSQL_PLUGIN_ID
                 | BUNDLED_REDIS_PLUGIN_ID
                 | BUNDLED_POSTGRESQL_PLUGIN_ID
@@ -3989,6 +4052,7 @@ impl TorbenCore {
                     | BUNDLED_TEMURIN_PLUGIN_ID
                     | BUNDLED_PYTHON_PLUGIN_ID
                     | BUNDLED_RUST_PLUGIN_ID
+                    | BUNDLED_GO_PLUGIN_ID
                     | BUNDLED_MYSQL_PLUGIN_ID
                     | BUNDLED_REDIS_PLUGIN_ID
                     | BUNDLED_POSTGRESQL_PLUGIN_ID
@@ -4097,6 +4161,7 @@ impl TorbenCore {
                     "temurin" => self.temurin_plugin_enabled()?,
                     "python" => self.python_plugin_enabled()?,
                     "rust" => self.bundled_plugin_enabled(BUNDLED_RUST_PLUGIN_ID)?,
+                    "go" => self.bundled_plugin_enabled(BUNDLED_GO_PLUGIN_ID)?,
                     "mysql" => self.bundled_plugin_enabled(BUNDLED_MYSQL_PLUGIN_ID)?,
                     "redis" => self.bundled_plugin_enabled(BUNDLED_REDIS_PLUGIN_ID)?,
                     "postgresql" => self.bundled_plugin_enabled(BUNDLED_POSTGRESQL_PLUGIN_ID)?,
@@ -4179,6 +4244,7 @@ impl TorbenCore {
             "temurin" => Ok(&self.temurin_plugin),
             "python" => Ok(&self.python_plugin),
             "rust" => Ok(&self.rust_plugin),
+            "go" => Ok(&self.go_plugin),
             "mysql" => Ok(&self.mysql_plugin),
             "redis" => Ok(&self.redis_plugin),
             "postgresql" => Ok(&self.postgresql_plugin),
@@ -4202,6 +4268,7 @@ impl TorbenCore {
             BUNDLED_TEMURIN_PLUGIN_ID => Some(&self.temurin_plugin),
             BUNDLED_PYTHON_PLUGIN_ID => Some(&self.python_plugin),
             BUNDLED_RUST_PLUGIN_ID => Some(&self.rust_plugin),
+            BUNDLED_GO_PLUGIN_ID => Some(&self.go_plugin),
             BUNDLED_MYSQL_PLUGIN_ID => Some(&self.mysql_plugin),
             BUNDLED_REDIS_PLUGIN_ID => Some(&self.redis_plugin),
             BUNDLED_POSTGRESQL_PLUGIN_ID => Some(&self.postgresql_plugin),
@@ -4287,7 +4354,7 @@ fn bundled_app_support_available(app_id: &AppId, fixture_build: bool) -> bool {
     // release builds do not expose these applications until their data paths are constrained.
     matches!(
         app_id.as_str(),
-        "node" | "temurin" | "python" | "rust" | "mysql" | "redis" | "postgresql"
+        "node" | "temurin" | "python" | "rust" | "go" | "mysql" | "redis" | "postgresql"
     ) || (fixture_build && matches!(app_id.as_str(), "git" | "vscode" | "codex"))
 }
 
@@ -4853,6 +4920,21 @@ fn validate_shim_install_inputs(
     paths: &TorbenPaths,
     shim_binary: &Path,
 ) -> TorbenResult<Vec<PathBuf>> {
+    validate_shim_install_destinations(shim_binary, shim_destinations(paths))
+}
+
+fn validate_shim_install_inputs_for_app(
+    paths: &TorbenPaths,
+    shim_binary: &Path,
+    app_id: &AppId,
+) -> TorbenResult<Vec<PathBuf>> {
+    validate_shim_install_destinations(shim_binary, shim_destinations_for_app(paths, app_id)?)
+}
+
+fn validate_shim_install_destinations(
+    shim_binary: &Path,
+    destinations: Vec<PathBuf>,
+) -> TorbenResult<Vec<PathBuf>> {
     let source_metadata = std::fs::symlink_metadata(shim_binary).map_err(|error| {
         TorbenError::new("shim_binary_missing", "The shim binary does not exist.")
             .with_detail("path", shim_binary.display().to_string())
@@ -4866,7 +4948,6 @@ fn validate_shim_install_inputs(
         .with_detail("path", shim_binary.display().to_string()));
     }
 
-    let destinations = shim_destinations(paths);
     for destination in &destinations {
         match std::fs::symlink_metadata(destination) {
             Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
@@ -4897,8 +4978,11 @@ fn install_selection_shims_locked(
     shim_binary: &Path,
     journal: &OperationJournal,
 ) -> TorbenResult<Vec<PathBuf>> {
-    let destinations = validate_shim_install_inputs(paths, shim_binary)?;
-    if shims_match_source(paths, shim_binary)? {
+    let app_id = journal.app_id().ok_or_else(|| {
+        selection_shim_receipt_error("The selection journal has no application identifier.")
+    })?;
+    let destinations = validate_shim_install_inputs_for_app(paths, shim_binary, app_id)?;
+    if shims_match_source_for_destinations(&destinations, shim_binary)? {
         return Ok(destinations);
     }
     let staging = selection_shim_staging_path(paths, journal.operation_id());
@@ -5009,7 +5093,7 @@ fn commit_staged_shims(
         if destination.exists() {
             let backup_path = backup.join(filename);
             if let Err(error) = std::fs::rename(destination, &backup_path) {
-                let rollback_complete = rollback_shims(&installed, &backups);
+                let rollback_complete = rollback_shims(&installed, &backups, staging);
                 return Err(TorbenError::new(
                     "shim_backup_failed",
                     "Could not stage an existing command shim for replacement.",
@@ -5021,7 +5105,7 @@ fn commit_staged_shims(
             backups.push((destination.clone(), backup_path));
         }
         if let Err(error) = std::fs::rename(staged_path, destination) {
-            let rollback_complete = rollback_shims(&installed, &backups);
+            let rollback_complete = rollback_shims(&installed, &backups, staging);
             return Err(TorbenError::new(
                 "shim_commit_failed",
                 "Could not commit all command shims.",
@@ -5035,10 +5119,17 @@ fn commit_staged_shims(
     Ok(installed)
 }
 
-fn rollback_shims(installed: &[PathBuf], backups: &[(PathBuf, PathBuf)]) -> bool {
+fn rollback_shims(installed: &[PathBuf], backups: &[(PathBuf, PathBuf)], staging: &Path) -> bool {
     let mut complete = true;
     for destination in installed.iter().rev() {
-        if destination.exists() && std::fs::remove_file(destination).is_err() {
+        // Keep the staged copy as evidence that this destination was rolled back. Startup
+        // recovery must be able to distinguish restored old shims from newly created shims.
+        let staged = staging.join(
+            destination
+                .file_name()
+                .expect("shim destination has a name"),
+        );
+        if destination.exists() && std::fs::rename(destination, staged).is_err() {
             complete = false;
         }
     }
@@ -5128,12 +5219,12 @@ fn selection_shim_receipt(
     Ok(SelectionShimReceipt {
         schema_version: SELECTION_SHIM_RECEIPT_SCHEMA_VERSION,
         operation_id: journal.operation_id(),
-        app_id,
+        app_id: app_id.clone(),
         version,
         backup_path: staging_path.join("backup"),
         staging_path,
         source_sha256,
-        destinations: shim_destinations(paths),
+        destinations: shim_destinations_for_app(paths, &app_id)?,
     })
 }
 
@@ -5228,7 +5319,23 @@ fn read_selection_shim_receipt(
     })?;
     validate_sha256_text(&actual.source_sha256)?;
     let expected = selection_shim_receipt(paths, journal, actual.source_sha256.clone())?;
-    if actual != expected {
+    let legacy = SelectionShimReceipt {
+        schema_version: 1,
+        destinations: shim_destinations(paths),
+        ..expected.clone()
+    };
+    // Releases before Go support wrote the same schema without the two Go aliases.
+    let go_destinations = shim_destinations_for_commands(paths, GO_SHIM_COMMANDS);
+    let legacy_before_go = SelectionShimReceipt {
+        destinations: legacy
+            .destinations
+            .iter()
+            .filter(|destination| !go_destinations.contains(destination))
+            .cloned()
+            .collect(),
+        ..legacy.clone()
+    };
+    if actual != expected && actual != legacy && actual != legacy_before_go {
         return Err(selection_shim_receipt_error(
             "The selection journal does not match its shim receipt.",
         ));
@@ -5382,8 +5489,13 @@ fn rollback_selection_shim_destination(
                 .with_detail("path", destination.display().to_string())
                 .with_detail("reason", error.to_string())
         })?;
-    } else if !staged_present && destination_present {
-        ensure_transaction_shim_hash(destination, &receipt.source_sha256)?;
+    } else if !staged_present
+        && destination_present
+        && hex::encode(sha256_path(destination)?) == receipt.source_sha256
+    {
+        // Legacy rollback removed its staged copy before restoring the old shim. With no
+        // backup left, a different destination is already restored or externally owned;
+        // preserve it. Only remove a file still owned by this transaction's hash.
         std::fs::remove_file(destination).map_err(|error| {
             selection_shim_receipt_error("Could not remove a newly committed command shim.")
                 .with_detail("path", destination.display().to_string())
@@ -5538,16 +5650,23 @@ fn cleanup_shim_staging(paths: &TorbenPaths) -> TorbenResult<()> {
 }
 
 fn shims_match_source(paths: &TorbenPaths, shim_binary: &Path) -> TorbenResult<bool> {
+    shims_match_source_for_destinations(&shim_destinations(paths), shim_binary)
+}
+
+fn shims_match_source_for_destinations(
+    destinations: &[PathBuf],
+    shim_binary: &Path,
+) -> TorbenResult<bool> {
     let source_hash = sha256_path(shim_binary)?;
-    for destination in shim_destinations(paths) {
-        let metadata = match std::fs::symlink_metadata(&destination) {
+    for destination in destinations {
+        let metadata = match std::fs::symlink_metadata(destination) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(error) => return Err(shim_io_error(error)),
         };
         if !metadata.is_file()
             || metadata.file_type().is_symlink()
-            || sha256_path(&destination)? != source_hash
+            || sha256_path(destination)? != source_hash
         {
             return Ok(false);
         }
@@ -5556,59 +5675,119 @@ fn shims_match_source(paths: &TorbenPaths, shim_binary: &Path) -> TorbenResult<b
 }
 
 fn shim_destinations(paths: &TorbenPaths) -> Vec<PathBuf> {
-    [
-        "node",
-        "npm",
-        "npx",
-        "pnpm",
-        "java",
-        "javac",
-        "python",
-        "python3",
-        "pip",
-        "pip3",
-        "git",
-        "code",
-        "codex",
-        "rustc",
-        "cargo",
-        "rustdoc",
-        "rustfmt",
-        "mysql",
-        "mysqld",
-        "mysqladmin",
-        "mysqldump",
-        "redis-server",
-        "redis-cli",
-        "redis-benchmark",
-        "postgres",
-        "psql",
-        "pg_ctl",
-        "initdb",
-        "pg_isready",
-        "createdb",
-        "dropdb",
-        "createuser",
-        "dropuser",
-        "pg_dump",
-        "pg_dumpall",
-        "pg_restore",
-        "pg_basebackup",
-        "pgbench",
-        "vacuumdb",
-        "reindexdb",
-    ]
-    .into_iter()
-    .map(|command| {
-        let filename = if cfg!(windows) {
-            format!("{command}.exe")
-        } else {
-            command.to_owned()
-        };
-        paths.shim_dir().join(filename)
-    })
-    .collect()
+    shim_destinations_for_commands(paths, ALL_SHIM_COMMANDS)
 }
+
+fn shim_destinations_for_app(paths: &TorbenPaths, app_id: &AppId) -> TorbenResult<Vec<PathBuf>> {
+    let commands = match app_id.as_str() {
+        "node" => NODE_SHIM_COMMANDS,
+        "temurin" => TEMURIN_SHIM_COMMANDS,
+        "python" => PYTHON_SHIM_COMMANDS,
+        "rust" => RUST_SHIM_COMMANDS,
+        "go" => GO_SHIM_COMMANDS,
+        "mysql" => MYSQL_SHIM_COMMANDS,
+        "redis" => REDIS_SHIM_COMMANDS,
+        "postgresql" => POSTGRESQL_SHIM_COMMANDS,
+        "git" => GIT_SHIM_COMMANDS,
+        "vscode" => VSCODE_SHIM_COMMANDS,
+        "codex" => CODEX_SHIM_COMMANDS,
+        _ => {
+            return Err(TorbenError::new(
+                "shim_application_unsupported",
+                "The application does not expose managed command shims.",
+            )
+            .with_detail("appId", app_id.to_string()));
+        }
+    };
+    Ok(shim_destinations_for_commands(paths, commands))
+}
+
+fn shim_destinations_for_commands(paths: &TorbenPaths, commands: &[&str]) -> Vec<PathBuf> {
+    commands
+        .iter()
+        .map(|command| {
+            let filename = if cfg!(windows) {
+                format!("{command}.exe")
+            } else {
+                (*command).to_owned()
+            };
+            paths.shim_dir().join(filename)
+        })
+        .collect()
+}
+
+const NODE_SHIM_COMMANDS: &[&str] = &["node", "npm", "npx", "pnpm"];
+const TEMURIN_SHIM_COMMANDS: &[&str] = &["java", "javac"];
+const PYTHON_SHIM_COMMANDS: &[&str] = &["python", "python3", "pip", "pip3"];
+const RUST_SHIM_COMMANDS: &[&str] = &["rustc", "cargo", "rustdoc", "rustfmt"];
+const GO_SHIM_COMMANDS: &[&str] = &["go", "gofmt"];
+const MYSQL_SHIM_COMMANDS: &[&str] = &["mysql", "mysqld", "mysqladmin", "mysqldump"];
+const REDIS_SHIM_COMMANDS: &[&str] = &["redis-server", "redis-cli", "redis-benchmark"];
+const POSTGRESQL_SHIM_COMMANDS: &[&str] = &[
+    "postgres",
+    "psql",
+    "pg_ctl",
+    "initdb",
+    "pg_isready",
+    "createdb",
+    "dropdb",
+    "createuser",
+    "dropuser",
+    "pg_dump",
+    "pg_dumpall",
+    "pg_restore",
+    "pg_basebackup",
+    "pgbench",
+    "vacuumdb",
+    "reindexdb",
+];
+const GIT_SHIM_COMMANDS: &[&str] = &["git"];
+const VSCODE_SHIM_COMMANDS: &[&str] = &["code"];
+const CODEX_SHIM_COMMANDS: &[&str] = &["codex"];
+const ALL_SHIM_COMMANDS: &[&str] = &[
+    "node",
+    "npm",
+    "npx",
+    "pnpm",
+    "java",
+    "javac",
+    "python",
+    "python3",
+    "pip",
+    "pip3",
+    "git",
+    "code",
+    "codex",
+    "rustc",
+    "cargo",
+    "rustdoc",
+    "rustfmt",
+    "go",
+    "gofmt",
+    "mysql",
+    "mysqld",
+    "mysqladmin",
+    "mysqldump",
+    "redis-server",
+    "redis-cli",
+    "redis-benchmark",
+    "postgres",
+    "psql",
+    "pg_ctl",
+    "initdb",
+    "pg_isready",
+    "createdb",
+    "dropdb",
+    "createuser",
+    "dropuser",
+    "pg_dump",
+    "pg_dumpall",
+    "pg_restore",
+    "pg_basebackup",
+    "pgbench",
+    "vacuumdb",
+    "reindexdb",
+];
 
 fn sha256_path(path: &Path) -> TorbenResult<[u8; 32]> {
     let mut file = File::open(path).map_err(shim_io_error)?;
@@ -8138,10 +8317,10 @@ mod tests {
         PluginRecord, StateStore, TorbenCore, TorbenPaths, bundled_app_support_available,
         commit_staged_shims, execute_plugin_install_transaction, execute_uninstall_transaction,
         install_selection_shims_locked, install_shims_locked, package_request_from_managed_plan,
-        package_to_managed_token, shell_integration_is_healthy, shim_destinations,
-        source_adapter_is_healthy, source_migration_backup, stage_and_commit_shims,
-        stage_managed_source, stage_shim_copies, validate_uninstall_plan,
-        write_managed_install_receipt, write_managed_uninstall_receipt,
+        package_to_managed_token, selection_shim_receipt_path, shell_integration_is_healthy,
+        shim_destinations, shim_destinations_for_app, source_adapter_is_healthy,
+        source_migration_backup, stage_and_commit_shims, stage_managed_source, stage_shim_copies,
+        validate_uninstall_plan, write_managed_install_receipt, write_managed_uninstall_receipt,
         write_package_to_managed_receipt, write_plugin_install_receipt,
         write_selection_shim_receipt,
     };
@@ -9161,7 +9340,7 @@ fn main() {{
         journal: &OperationJournal,
         source: &Path,
     ) -> (Vec<PathBuf>, PathBuf, PathBuf) {
-        let destinations = shim_destinations(paths);
+        let destinations = shim_destinations_for_app(paths, journal.app_id().unwrap()).unwrap();
         let staging = paths
             .staging_dir()
             .join(format!("shims-{}", journal.operation_id()));
@@ -9247,32 +9426,27 @@ fn main() {{
 
         let plugins = core.plugins().unwrap();
 
-        assert_eq!(plugins.len(), 12);
+        assert_eq!(plugins.len(), 13);
+        for plugin in &plugins[..11] {
+            assert_eq!(plugin.origin, PluginOrigin::BuiltIn);
+        }
         assert_eq!(plugins[0].origin, PluginOrigin::BuiltIn);
         assert_eq!(plugins[0].id.as_str(), "app.torben.plugin.node");
-        assert_eq!(plugins[1].origin, PluginOrigin::BuiltIn);
         assert_eq!(plugins[1].id.as_str(), "app.torben.plugin.temurin");
-        assert_eq!(plugins[2].origin, PluginOrigin::BuiltIn);
         assert_eq!(plugins[2].id.as_str(), "app.torben.plugin.python");
-        assert_eq!(plugins[3].origin, PluginOrigin::BuiltIn);
         assert_eq!(plugins[3].id.as_str(), "app.torben.plugin.rust");
-        assert_eq!(plugins[4].origin, PluginOrigin::BuiltIn);
-        assert_eq!(plugins[4].id.as_str(), "app.torben.plugin.mysql");
-        assert_eq!(plugins[5].origin, PluginOrigin::BuiltIn);
-        assert_eq!(plugins[5].id.as_str(), "app.torben.plugin.redis");
-        assert_eq!(plugins[6].origin, PluginOrigin::BuiltIn);
-        assert_eq!(plugins[6].id.as_str(), "app.torben.plugin.postgresql");
-        assert_eq!(plugins[7].origin, PluginOrigin::BuiltIn);
-        assert_eq!(plugins[7].id.as_str(), "app.torben.plugin.git");
-        assert_eq!(plugins[8].origin, PluginOrigin::BuiltIn);
-        assert_eq!(plugins[8].id.as_str(), "app.torben.plugin.vscode");
-        assert_eq!(plugins[9].origin, PluginOrigin::BuiltIn);
-        assert_eq!(plugins[9].id.as_str(), "app.torben.plugin.codex");
-        assert_eq!(plugins[10].origin, PluginOrigin::OfficialRegistry);
-        assert_eq!(plugins[10].display_name, "Official fixture");
-        assert_eq!(plugins[11].origin, PluginOrigin::Sideloaded);
-        assert_eq!(plugins[11].display_name, "Fixture plugin");
-        assert_eq!(plugins[11].permissions.network_domains, ["example.invalid"]);
+        assert_eq!(plugins[4].id.as_str(), "app.torben.plugin.go");
+        assert_eq!(plugins[5].id.as_str(), "app.torben.plugin.mysql");
+        assert_eq!(plugins[6].id.as_str(), "app.torben.plugin.redis");
+        assert_eq!(plugins[7].id.as_str(), "app.torben.plugin.postgresql");
+        assert_eq!(plugins[8].id.as_str(), "app.torben.plugin.git");
+        assert_eq!(plugins[9].id.as_str(), "app.torben.plugin.vscode");
+        assert_eq!(plugins[10].id.as_str(), "app.torben.plugin.codex");
+        assert_eq!(plugins[11].origin, PluginOrigin::OfficialRegistry);
+        assert_eq!(plugins[11].display_name, "Official fixture");
+        assert_eq!(plugins[12].origin, PluginOrigin::Sideloaded);
+        assert_eq!(plugins[12].display_name, "Fixture plugin");
+        assert_eq!(plugins[12].permissions.network_domains, ["example.invalid"]);
     }
 
     #[test]
@@ -9808,7 +9982,7 @@ fn main() {{
                 .join("fixture-plugin.bin")
                 .is_file()
         );
-        assert_eq!(core.plugins().unwrap().len(), 11);
+        assert_eq!(core.plugins().unwrap().len(), 12);
 
         let duplicate = core.install_plugin(&manifest_path, true).unwrap_err();
         assert_eq!(duplicate.code, "plugin_already_installed");
@@ -10130,7 +10304,16 @@ fn main() {{
 
         let installed = install_shims_locked(&paths, &source).unwrap();
 
-        assert_eq!(installed.len(), 40);
+        assert_eq!(installed.len(), 42);
+        for command in ["go", "gofmt"] {
+            assert!(
+                installed.contains(
+                    &paths
+                        .shim_dir()
+                        .join(format!("{command}{}", std::env::consts::EXE_SUFFIX))
+                )
+            );
+        }
         for destination in shim_destinations(&paths) {
             assert_eq!(std::fs::read(destination).unwrap(), b"shim-v1");
         }
@@ -10172,7 +10355,10 @@ fn main() {{
 
         let installed = install_selection_shims_locked(&paths, &source, &journal).unwrap();
 
-        assert_eq!(installed, shim_destinations(&paths));
+        assert_eq!(
+            installed,
+            shim_destinations_for_app(&paths, &app_id).unwrap()
+        );
         for destination in installed {
             assert_eq!(std::fs::read(destination).unwrap(), b"selection-shim");
         }
@@ -10188,6 +10374,161 @@ fn main() {{
                 .join(format!("{operation_id}.selection-shims.receipt"))
                 .exists()
         );
+    }
+
+    #[test]
+    fn selection_shim_transaction_updates_only_the_selected_application_aliases() {
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().to_path_buf());
+        paths.ensure_layout().unwrap();
+        let source = root.path().join("torben-shim-fixture");
+        std::fs::write(&source, b"selection-shim").unwrap();
+        let app_id = AppId::new("go").unwrap();
+        let version = ExactVersion::from_str("1.27.2").unwrap();
+        let journal = OperationJournal::start(
+            &paths,
+            operation_store(&paths),
+            OperationKind::Select,
+            &app_id,
+            Some(&version),
+        )
+        .unwrap();
+        for destination in shim_destinations(&paths) {
+            std::fs::write(destination, b"old-shim").unwrap();
+        }
+
+        let installed = install_selection_shims_locked(&paths, &source, &journal).unwrap();
+
+        assert_eq!(
+            installed,
+            shim_destinations_for_app(&paths, &app_id).unwrap()
+        );
+        for destination in installed {
+            assert_eq!(std::fs::read(destination).unwrap(), b"selection-shim");
+        }
+        for destination in shim_destinations_for_app(&paths, &AppId::new("node").unwrap()).unwrap()
+        {
+            assert_eq!(std::fs::read(destination).unwrap(), b"old-shim");
+        }
+    }
+
+    #[test]
+    fn startup_recovers_legacy_selection_receipts_without_go_aliases() {
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().to_path_buf());
+        paths.ensure_layout().unwrap();
+        let source = root.path().join("torben-shim-fixture");
+        std::fs::write(&source, b"new-shim").unwrap();
+        let (app_id, version) = node_identity();
+        let journal = OperationJournal::start(
+            &paths,
+            operation_store(&paths),
+            OperationKind::Select,
+            &app_id,
+            Some(&version),
+        )
+        .unwrap();
+        let (_, staging, _) = prepare_selection_shim_transaction(&paths, &journal, &source);
+        let go_destinations =
+            shim_destinations_for_app(&paths, &AppId::new("go").unwrap()).unwrap();
+        let destinations = shim_destinations(&paths)
+            .into_iter()
+            .filter(|destination| !go_destinations.contains(destination))
+            .collect::<Vec<_>>();
+        let receipt_path = selection_shim_receipt_path(&paths, journal.operation_id());
+        let mut receipt: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
+        receipt["schemaVersion"] = serde_json::json!(1);
+        receipt["destinations"] = serde_json::json!(destinations);
+        std::fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+        for destination in destinations {
+            std::fs::write(staging.join(destination.file_name().unwrap()), b"new-shim").unwrap();
+            std::fs::write(destination, b"old-shim").unwrap();
+        }
+        drop(journal);
+
+        TorbenCore::open(paths).unwrap();
+
+        assert!(!staging.exists());
+        assert!(!receipt_path.exists());
+    }
+
+    #[test]
+    fn startup_preserves_shims_already_restored_by_legacy_rollback() {
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().to_path_buf());
+        paths.ensure_layout().unwrap();
+        let source = root.path().join("torben-shim-fixture");
+        std::fs::write(&source, b"new-shim").unwrap();
+        let app_id = AppId::new("go").unwrap();
+        let version = ExactVersion::from_str("1.27.2").unwrap();
+        let journal = OperationJournal::start(
+            &paths,
+            operation_store(&paths),
+            OperationKind::Select,
+            &app_id,
+            Some(&version),
+        )
+        .unwrap();
+        let (_, staging, backup) = prepare_selection_shim_transaction(&paths, &journal, &source);
+        let destinations = shim_destinations(&paths);
+        let receipt_path = selection_shim_receipt_path(&paths, journal.operation_id());
+        let mut receipt: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
+        receipt["schemaVersion"] = serde_json::json!(1);
+        receipt["destinations"] = serde_json::json!(destinations);
+        std::fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+        // Legacy rollback consumed the staged copies and backups for restored Node aliases,
+        // but left a newly created Go alias and uncommitted files from the partial commit.
+        for destination in &destinations {
+            std::fs::write(staging.join(destination.file_name().unwrap()), b"new-shim").unwrap();
+        }
+        let node = &destinations[0];
+        std::fs::write(node, b"restored-old-shim").unwrap();
+        std::fs::remove_file(staging.join(node.file_name().unwrap())).unwrap();
+        let go = shim_destinations_for_app(&paths, &app_id).unwrap();
+        std::fs::rename(staging.join(go[0].file_name().unwrap()), &go[0]).unwrap();
+        assert!(std::fs::read_dir(backup).unwrap().next().is_none());
+        drop(journal);
+
+        TorbenCore::open(paths).unwrap();
+
+        assert_eq!(std::fs::read(node).unwrap(), b"restored-old-shim");
+        assert!(!go[0].exists());
+        assert!(!staging.exists());
+        assert!(!receipt_path.exists());
+    }
+
+    #[test]
+    fn startup_preserves_a_changed_shim_with_an_unrestored_backup() {
+        let root = tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().to_path_buf());
+        paths.ensure_layout().unwrap();
+        let source = root.path().join("torben-shim-fixture");
+        std::fs::write(&source, b"new-shim").unwrap();
+        let (app_id, version) = node_identity();
+        let journal = OperationJournal::start(
+            &paths,
+            operation_store(&paths),
+            OperationKind::Select,
+            &app_id,
+            Some(&version),
+        )
+        .unwrap();
+        let (destinations, staging, backup) =
+            prepare_selection_shim_transaction(&paths, &journal, &source);
+        let first = &destinations[0];
+        std::fs::write(backup.join(first.file_name().unwrap()), b"old-shim").unwrap();
+        std::fs::rename(staging.join(first.file_name().unwrap()), first).unwrap();
+        std::fs::write(first, b"external-change").unwrap();
+        drop(journal);
+
+        let Err(error) = TorbenCore::open(paths) else {
+            panic!("changed destination must prevent restoring the backup");
+        };
+        assert_eq!(error.code, "selection_shim_ownership_receipt_invalid");
+        assert_eq!(std::fs::read(first).unwrap(), b"external-change");
+        assert!(backup.join(first.file_name().unwrap()).exists());
     }
 
     #[test]

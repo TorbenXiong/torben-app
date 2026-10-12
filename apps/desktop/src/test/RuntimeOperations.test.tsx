@@ -17,6 +17,7 @@ const runtimes = [
   { appId: "temurin", route: "/java", version: "21.0.2+13.0.LTS" },
   { appId: "python", route: "/python", version: "3.14.7" },
   { appId: "rust", route: "/rust", version: "1.98.0" },
+  { appId: "go", route: "/go", version: "1.27.2" },
   { appId: "mysql", route: "/mysql", version: "8.4.11" },
   { appId: "redis", route: "/redis", version: "8.8.0" },
   { appId: "postgresql", route: "/postgresql", version: "18.6.0" },
@@ -83,6 +84,19 @@ function navigate(plugin: string) {
   );
 }
 
+it("retries a failed Go catalog query and shows the recovered versions", async () => {
+  await prepareApp();
+  vi.mocked(api.getVersions)
+    .mockRejectedValueOnce(new Error("go_network_error: fixture unavailable"))
+    .mockResolvedValueOnce([{ version: "1.27.2", releasedAt: "", recommended: true }]);
+  renderApp("/go");
+  expect(await screen.findByRole("alert")).toHaveTextContent("go_network_error");
+  fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+  expect(await screen.findByRole("button", { name: "Install" })).toBeEnabled();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(vi.mocked(api.getVersions)).toHaveBeenCalledWith("go");
+});
+
 it.each(runtimes)(
   "retains only the inline $appId progress after leaving and returning",
   async ({ appId, route, version }) => {
@@ -114,7 +128,9 @@ it.each(runtimes)(
                 ? "Redis"
                 : appId === "rust"
                   ? "Rust"
-                  : "Python",
+                  : appId === "go"
+                    ? "Go"
+                    : "Python",
     );
     expect(await screen.findByRole("button", { name: "Installing…" })).toBeDisabled();
     expect(screen.getAllByRole("progressbar")).toHaveLength(1);

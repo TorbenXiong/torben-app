@@ -241,7 +241,7 @@ fn validate_manifest_declarations(manifest: &PluginManifest) -> TorbenResult<()>
         |value| {
             matches!(
                 value,
-                "winget" | "homebrew" | "apt" | "dnf" | "cargo" | "pip"
+                "winget" | "homebrew" | "apt" | "dnf" | "cargo" | "pip" | "go"
             )
         },
     )
@@ -1560,6 +1560,10 @@ mod tests {
             (
                 "rust",
                 include_str!("../../../plugins/rust/plugin.manifest.template.json"),
+            ),
+            (
+                "go",
+                include_str!("../../../plugins/go/plugin.manifest.template.json"),
             ),
             (
                 "mysql",

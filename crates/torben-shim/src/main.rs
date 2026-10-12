@@ -63,6 +63,7 @@ fn app_for_command(command: &str) -> TorbenResult<AppId> {
         "java" | "javac" => AppId::new("temurin"),
         "python" | "python3" | "pip" | "pip3" => AppId::new("python"),
         "rustc" | "cargo" | "rustdoc" | "rustfmt" => AppId::new("rust"),
+        "go" | "gofmt" => AppId::new("go"),
         "mysql" | "mysqld" | "mysqladmin" | "mysqldump" => AppId::new("mysql"),
         "redis-server" | "redis-cli" | "redis-benchmark" => AppId::new("redis"),
         "postgres" | "psql" | "pg_ctl" | "initdb" | "pg_isready" | "createdb" | "dropdb"
@@ -105,6 +106,8 @@ fn _is_safe_alias(path: &Path) -> bool {
                 | "cargo"
                 | "rustdoc"
                 | "rustfmt"
+                | "go"
+                | "gofmt"
                 | "mysql"
                 | "mysqld"
                 | "mysqladmin"
@@ -152,6 +155,8 @@ mod tests {
         assert_eq!(app_for_command("pip3").unwrap().as_str(), "python");
         assert_eq!(app_for_command("pnpm").unwrap().as_str(), "node");
         assert_eq!(app_for_command("cargo").unwrap().as_str(), "rust");
+        assert_eq!(app_for_command("go").unwrap().as_str(), "go");
+        assert_eq!(app_for_command("gofmt").unwrap().as_str(), "go");
         assert_eq!(app_for_command("mysql").unwrap().as_str(), "mysql");
         assert_eq!(app_for_command("mysqldump").unwrap().as_str(), "mysql");
         assert_eq!(app_for_command("redis-server").unwrap().as_str(), "redis");

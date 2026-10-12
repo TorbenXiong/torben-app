@@ -27,6 +27,7 @@ const baseSidecarNames = Object.freeze([
 const windowsSidecarNames = Object.freeze([
   ...baseSidecarNames.slice(0, 3),
   "torben-plugin-rust",
+  "torben-plugin-go",
   "torben-plugin-mysql",
   "torben-plugin-redis",
   "torben-plugin-postgresql",

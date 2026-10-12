@@ -10,6 +10,7 @@ import {
   getOperationEvents,
   getSnapshot,
   initialTorbenUpdateStatus,
+  installBundledGoPlugin,
   installBundledMysqlPlugin,
   installBundledNodePlugin,
   installBundledPostgresqlPlugin,
@@ -20,6 +21,7 @@ import {
   installTorbenUpdate,
   migrateManagedLibrary,
   setShellIntegration,
+  uninstallBundledGoPlugin,
   uninstallBundledMysqlPlugin,
   uninstallBundledNodePlugin,
   uninstallBundledPostgresqlPlugin,
@@ -35,6 +37,7 @@ import i18n from "./i18n";
 import { NodeDetailPage } from "./NodeDetailPage";
 import {
   DiagnosticsPage,
+  GoDetailPage,
   LogsPage,
   MysqlDetailPage,
   PluginDetailPage,
@@ -267,6 +270,7 @@ function AppContent() {
   const nodeEnabled = pluginEnabled("app.torben.plugin.node");
   const pythonEnabled = pluginEnabled("app.torben.plugin.python");
   const rustEnabled = pluginEnabled("app.torben.plugin.rust");
+  const goEnabled = pluginEnabled("app.torben.plugin.go");
   const mysqlEnabled = pluginEnabled("app.torben.plugin.mysql");
   const redisEnabled = pluginEnabled("app.torben.plugin.redis");
   const postgresqlEnabled = pluginEnabled("app.torben.plugin.postgresql");
@@ -316,13 +320,15 @@ function AppContent() {
                   ? "/python"
                   : managedUpdates.candidates[0]?.appId === "rust"
                     ? "/rust"
-                    : managedUpdates.candidates[0]?.appId === "mysql"
-                      ? "/mysql"
-                      : managedUpdates.candidates[0]?.appId === "redis"
-                        ? "/redis"
-                        : managedUpdates.candidates[0]?.appId === "postgresql"
-                          ? "/postgresql"
-                          : "/java"
+                    : managedUpdates.candidates[0]?.appId === "go"
+                      ? "/go"
+                      : managedUpdates.candidates[0]?.appId === "mysql"
+                        ? "/mysql"
+                        : managedUpdates.candidates[0]?.appId === "redis"
+                          ? "/redis"
+                          : managedUpdates.candidates[0]?.appId === "postgresql"
+                            ? "/postgresql"
+                            : "/java"
             }
           >
             {t("appShell.reviewUpdates")}
@@ -367,6 +373,22 @@ function AppContent() {
           element={
             rustEnabled ? (
               <RustDetailPage
+                installed={snapshot.installed}
+                operations={snapshot.operations}
+                onChanged={refresh}
+                selected={snapshot.selected}
+                shellIntegration={snapshot.shellIntegration}
+              />
+            ) : (
+              <Navigate replace to="/plugins" />
+            )
+          }
+        />
+        <Route
+          path="/go"
+          element={
+            goEnabled ? (
+              <GoDetailPage
                 installed={snapshot.installed}
                 operations={snapshot.operations}
                 onChanged={refresh}
@@ -456,12 +478,14 @@ function AppContent() {
               onUninstallBundledNode={uninstallBundledNodePlugin}
               onInstallBundledPython={installBundledPythonPlugin}
               onInstallBundledRust={installBundledRustPlugin}
+              onInstallBundledGo={installBundledGoPlugin}
               onInstallBundledMysql={installBundledMysqlPlugin}
               onInstallBundledRedis={installBundledRedisPlugin}
               onInstallBundledPostgresql={installBundledPostgresqlPlugin}
               onUninstallBundledTemurin={uninstallBundledTemurinPlugin}
               onUninstallBundledPython={uninstallBundledPythonPlugin}
               onUninstallBundledRust={uninstallBundledRustPlugin}
+              onUninstallBundledGo={uninstallBundledGoPlugin}
               onUninstallBundledMysql={uninstallBundledMysqlPlugin}
               onUninstallBundledRedis={uninstallBundledRedisPlugin}
               onUninstallBundledPostgresql={uninstallBundledPostgresqlPlugin}

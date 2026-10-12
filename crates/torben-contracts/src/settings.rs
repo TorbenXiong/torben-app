@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{AppId, PluginId, TorbenError, TorbenResult};
 
-const SUPPORTED_ENVIRONMENT_APPS: [&str; 4] = ["node", "temurin", "python", "rust"];
+const SUPPORTED_ENVIRONMENT_APPS: [&str; 5] = ["node", "temurin", "python", "rust", "go"];
 const MAX_ENVIRONMENT_VARIABLES_PER_APP: usize = 32;
 const MAX_ENVIRONMENT_VARIABLE_VALUE_BYTES: usize = 8 * 1024;
 
@@ -189,6 +189,18 @@ fn reserved_environment_variable(app_id: &AppId, normalized: &str) -> bool {
                 | "PYTHONUSERBASE"
         ),
         "rust" => normalized == "CARGO_HOME",
+        "go" => matches!(
+            normalized,
+            "GOROOT"
+                | "GOPATH"
+                | "GOBIN"
+                | "GOMODCACHE"
+                | "GOCACHE"
+                | "GOENV"
+                | "GOTMPDIR"
+                | "GOTOOLCHAIN"
+                | "APPDATA"
+        ),
         _ => false,
     }
 }

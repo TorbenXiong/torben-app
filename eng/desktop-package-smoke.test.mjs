@@ -27,6 +27,7 @@ const sidecars = [
   "torben-plugin-temurin",
   "torben-plugin-python",
   "torben-plugin-rust",
+  "torben-plugin-go",
   "torben-plugin-mysql",
   "torben-plugin-redis",
   "torben-plugin-postgresql",
@@ -223,7 +224,7 @@ test("verifies an installed Windows package and sustained isolated launch", asyn
         assert.equal(result.format, format);
         assert.equal(result.target, "x86_64-pc-windows-msvc");
         assert.equal(result.executable, "torben-desktop.exe");
-        assert.equal(result.sidecars.length, 11);
+        assert.equal(result.sidecars.length, 12);
         assert.deepEqual(result.signing, { status: "unsigned", verified: false });
         assert.equal(launchCall.env.Path, "C:\\fixture");
         assert.equal(launchCall.env.SystemRoot, "C:\\Windows");
@@ -297,7 +298,7 @@ test("re-verifies signed Windows packages and every installed executable", async
     assert.equal(signatureCall.command, "powershell.exe");
     assert.ok(signatureCall.args.includes("-EncodedCommand"));
     const verifiedPaths = JSON.parse(signatureCall.env.TORBEN_SIGNATURE_PATHS);
-    assert.equal(verifiedPaths.length, 13);
+    assert.equal(verifiedPaths.length, 14);
     assert.ok(verifiedPaths.some((path) => path.endsWith("-setup.exe")));
     assert.ok(verifiedPaths.some((path) => path.endsWith("torben-desktop.exe")));
     for (const sidecar of sidecars) {

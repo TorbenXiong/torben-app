@@ -1774,6 +1774,7 @@ describe("Torben App shell", () => {
 
   it.each([
     ["Rust", "rust", "/icons/rust.svg"],
+    ["Go", "go", "/icons/go.svg"],
     ["MySQL", "mysql", "/icons/mysql-logo.png"],
     ["Redis", "redis", "/icons/redis-mark.svg"],
     ["PostgreSQL", "postgresql", "/icons/postgresql.svg"],

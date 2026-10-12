@@ -10,6 +10,42 @@ pub struct WorkspaceLock {
     file: std::fs::File,
 }
 
+/// Holds the desktop process slot independently of short-lived workspace mutations.
+pub struct DesktopInstanceLock {
+    _file: std::fs::File,
+}
+
+impl DesktopInstanceLock {
+    /// Returns `None` immediately when another desktop process holds the slot.
+    ///
+    /// # Errors
+    /// Returns an error when the lock file cannot be opened or locked.
+    pub fn try_acquire(path: &Path) -> TorbenResult<Option<Self>> {
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(path)
+            .map_err(|error| {
+                TorbenError::new(
+                    "desktop_instance_lock_failed",
+                    "Could not open the desktop instance lock.",
+                )
+                .with_detail("reason", error.to_string())
+            })?;
+        match FileExt::try_lock(&file) {
+            Ok(()) => Ok(Some(Self { _file: file })),
+            Err(fs4::TryLockError::WouldBlock) => Ok(None),
+            Err(fs4::TryLockError::Error(error)) => Err(TorbenError::new(
+                "desktop_instance_lock_failed",
+                "Could not lock the desktop process slot.",
+            )
+            .with_detail("reason", error.to_string())),
+        }
+    }
+}
+
 impl WorkspaceLock {
     pub(crate) async fn acquire_async(path: PathBuf) -> TorbenResult<Self> {
         Self::acquire_async_with(path, false).await
@@ -94,7 +130,20 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::WorkspaceLock;
+    use super::{DesktopInstanceLock, WorkspaceLock};
+
+    #[test]
+    fn desktop_instance_lock_rejects_duplicate_and_releases_on_exit() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("desktop.lock");
+        let first = DesktopInstanceLock::try_acquire(&path).unwrap().unwrap();
+        assert!(DesktopInstanceLock::try_acquire(&path).unwrap().is_none());
+        // The desktop slot does not hold the mutation lock for the process lifetime.
+        let workspace = WorkspaceLock::acquire(root.path().join("workspace.lock")).unwrap();
+        drop(first);
+        assert!(DesktopInstanceLock::try_acquire(&path).unwrap().is_some());
+        drop(workspace);
+    }
 
     const HELPER_LOCK_PATH: &str = "TORBEN_WORKSPACE_LOCK_HELPER_PATH";
 
