@@ -32,8 +32,8 @@ node eng/verify-windows-portable-release.mjs --directory artifacts/torben-app-po
 
 The preparation command verifies a cached Python Install Manager 26.3 MSI or downloads it from
 python.org into `.tools/python-manager`, then checks its pinned SHA-256. The portable build itself
-uses offline, locked Cargo commands and fails if the verified MSI is missing. It embeds the seven
-supported Windows providers and shim into the executable. Output is:
+uses offline, locked Cargo commands and fails if the verified MSI is missing. It embeds the supported
+Windows providers, including Go, and the shim into the executable. Output is:
 
 ```text
 artifacts/torben-app-portable-windows-x64/TorbenApp.exe

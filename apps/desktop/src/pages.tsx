@@ -128,6 +128,7 @@ const bundledApplicationIds: Record<string, string> = {
   "app.torben.plugin.temurin": "temurin",
   "app.torben.plugin.python": "python",
   "app.torben.plugin.rust": "rust",
+  "app.torben.plugin.go": "go",
   "app.torben.plugin.mysql": "mysql",
   "app.torben.plugin.redis": "redis",
   "app.torben.plugin.postgresql": "postgresql",
@@ -141,6 +142,7 @@ const bundledRuntimePages: Record<string, string> = {
   "app.torben.plugin.temurin": "/java",
   "app.torben.plugin.python": "/python",
   "app.torben.plugin.rust": "/rust",
+  "app.torben.plugin.go": "/go",
   "app.torben.plugin.mysql": "/mysql",
   "app.torben.plugin.redis": "/redis",
   "app.torben.plugin.postgresql": "/postgresql",
@@ -151,6 +153,7 @@ const pluginEnvironmentAppIds: Record<string, string> = {
   "app.torben.plugin.temurin": "temurin",
   "app.torben.plugin.python": "python",
   "app.torben.plugin.rust": "rust",
+  "app.torben.plugin.go": "go",
 };
 
 const environmentVariableSuggestions: Record<string, string[]> = {
@@ -158,6 +161,7 @@ const environmentVariableSuggestions: Record<string, string[]> = {
   temurin: ["JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "JAVA_HOME"],
   python: ["PYTHONPATH", "PYTHONWARNINGS", "PYTHONUTF8"],
   rust: ["RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_TARGET_DIR"],
+  go: ["GOFLAGS", "GOPROXY", "GOPRIVATE"],
 };
 
 interface EnvironmentVariableRow {
@@ -276,7 +280,7 @@ export function RuntimeDetailPage({
   selected?: SelectionRecord[];
   operations?: OperationEvent[];
   shellIntegration?: ShellIntegrationStatus;
-  appId?: "python" | "rust" | "mysql" | "redis" | "postgresql";
+  appId?: "python" | "rust" | "go" | "mysql" | "redis" | "postgresql";
   displayName?: string;
 }) {
   const { t } = useTranslation();
@@ -399,6 +403,11 @@ export function RuntimeDetailPage({
                 <span className="eyebrow">{t("runtimePage.officialReleases")}</span>
                 <h2>{t("runtimePage.availableVersions")}</h2>
               </div>
+              {error && !loading ? (
+                <Button onClick={() => void readVersions(true)} size="sm" variant="secondary">
+                  <RefreshCw size={14} /> {t("appShell.retry")}
+                </Button>
+              ) : null}
               {selectedVersion ? (
                 <Button
                   disabled={busy.has("clear-selection")}
@@ -417,7 +426,7 @@ export function RuntimeDetailPage({
               </div>
             ) : (
               <div className="version-list">
-                {rows.length === 0 ? (
+                {rows.length === 0 && !error ? (
                   <p className="version-catalog-status">{t("runtimePage.catalogUpdating")}</p>
                 ) : null}
                 {rows.map((row) => {
@@ -985,6 +994,9 @@ export function PythonDetailPage(
 export function RustDetailPage(props: ComponentProps<typeof RuntimeDetailPage>) {
   return <RuntimeDetailPage {...props} appId="rust" displayName="Rust" />;
 }
+export function GoDetailPage(props: ComponentProps<typeof RuntimeDetailPage>) {
+  return <RuntimeDetailPage {...props} appId="go" displayName="Go" />;
+}
 
 export function MysqlDetailPage(props: ComponentProps<typeof RuntimeDetailPage>) {
   return <RuntimeDetailPage {...props} appId="mysql" displayName="MySQL" />;
@@ -1493,7 +1505,9 @@ interface PluginsPageProps {
   onInstallBundledPython?: () => Promise<PluginSummary>;
   onUninstallBundledPython?: () => Promise<void>;
   onInstallBundledRust?: () => Promise<PluginSummary>;
+  onInstallBundledGo?: () => Promise<PluginSummary>;
   onUninstallBundledRust?: () => Promise<void>;
+  onUninstallBundledGo?: () => Promise<void>;
   onInstallBundledMysql?: () => Promise<PluginSummary>;
   onUninstallBundledMysql?: () => Promise<void>;
   onInstallBundledRedis?: () => Promise<PluginSummary>;
@@ -1547,8 +1561,14 @@ export function PluginsPage({
   onUninstallBundledPython = async () => {
     throw new Error("Bundled Python uninstall is unavailable.");
   },
+  onInstallBundledGo = async () => {
+    throw new Error("Bundled Go installation is unavailable.");
+  },
   onInstallBundledRust = async () => {
     throw new Error("Bundled Rust installation is unavailable.");
+  },
+  onUninstallBundledGo = async () => {
+    throw new Error("Bundled Go uninstall is unavailable.");
   },
   onUninstallBundledRust = async () => {
     throw new Error("Bundled Rust uninstall is unavailable.");
@@ -1665,6 +1685,7 @@ export function PluginsPage({
       if (plugin.id === "app.torben.plugin.node") await onInstallBundledNode();
       else if (plugin.id === "app.torben.plugin.python") await onInstallBundledPython();
       else if (plugin.id === "app.torben.plugin.rust") await onInstallBundledRust();
+      else if (plugin.id === "app.torben.plugin.go") await onInstallBundledGo();
       else if (plugin.id === "app.torben.plugin.mysql") await onInstallBundledMysql();
       else if (plugin.id === "app.torben.plugin.redis") await onInstallBundledRedis();
       else if (plugin.id === "app.torben.plugin.postgresql") await onInstallBundledPostgresql();
@@ -1684,6 +1705,7 @@ export function PluginsPage({
       if (plugin.id === "app.torben.plugin.node") await onUninstallBundledNode();
       else if (plugin.id === "app.torben.plugin.python") await onUninstallBundledPython();
       else if (plugin.id === "app.torben.plugin.rust") await onUninstallBundledRust();
+      else if (plugin.id === "app.torben.plugin.go") await onUninstallBundledGo();
       else if (plugin.id === "app.torben.plugin.mysql") await onUninstallBundledMysql();
       else if (plugin.id === "app.torben.plugin.redis") await onUninstallBundledRedis();
       else if (plugin.id === "app.torben.plugin.postgresql") await onUninstallBundledPostgresql();
@@ -2384,6 +2406,7 @@ function pluginSummary(t: (key: string) => string, plugin: PluginSummary) {
     "app.torben.plugin.temurin": "pluginsPage.summaryJava",
     "app.torben.plugin.python": "pluginsPage.summaryPython",
     "app.torben.plugin.rust": "pluginsPage.summaryRust",
+    "app.torben.plugin.go": "pluginsPage.summaryGo",
     "app.torben.plugin.mysql": "pluginsPage.summaryMysql",
     "app.torben.plugin.redis": "pluginsPage.summaryRedis",
     "app.torben.plugin.postgresql": "pluginsPage.summaryPostgresql",

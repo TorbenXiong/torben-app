@@ -31,18 +31,52 @@ pub(crate) struct BundledPlugin {
 
 impl BundledPlugin {
     pub(crate) fn with_data_root(mut self, paths: &crate::TorbenPaths) -> Self {
+        let plugin_root = paths.plugin_dir().join(self.plugin_id.as_str());
+        let executable_name = format!(
+            "torben-plugin-{}{}",
+            self.app_id,
+            std::env::consts::EXE_SUFFIX
+        );
         self.candidates.insert(
             0,
-            paths
-                .plugin_dir()
-                .join(self.plugin_id.as_str())
+            plugin_root
                 .join(env!("CARGO_PKG_VERSION"))
-                .join(format!(
-                    "torben-plugin-{}{}",
-                    self.app_id,
-                    std::env::consts::EXE_SUFFIX
-                )),
+                .join(&executable_name),
         );
+        // A portable upgrade can keep the user's existing plugin package at the previous host
+        // version. Search those version directories as a compatibility fallback until the next
+        // bundled install transaction writes the current package.
+        if let Ok(entries) = std::fs::read_dir(plugin_root) {
+            let mut versions = entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| {
+                    entry
+                        .file_type()
+                        .ok()
+                        .filter(|file_type| file_type.is_dir() && !file_type.is_symlink())
+                        .map(|_| entry.path())
+                })
+                .collect::<Vec<_>>();
+            versions.sort_by(|left, right| {
+                let left_version = left
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(|name| ExactVersion::from_str(name).ok());
+                let right_version = right
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(|name| ExactVersion::from_str(name).ok());
+                right_version
+                    .cmp(&left_version)
+                    .then_with(|| right.cmp(left))
+            });
+            for version in versions {
+                let candidate = version.join(&executable_name);
+                if !self.candidates.contains(&candidate) {
+                    self.candidates.push(candidate);
+                }
+            }
+        }
         self
     }
 
@@ -83,6 +117,16 @@ impl BundledPlugin {
             "rust",
             "rust.official",
             include_str!("../../../plugins/rust/plugin.manifest.template.json"),
+        )
+    }
+
+    pub(crate) fn go() -> TorbenResult<Self> {
+        Self::discover(
+            "torben-plugin-go",
+            "app.torben.plugin.go",
+            "go",
+            "go.official",
+            include_str!("../../../plugins/go/plugin.manifest.template.json"),
         )
     }
 
@@ -238,6 +282,16 @@ impl BundledPlugin {
     }
 
     #[cfg(all(test, windows))]
+    pub(crate) fn go_from_executable(executable: PathBuf) -> Self {
+        Self::from_executable(
+            executable,
+            PluginId::new("app.torben.plugin.go").unwrap(),
+            AppId::new("go").unwrap(),
+            SourceId::new("go.official").unwrap(),
+        )
+    }
+
+    #[cfg(all(test, windows))]
     pub(crate) fn python_from_executable(executable: PathBuf) -> Self {
         Self::from_executable(
             executable,
@@ -304,8 +358,9 @@ impl BundledPlugin {
         let executable = self.executable().ok_or_else(|| {
             TorbenError::new(
                 "bundled_plugin_missing",
-                "The bundled Node.js plugin executable is missing.",
+                format!("The bundled {} plugin executable is missing.", self.app_id),
             )
+            .with_detail("pluginId", self.plugin_id.to_string())
             .with_detail(
                 "searchedPaths",
                 self.candidates
@@ -339,12 +394,15 @@ impl BundledPlugin {
             .any(|application| application.id == self.app_id);
         if initialized.protocol_version != PLUGIN_PROTOCOL_VERSION
             || initialized.plugin_id != self.plugin_id
-            || initialized.plugin_version != host_version
+            || initialized.plugin_version > host_version
             || !exposes_application
         {
             return Err(TorbenError::new(
                 "bundled_plugin_identity_mismatch",
-                "The bundled Node.js plugin identity does not match the host package.",
+                format!(
+                    "The bundled {} plugin identity does not match the host package.",
+                    self.app_id
+                ),
             )
             .with_detail("pluginId", initialized.plugin_id.to_string())
             .with_detail("pluginVersion", initialized.plugin_version.to_string())
@@ -636,6 +694,7 @@ mod tests {
     use torben_contracts::plugin::PluginCapability;
 
     use super::{BundledPlugin, canonical_managed_root};
+    use crate::TorbenPaths;
 
     #[test]
     fn bundled_manifests_declare_every_invoked_capability() {
@@ -644,6 +703,7 @@ mod tests {
             BundledPlugin::temurin().unwrap(),
             BundledPlugin::python().unwrap(),
             BundledPlugin::rust().unwrap(),
+            BundledPlugin::go().unwrap(),
             BundledPlugin::mysql().unwrap(),
             BundledPlugin::redis().unwrap(),
             BundledPlugin::postgresql().unwrap(),
@@ -669,6 +729,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn data_root_discovery_keeps_previous_plugin_versions_usable_after_an_upgrade() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = TorbenPaths::for_test(root.path().to_path_buf());
+        let version_dir = paths
+            .plugin_dir()
+            .join("app.torben.plugin.go")
+            .join("0.0.3");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        let executable =
+            version_dir.join(format!("torben-plugin-go{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&executable, b"fixture").unwrap();
+
+        let plugin = BundledPlugin::go().unwrap().with_data_root(&paths);
+
+        assert!(plugin.candidates.contains(&executable));
     }
 
     #[tokio::test]

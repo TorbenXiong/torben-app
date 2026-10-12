@@ -60,6 +60,20 @@ pub fn applications() -> TorbenResult<Vec<ApplicationDescriptor>> {
             true,
         )?,
         app(
+            "go",
+            "Go",
+            "The Go programming language with go and gofmt.",
+            &["runtime", "development"],
+            &[
+                "versions",
+                "install",
+                "select",
+                "uninstall",
+                "external-detection",
+            ],
+            true,
+        )?,
+        app(
             "mysql",
             "MySQL",
             "MySQL Community Server with managed client and server binaries.",
@@ -207,15 +221,16 @@ fn app(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn node_temurin_and_python_are_available() {
+    fn supported_windows_applications_are_available() {
         let applications = super::applications().unwrap();
 
-        assert_eq!(applications.len(), 10);
+        assert_eq!(applications.len(), 11);
         for app_id in [
             "node",
             "temurin",
             "python",
             "rust",
+            "go",
             "mysql",
             "redis",
             "postgresql",
@@ -232,7 +247,14 @@ mod tests {
                 .iter()
                 .filter(|application| !matches!(
                     application.id.as_str(),
-                    "node" | "temurin" | "python" | "rust" | "mysql" | "redis" | "postgresql"
+                    "node"
+                        | "temurin"
+                        | "python"
+                        | "rust"
+                        | "go"
+                        | "mysql"
+                        | "redis"
+                        | "postgresql"
                 ))
                 .all(|application| {
                     application.capabilities.is_empty() && application.sources.is_empty()
@@ -245,8 +267,8 @@ mod tests {
         let applications = super::applications().unwrap();
         let sources = super::sources(&applications).unwrap();
 
-        assert_eq!(sources.len(), 11);
-        assert_eq!(sources.iter().filter(|source| source.managed).count(), 7);
+        assert_eq!(sources.len(), 12);
+        assert_eq!(sources.iter().filter(|source| source.managed).count(), 8);
         assert!(
             sources
                 .iter()

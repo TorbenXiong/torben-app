@@ -25,7 +25,7 @@ use torben_contracts::{
 };
 #[cfg(all(windows, not(debug_assertions)))]
 use torben_core::WINDOWS_DATA_ROOT_POINTER_FILE;
-use torben_core::{DoctorCheck, TorbenCore};
+use torben_core::{DesktopInstanceLock, DoctorCheck, TorbenCore};
 
 const UPDATER_ENDPOINT: &str =
     "https://github.com/TorbenXiong/torben-app/releases/latest/download/latest.json";
@@ -50,6 +50,11 @@ const EMBEDDED_PYTHON_PLUGIN: &[u8] = include_bytes!(concat!(
 const EMBEDDED_RUST_PLUGIN: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../target/release/torben-plugin-rust.exe"
+));
+#[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_GO_PLUGIN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../target/release/torben-plugin-go.exe"
 ));
 #[cfg(all(windows, not(debug_assertions)))]
 const EMBEDDED_MYSQL_PLUGIN: &[u8] = include_bytes!(concat!(
@@ -82,6 +87,8 @@ const EMBEDDED_NODE_PLUGIN: &[u8] = &[];
 const EMBEDDED_TEMURIN_PLUGIN: &[u8] = &[];
 #[cfg(any(not(windows), debug_assertions))]
 const EMBEDDED_PYTHON_PLUGIN: &[u8] = &[];
+#[cfg(any(not(windows), debug_assertions))]
+const EMBEDDED_GO_PLUGIN: &[u8] = &[];
 #[cfg(any(not(windows), debug_assertions))]
 const EMBEDDED_MYSQL_PLUGIN: &[u8] = &[];
 #[cfg(any(not(windows), debug_assertions))]
@@ -823,6 +830,36 @@ async fn uninstall_bundled_rust_plugin(
 }
 
 #[tauri::command]
+async fn install_bundled_go_plugin(
+    core: State<'_, Arc<TorbenCore>>,
+    app: tauri::AppHandle,
+) -> Result<PluginSummary, TorbenError> {
+    let core = Arc::clone(core.inner());
+    let install_core = Arc::clone(&core);
+    let summary = tauri::async_runtime::spawn_blocking(move || {
+        install_core.install_bundled_go(EMBEDDED_GO_PLUGIN, EMBEDDED_TORBEN_SHIM)
+    })
+    .await
+    .map_err(|error| {
+        TorbenError::internal("The bundled Go plugin installation task could not be completed.")
+            .with_detail("reason", error.to_string())
+    })??;
+    scheduled_tasks::refresh_after_user_action(core, app, AppId::new("go")?);
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn uninstall_bundled_go_plugin(core: State<'_, Arc<TorbenCore>>) -> Result<(), TorbenError> {
+    let core = Arc::clone(core.inner());
+    tauri::async_runtime::spawn_blocking(move || core.uninstall_bundled_go())
+        .await
+        .map_err(|error| {
+            TorbenError::internal("The bundled Go plugin uninstall task could not be completed.")
+                .with_detail("reason", error.to_string())
+        })?
+}
+
+#[tauri::command]
 async fn install_bundled_mysql_plugin(
     core: State<'_, Arc<TorbenCore>>,
     app: tauri::AppHandle,
@@ -1042,31 +1079,39 @@ async fn migrate_managed_library(
 
 /// Starts the Torben App desktop runtime.
 ///
-/// # Panics
-///
-/// Panics if Tauri cannot initialize or run its platform event loop.
 pub fn run() {
+    let mut instance = match DesktopInstanceLock::try_acquire(
+        &std::env::temp_dir().join("TorbenApp-desktop.lock"),
+    ) {
+        Ok(Some(instance)) => Some(instance),
+        Ok(None) => {
+            show_startup_message(
+                "Torben App 已运行",
+                "Torben App 已在运行，请切换到现有窗口。升级前请先退出已运行的 Torben App。",
+                false,
+            );
+            return;
+        }
+        Err(error) => {
+            report_startup_error(&error);
+            return;
+        }
+    };
     #[cfg(all(windows, not(debug_assertions)))]
     schedule_relocated_source_cleanup();
 
-    let core = match startup_core() {
+    let core = match startup_core(&mut instance) {
         Ok(Some(core)) => Arc::new(core),
         Ok(None) => return,
         Err(error) => {
-            eprintln!(
-                "Torben App startup failed [{}]: {}",
-                error.code, error.message
-            );
+            report_startup_error(&error);
             return;
         }
     };
     let updater_public_key = match validate_updater_public_key(UPDATER_PUBLIC_KEY) {
         Ok(value) => value,
         Err(error) => {
-            eprintln!(
-                "Torben App startup failed [{}]: {}",
-                error.code, error.message
-            );
+            report_startup_error(&error);
             return;
         }
     };
@@ -1106,12 +1151,54 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_process::init())
         .plugin(updater.build());
-    configure_core_commands(builder, core)
-        .run(context)
-        .expect("Torben App runtime failed");
+    if let Err(error) = configure_core_commands(builder, core).run(context) {
+        report_startup_error(&TorbenError::new(
+            "desktop_runtime_failed",
+            error.to_string(),
+        ));
+    }
 }
 
-fn startup_core() -> Result<Option<TorbenCore>, TorbenError> {
+fn report_startup_error(error: &TorbenError) {
+    show_startup_message(
+        "Torben App 启动失败",
+        &format!(
+            "Torben App 无法启动。\n\n[{}] {}",
+            error.code, error.message
+        ),
+        true,
+    );
+}
+
+fn show_startup_message(title: &str, message: &str, failure: bool) {
+    eprintln!("{title}: {message}");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const SCRIPT: &str = r"
+Add-Type -AssemblyName System.Windows.Forms
+$icon = if ($env:TORBEN_STARTUP_FAILURE -eq '1') { [System.Windows.Forms.MessageBoxIcon]::Error } else { [System.Windows.Forms.MessageBoxIcon]::Information }
+[System.Windows.Forms.MessageBox]::Show($env:TORBEN_STARTUP_MESSAGE, $env:TORBEN_STARTUP_TITLE, [System.Windows.Forms.MessageBoxButtons]::OK, $icon, [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly) | Out-Null
+";
+        if let Some(system_root) = std::env::var_os("SystemRoot") {
+            let powershell =
+                PathBuf::from(system_root).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+            let _ = std::process::Command::new(powershell)
+                .args(["-NoLogo", "-NoProfile", "-STA", "-Command", SCRIPT])
+                .env("TORBEN_STARTUP_TITLE", title)
+                .env("TORBEN_STARTUP_MESSAGE", message)
+                .env("TORBEN_STARTUP_FAILURE", if failure { "1" } else { "0" })
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                .status();
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = failure;
+}
+
+fn startup_core(
+    _instance: &mut Option<DesktopInstanceLock>,
+) -> Result<Option<TorbenCore>, TorbenError> {
     #[cfg(all(windows, not(debug_assertions)))]
     {
         remove_redundant_windows_data_root_pointer()?;
@@ -1136,7 +1223,7 @@ fn startup_core() -> Result<Option<TorbenCore>, TorbenError> {
         let Some(selection) = prompt_for_windows_data_root(&default_base)? else {
             return Ok(None);
         };
-        prepare_windows_application(&executable, &selection)
+        prepare_windows_application(&executable, &selection, _instance)
     }
 
     #[cfg(any(not(windows), debug_assertions))]
@@ -1200,6 +1287,7 @@ fn default_windows_application_directory(application_directory: &std::path::Path
 fn prepare_windows_application(
     executable: &std::path::Path,
     application_directory: &std::path::Path,
+    instance: &mut Option<DesktopInstanceLock>,
 ) -> Result<Option<TorbenCore>, TorbenError> {
     if !application_directory.is_absolute() {
         return Err(TorbenError::new(
@@ -1240,6 +1328,8 @@ fn prepare_windows_application(
         // from inherited handles so Explorer/terminal shutdown cannot close the relaunched app.
         use std::os::windows::process::CommandExt;
         relaunch.creation_flags(0x0000_0008); // DETACHED_PROCESS
+        // The relocated process must acquire its own slot before opening Core.
+        drop(instance.take());
         relaunch.spawn().map_err(|error| {
             TorbenError::new(
                 "application_relaunch_failed",
@@ -1687,6 +1777,8 @@ fn configure_core_commands(
             uninstall_bundled_python_plugin,
             install_bundled_rust_plugin,
             uninstall_bundled_rust_plugin,
+            install_bundled_go_plugin,
+            uninstall_bundled_go_plugin,
             install_bundled_mysql_plugin,
             uninstall_bundled_mysql_plugin,
             install_bundled_redis_plugin,

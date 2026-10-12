@@ -13,6 +13,8 @@ Node.js 插件提供官方 LTS、Current 和精确版本安装，以及 `node`�
 `npm exec --global -- <命令>` 调用；pnpm 通过受管 npm 全局前缀安装，例如
 `npm install --global pnpm@11.19.0`，无需增加系统 PATH 条目。
 
+Go 插件使用 go.dev 官方 Windows x64 ZIP，按 dl JSON 的 SHA-256 校验并管理 `go` 与 `gofmt`。GOPATH、GOMODCACHE、GOCACHE、GOBIN、GOTMPDIR 和遥测配置统一保存在 `userData/package-managers/go`，GOTOOLCHAIN 固定为 `local`。
+
 Rust 插件使用官方 Rust stable 发行版，为 Windows x64 安装 `rustc`、`cargo`、`rustdoc` 和
 `rustfmt`。每个版本独立安装并可设置主版本；Cargo registry/git 缓存和临时目录统一保存在
 `userData/package-managers/rust/cargo`，项目的 `target` 与 `Cargo.lock` 仍由项目自身管理。界面默认展示最近

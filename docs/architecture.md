@@ -120,7 +120,10 @@ do not create a path-pointer file because the data root is always `<base>\userDa
 compatibility, Core can still read an older custom pointer, while deployed aliases derive the active
 root directly from their `<data root>/tools/shims` location.
 Desktop WebView2 data is explicitly rooted at `<data root>/webview` through the window builder before
-any window is created. No AppData
+any window is created. A separate desktop instance file lock is held for the process lifetime and
+released before relocation; duplicate launches show a native message before Core recovery begins.
+Startup and window initialization failures also show their error code in a native message.
+No AppData
 fallback is used when the installation directory is unwritable. Other platforms retain their
 platform-standard Core directory resolution, and `TORBEN_DATA_DIR` explicitly overrides either layout.
 The CLI and desktop serialize writes through a separate cross-process file lock. The active file is

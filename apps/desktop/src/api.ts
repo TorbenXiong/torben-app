@@ -85,6 +85,14 @@ const mockApplications: ApplicationDescriptor[] = [
     sources: [],
   },
   {
+    id: "go",
+    displayName: "Go",
+    summary: "The Go programming language with go and gofmt.",
+    categories: ["Runtime", "Development"],
+    capabilities: [],
+    sources: [],
+  },
+  {
     id: "mysql",
     displayName: "MySQL",
     summary: "MySQL Community Server with managed client and server binaries.",
@@ -155,6 +163,28 @@ const mockAvailablePlugins: PluginSummary[] = [
       filesystemRoots: ["managed_app_library", "download_cache", "staging", "plugin_data"],
       externalCommands: ["rustc", "cargo", "rustdoc", "rustfmt"],
       packageManagers: ["cargo"],
+    },
+  },
+  {
+    id: "app.torben.plugin.go",
+    displayName: "Go",
+    version: appVersion,
+    enabled: false,
+    origin: "built_in",
+    publisher: "Torben App",
+    capabilities: [
+      "version_discovery",
+      "external_discovery",
+      "managed_install",
+      "global_selection",
+      "managed_uninstall",
+      "schema_ui",
+    ],
+    permissions: {
+      networkDomains: ["go.dev", "golang.google.cn", "dl.google.com"],
+      filesystemRoots: ["managed_app_library", "download_cache", "staging", "plugin_data"],
+      externalCommands: ["go", "gofmt"],
+      packageManagers: ["go"],
     },
   },
   {
@@ -972,6 +1002,12 @@ export async function getVersions(appId: string): Promise<VersionDescriptor[]> {
       { version: "3.13.15", releasedAt: "2026-08-05T11:00:00Z", recommended: false },
     ];
   }
+  if (appId === "go") {
+    return [
+      { version: "1.27.2", releasedAt: "", recommended: true },
+      { version: "1.26.8", releasedAt: "", recommended: false },
+    ];
+  }
   if (appId === "mysql") {
     return [
       { version: "8.4.11", ltsName: "MySQL LTS", releasedAt: "2026-07-28", recommended: true },
@@ -1442,6 +1478,18 @@ export async function uninstallBundledPythonPlugin(): Promise<void> {
     throw new Error("Bundled Python plugin uninstall is available in the Tauri desktop runtime.");
   }
   await invoke("uninstall_bundled_python_plugin");
+}
+
+export async function installBundledGoPlugin(): Promise<PluginSummary> {
+  if (!isTauri())
+    throw new Error("Bundled Go plugin installation is available in the Tauri desktop runtime.");
+  return invoke<PluginSummary>("install_bundled_go_plugin");
+}
+
+export async function uninstallBundledGoPlugin(): Promise<void> {
+  if (!isTauri())
+    throw new Error("Bundled Go plugin uninstall is available in the Tauri desktop runtime.");
+  await invoke("uninstall_bundled_go_plugin");
 }
 
 export async function installBundledRustPlugin(): Promise<PluginSummary> {

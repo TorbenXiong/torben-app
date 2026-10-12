@@ -33,6 +33,7 @@ import { comparePluginOrder, movePlugin, normalizePluginOrder } from "../pluginO
 import type { ApplicationDescriptor, PluginSummary } from "../types";
 import { appVersion } from "../version";
 import {
+  GoIcon,
   JavaIcon,
   MysqlIcon,
   NodeIcon,
@@ -53,6 +54,7 @@ const supportedApplicationRoutes = new Set([
   "temurin",
   "python",
   "rust",
+  "go",
   "mysql",
   "redis",
   "postgresql",
@@ -236,6 +238,9 @@ export function Layout({
   const rustEnabled = plugins.some(
     (plugin) => plugin.id === "app.torben.plugin.rust" && plugin.enabled,
   );
+  const goEnabled = plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.go" && plugin.enabled,
+  );
   const mysqlEnabled = plugins.some(
     (plugin) => plugin.id === "app.torben.plugin.mysql" && plugin.enabled,
   );
@@ -278,6 +283,8 @@ export function Layout({
         pluginId: "app.torben.plugin.rust",
       });
     }
+    if (goEnabled)
+      runtimePages.push({ to: "/go", key: "go", icon: GoIcon, pluginId: "app.torben.plugin.go" });
     if (mysqlEnabled) {
       runtimePages.push({
         to: "/mysql",
@@ -307,6 +314,7 @@ export function Layout({
     );
   }, [
     mysqlEnabled,
+    goEnabled,
     nodeEnabled,
     postgresqlEnabled,
     pythonEnabled,
@@ -349,6 +357,7 @@ export function Layout({
           (application.id !== "node" || nodeEnabled) &&
           (application.id !== "rust" || rustEnabled) &&
           (application.id !== "mysql" || mysqlEnabled) &&
+          (application.id !== "go" || goEnabled) &&
           (application.id !== "redis" || redisEnabled) &&
           (application.id !== "postgresql" || postgresqlEnabled),
       )
@@ -377,17 +386,20 @@ export function Layout({
                 ? "/node"
                 : application.id === "rust"
                   ? "/rust"
-                  : application.id === "mysql"
-                    ? "/mysql"
-                    : application.id === "redis"
-                      ? "/redis"
-                      : application.id === "postgresql"
-                        ? "/postgresql"
-                        : "/plugins",
+                  : application.id === "go"
+                    ? "/go"
+                    : application.id === "mysql"
+                      ? "/mysql"
+                      : application.id === "redis"
+                        ? "/redis"
+                        : application.id === "postgresql"
+                          ? "/postgresql"
+                          : "/plugins",
       }));
     return [...pages, ...applicationCommands];
   }, [
     applications,
+    goEnabled,
     mysqlEnabled,
     navigation,
     nodeEnabled,

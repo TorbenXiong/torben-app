@@ -47,7 +47,7 @@ Missing capability declarations fail with `plugin_capability_denied` without inv
 Permission arrays are bounded and duplicate-free. Network entries are lowercase host names without
 schemes, ports, paths, or wildcards; filesystem entries are symbolic Torben scopes; external
 commands are bare executable names without arguments or paths; package managers use supported
-identifiers (including `cargo` and `pip` for toolchain-aware plugins). These declarations support validation and user review. They do not sandbox a native
+identifiers (including `cargo`, `pip`, and `go` for toolchain-aware plugins). These declarations support validation and user review. They do not sandbox a native
 plugin or prove that it cannot access undeclared resources.
 
 First-party runtime and database plugins keep writable tool state they expose on the managed command
