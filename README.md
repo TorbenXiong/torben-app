@@ -1,14 +1,14 @@
 # Torben App
 
 Torben App 是本地优先的 Windows x64 应用与运行时管理器。当前版本以单文件
-`TorbenApp.exe` 交付，通过插件逐个开放软件管理能力；目前支持 Java（Eclipse Temurin）、Python、Node.js、Rust、Go、MySQL、Redis 和 PostgreSQL。
+`TorbenApp.exe` 交付，通过插件逐个开放软件管理能力；目前支持 Java（Eclipse Temurin）、Python、Node.js、Rust、Go、7-Zip、MySQL、Redis 和 PostgreSQL。
 
 项目为独立重写，不读取或复用 SoftPilot 的代码与状态格式。
 
 ## 当前范围
 
 - 支持平台：Windows x64。
-- 当前软件插件：Java（Eclipse Temurin）、Python、Node.js、Rust、Go、MySQL、Redis 和 PostgreSQL。
+- 当前软件插件：Java（Eclipse Temurin）、Python、Node.js、Rust、Go、7-Zip、MySQL、Redis 和 PostgreSQL。
 - 暂不开放：Git、Visual Studio Code 和 Codex CLI。
 - 暂缓平台：Windows ARM64、macOS 和 Linux。
 - 不包含账号、云同步、遥测、常驻后台服务和项目级版本固定。
@@ -43,7 +43,7 @@ WebView2 数据。升级只需运行新的 `TorbenApp.exe`；应用会替换目�
 Release 可执行文件通过 Windows manifest 请求管理员权限。开发构建不会在每次启动时触发
 UAC。
 
-界面默认打开“插件”。安装 Java、Python、Node.js、Rust、Go、MySQL、Redis 或 PostgreSQL 插件后，左侧出现对应的管理入口；设置
+界面默认打开“插件”。安装 Java、Python、Node.js、Rust、Go、7-Zip、MySQL、Redis 或 PostgreSQL 插件后，左侧出现对应的管理入口；设置
 固定在侧栏底部，日志和诊断集中在标题栏“帮助”菜单中。“帮助”菜单也提供版本和产品
 介绍。Python 插件内置固定版本且经过 SHA-256 校验的 python.org 官方 Python Install
 Manager；Torben App 使用其 `--target` 模式将运行时写入 `userData`，不依赖系统 `PATH`

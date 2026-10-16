@@ -7,7 +7,7 @@ macOS, Linux, and ARM64 evidence is retained for future platform milestones.
 
 ## Offline development gates
 
-Java, Python, Node.js, Rust, MySQL, Redis, and PostgreSQL are enabled in production on Windows x64 after their
+Java, Python, Node.js, Rust, Go, 7-Zip, MySQL, Redis, and PostgreSQL are enabled in production on Windows x64 after their
 provider and managed-runtime paths were constrained below the selected data root. Node.js shims also prepare npm cache,
 global package/configuration, temporary, compile-cache, and REPL history paths under `userData/package-managers/node/npm`; pnpm state is kept under the sibling `node/pnpm` directory. The other provider lifecycle tests below run
 only through unit-test or the default-off `test-fixtures` paths; passing them does not advertise

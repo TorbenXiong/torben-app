@@ -130,6 +130,16 @@ impl BundledPlugin {
         )
     }
 
+    pub(crate) fn seven_zip() -> TorbenResult<Self> {
+        Self::discover(
+            "torben-plugin-7zip",
+            "app.torben.plugin.7zip",
+            "7zip",
+            "7zip.official",
+            include_str!("../../../plugins/7zip/plugin.manifest.template.json"),
+        )
+    }
+
     pub(crate) fn mysql() -> TorbenResult<Self> {
         Self::discover(
             "torben-plugin-mysql",

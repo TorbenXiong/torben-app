@@ -74,6 +74,20 @@ pub fn applications() -> TorbenResult<Vec<ApplicationDescriptor>> {
             true,
         )?,
         app(
+            "7zip",
+            "7-Zip",
+            "The official 7z command-line archiver for Windows x64.",
+            &["tool", "development"],
+            &[
+                "versions",
+                "install",
+                "select",
+                "uninstall",
+                "external-detection",
+            ],
+            true,
+        )?,
+        app(
             "mysql",
             "MySQL",
             "MySQL Community Server with managed client and server binaries.",
@@ -224,13 +238,14 @@ mod tests {
     fn supported_windows_applications_are_available() {
         let applications = super::applications().unwrap();
 
-        assert_eq!(applications.len(), 11);
+        assert_eq!(applications.len(), 12);
         for app_id in [
             "node",
             "temurin",
             "python",
             "rust",
             "go",
+            "7zip",
             "mysql",
             "redis",
             "postgresql",
@@ -252,6 +267,7 @@ mod tests {
                         | "python"
                         | "rust"
                         | "go"
+                        | "7zip"
                         | "mysql"
                         | "redis"
                         | "postgresql"
@@ -267,8 +283,8 @@ mod tests {
         let applications = super::applications().unwrap();
         let sources = super::sources(&applications).unwrap();
 
-        assert_eq!(sources.len(), 12);
-        assert_eq!(sources.iter().filter(|source| source.managed).count(), 8);
+        assert_eq!(sources.len(), 13);
+        assert_eq!(sources.iter().filter(|source| source.managed).count(), 9);
         assert!(
             sources
                 .iter()

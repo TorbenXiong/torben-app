@@ -38,6 +38,8 @@ execFileSync(
     "-p",
     "torben-plugin-go",
     "-p",
+    "torben-plugin-7zip",
+    "-p",
     "torben-plugin-mysql",
     "-p",
     "torben-plugin-redis",

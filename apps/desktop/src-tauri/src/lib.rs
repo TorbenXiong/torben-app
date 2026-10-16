@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, path::PathBuf, str::FromStr, sync::Arc};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use minisign_verify::PublicKey;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 use torben_contracts::{
     AppId, ApplicationDescriptor, BackupDatabaseInstanceRequest, CreateDatabaseInstanceRequest,
     DatabaseBackup, DatabaseConnectionInfo, DatabaseEngine, DatabaseInstance,
@@ -57,6 +57,11 @@ const EMBEDDED_GO_PLUGIN: &[u8] = include_bytes!(concat!(
     "/../../../target/release/torben-plugin-go.exe"
 ));
 #[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_7ZIP_PLUGIN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../target/release/torben-plugin-7zip.exe"
+));
+#[cfg(all(windows, not(debug_assertions)))]
 const EMBEDDED_MYSQL_PLUGIN: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../target/release/torben-plugin-mysql.exe"
@@ -89,6 +94,8 @@ const EMBEDDED_TEMURIN_PLUGIN: &[u8] = &[];
 const EMBEDDED_PYTHON_PLUGIN: &[u8] = &[];
 #[cfg(any(not(windows), debug_assertions))]
 const EMBEDDED_GO_PLUGIN: &[u8] = &[];
+#[cfg(any(not(windows), debug_assertions))]
+const EMBEDDED_7ZIP_PLUGIN: &[u8] = &[];
 #[cfg(any(not(windows), debug_assertions))]
 const EMBEDDED_MYSQL_PLUGIN: &[u8] = &[];
 #[cfg(any(not(windows), debug_assertions))]
@@ -857,6 +864,38 @@ async fn uninstall_bundled_go_plugin(core: State<'_, Arc<TorbenCore>>) -> Result
             TorbenError::internal("The bundled Go plugin uninstall task could not be completed.")
                 .with_detail("reason", error.to_string())
         })?
+}
+
+#[tauri::command]
+async fn install_bundled_7zip_plugin(
+    app: AppHandle,
+    core: State<'_, Arc<TorbenCore>>,
+) -> Result<PluginSummary, TorbenError> {
+    let install_core = Arc::clone(&core);
+    let summary = tauri::async_runtime::spawn_blocking(move || {
+        install_core.install_bundled_7zip(EMBEDDED_7ZIP_PLUGIN, EMBEDDED_TORBEN_SHIM)
+    })
+    .await
+    .map_err(|error| {
+        TorbenError::internal("The bundled 7-Zip plugin installation task failed.")
+            .with_detail("reason", error.to_string())
+    })??;
+    scheduled_tasks::refresh_after_user_action(Arc::clone(&core), app, AppId::new("7zip")?);
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn uninstall_bundled_7zip_plugin(
+    core: State<'_, Arc<TorbenCore>>,
+) -> Result<(), TorbenError> {
+    let uninstall_core = Arc::clone(&core);
+    tauri::async_runtime::spawn_blocking(move || uninstall_core.uninstall_bundled_7zip())
+        .await
+        .map_err(|error| {
+            TorbenError::internal("The bundled 7-Zip plugin uninstall task failed.")
+                .with_detail("reason", error.to_string())
+        })??;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1779,6 +1818,8 @@ fn configure_core_commands(
             uninstall_bundled_rust_plugin,
             install_bundled_go_plugin,
             uninstall_bundled_go_plugin,
+            install_bundled_7zip_plugin,
+            uninstall_bundled_7zip_plugin,
             install_bundled_mysql_plugin,
             uninstall_bundled_mysql_plugin,
             install_bundled_redis_plugin,

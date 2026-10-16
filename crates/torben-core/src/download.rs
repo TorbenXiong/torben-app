@@ -269,7 +269,21 @@ fn mirrors(official: &Url) -> Vec<Url> {
         ),
         Some("github.com") => {
             let parts: Vec<_> = official.path().split('/').collect();
-            if let ["", "adoptium", repository, "releases", "download", _, name] = parts.as_slice()
+            if let ["", "ip7z", "7zip", "releases", "download", tag, name] = parts.as_slice()
+                && tag.split('.').count() == 2
+                && tag.split('.').all(|part| {
+                    !part.is_empty() && part.chars().all(|character| character.is_ascii_digit())
+                })
+                && *name == format!("7z{}-x64.msi", tag.replace('.', ""))
+            {
+                if let Ok(url) =
+                    Url::parse("https://mirrors.nju.edu.cn/github-release/ip7z/7zip/LatestRelease/")
+                        .and_then(|base| base.join(name))
+                {
+                    result.push(url);
+                }
+            } else if let ["", "adoptium", repository, "releases", "download", _, name] =
+                parts.as_slice()
                 && let Some(feature) = repository
                     .strip_prefix("temurin")
                     .and_then(|value| value.strip_suffix("-binaries"))
@@ -630,11 +644,34 @@ mod tests {
             "https://static.rust-lang.org/dist/channel-rust-1.98.0.toml",
             "https://www.python.org/api/v2/downloads/release/",
             "https://github.com/redis-windows/redis-windows/releases/download/8.8.0/Redis-8.8.0-Windows-x64-msys2.zip",
+            "https://github.com/ip7z/other/releases/download/26.04/7z2604-x64.msi",
             "https://nodejs.org:8443/dist/index.json",
             "https://nodejs.org/dist/index.json?redirect=1",
             "http://127.0.0.1:1234/dist/index.json",
         ] {
             assert!(mirrors(&Url::parse(official).unwrap()).is_empty());
+        }
+    }
+
+    #[test]
+    fn seven_zip_mirror_maps_only_the_versioned_x64_msi() {
+        let official =
+            Url::parse("https://github.com/ip7z/7zip/releases/download/26.04/7z2604-x64.msi")
+                .unwrap();
+        let mirror = Url::parse(
+            "https://mirrors.nju.edu.cn/github-release/ip7z/7zip/LatestRelease/7z2604-x64.msi",
+        )
+        .unwrap();
+        assert_eq!(mirrors(&official), vec![mirror.clone()]);
+        assert_eq!(mirror_response(&official, &mirror, &mirror), china_region());
+        assert!(!mirror_response(&official, &mirror, &official));
+        for url in [
+            "https://github.com/ip7z/7zip/releases/download/26.03/7z2604-x64.msi",
+            "https://github.com/ip7z/7zip/releases/download/latest/7z2604-x64.msi",
+            "https://github.com/ip7z/7zip/releases/download/26.04/7z2604.exe",
+            "https://github.com/ip7z/7zip/releases/download/26.04/7z2604-x64.msi?redirect=1",
+        ] {
+            assert!(mirrors(&Url::parse(url).unwrap()).is_empty());
         }
     }
 

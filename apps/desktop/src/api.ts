@@ -93,6 +93,14 @@ const mockApplications: ApplicationDescriptor[] = [
     sources: [],
   },
   {
+    id: "7zip",
+    displayName: "7-Zip",
+    summary: "The official 7z command-line archiver for Windows x64.",
+    categories: ["Tool", "Development"],
+    capabilities: [],
+    sources: [],
+  },
+  {
     id: "mysql",
     displayName: "MySQL",
     summary: "MySQL Community Server with managed client and server binaries.",
@@ -185,6 +193,33 @@ const mockAvailablePlugins: PluginSummary[] = [
       filesystemRoots: ["managed_app_library", "download_cache", "staging", "plugin_data"],
       externalCommands: ["go", "gofmt"],
       packageManagers: ["go"],
+    },
+  },
+  {
+    id: "app.torben.plugin.7zip",
+    displayName: "7-Zip",
+    version: appVersion,
+    enabled: false,
+    origin: "built_in",
+    publisher: "Torben App",
+    capabilities: [
+      "version_discovery",
+      "external_discovery",
+      "managed_install",
+      "global_selection",
+      "managed_uninstall",
+      "schema_ui",
+    ],
+    permissions: {
+      networkDomains: [
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+        "mirrors.nju.edu.cn",
+      ],
+      filesystemRoots: ["managed_app_library", "download_cache", "staging", "plugin_data"],
+      externalCommands: ["7z"],
+      packageManagers: [],
     },
   },
   {
@@ -1008,6 +1043,9 @@ export async function getVersions(appId: string): Promise<VersionDescriptor[]> {
       { version: "1.26.8", releasedAt: "", recommended: false },
     ];
   }
+  if (appId === "7zip") {
+    return [{ version: "26.4.0", releasedAt: "2026-10-06T07:55:39Z", recommended: true }];
+  }
   if (appId === "mysql") {
     return [
       { version: "8.4.11", ltsName: "MySQL LTS", releasedAt: "2026-07-28", recommended: true },
@@ -1490,6 +1528,18 @@ export async function uninstallBundledGoPlugin(): Promise<void> {
   if (!isTauri())
     throw new Error("Bundled Go plugin uninstall is available in the Tauri desktop runtime.");
   await invoke("uninstall_bundled_go_plugin");
+}
+
+export async function installBundled7zipPlugin(): Promise<PluginSummary> {
+  if (!isTauri())
+    throw new Error("Bundled 7-Zip plugin installation is available in the Tauri desktop runtime.");
+  return invoke<PluginSummary>("install_bundled_7zip_plugin");
+}
+
+export async function uninstallBundled7zipPlugin(): Promise<void> {
+  if (!isTauri())
+    throw new Error("Bundled 7-Zip plugin uninstall is available in the Tauri desktop runtime.");
+  await invoke("uninstall_bundled_7zip_plugin");
 }
 
 export async function installBundledRustPlugin(): Promise<PluginSummary> {

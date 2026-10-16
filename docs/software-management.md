@@ -3,6 +3,12 @@
 当前支持 Windows x64。Java（Eclipse Temurin）、Python、Node.js、Rust、MySQL、Redis 和
 PostgreSQL 插件安装后才开放对应管理入口。安装、终端选择和卸载均通过共享 Core API 执行。
 
+7-Zip 插件提供 Windows x64 官方 `7z` 命令行工具。它固定官方 MSI 的版本、下载地址和
+SHA-256，安装后通过 Torben shim 提供 `7z` 命令；外部探测只接受 PATH 中健康检查通过的
+`7z.exe`，不会把外部安装归入受管安装。中文 Windows 环境会优先尝试 NJU 的 GitHub
+Release 镜像以避免 GitHub 连接不可用；镜像只负责传输，仍必须匹配 Core 固定的官方
+SHA-256，不能改变来源所有者。
+
 ## 运行时与数据目录
 
 Node.js 插件提供官方 LTS、Current 和精确版本安装，以及 `node`、`npm`、`npx`、`pnpm` 终端选择。
