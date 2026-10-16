@@ -246,7 +246,7 @@ impl SevenZipProvider {
             }
             let output = crate::process::command(&canonical).arg("i").output();
             let Ok(output) = output else { continue };
-            let Some(version) = parse_version(&String::from_utf8_lossy(&output.stdout)) else {
+            let Some(version) = successful_version(&output) else {
                 continue;
             };
             records.push(InstallRecord {
@@ -324,8 +324,7 @@ impl SevenZipProvider {
             .arg("i")
             .output()
             .map_err(io_error)?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !output.status.success() || parse_version(&stdout).as_ref() != Some(version) {
+        if successful_version(&output).as_ref() != Some(version) {
             return Err(TorbenError::new(
                 "health_check_version_mismatch",
                 "The 7z executable did not report the requested version.",
@@ -457,6 +456,13 @@ fn locate_install_root(payload: &Path) -> TorbenResult<PathBuf> {
     ))
 }
 
+fn successful_version(output: &std::process::Output) -> Option<ExactVersion> {
+    if !output.status.success() {
+        return None;
+    }
+    parse_version(&String::from_utf8_lossy(&output.stdout))
+}
+
 fn parse_version(output: &str) -> Option<ExactVersion> {
     let token = output
         .lines()
@@ -541,6 +547,28 @@ mod tests {
         ARCHIVE_URL, SevenZipProvider, current_target, download_response_allowed,
         locate_install_root, parse_version,
     };
+
+    #[cfg(windows)]
+    #[test]
+    fn external_version_requires_a_successful_health_check() {
+        use std::{
+            os::windows::process::ExitStatusExt,
+            process::{ExitStatus, Output},
+        };
+
+        for (status, stdout, expected) in [
+            (0, "7-Zip 26.04 (x64)", Some("26.4.0".parse().unwrap())),
+            (1, "7-Zip 26.04 (x64)", None),
+            (0, "unrelated command", None),
+        ] {
+            let output = Output {
+                status: ExitStatus::from_raw(status),
+                stdout: stdout.as_bytes().to_vec(),
+                stderr: Vec::new(),
+            };
+            assert_eq!(super::successful_version(&output), expected);
+        }
+    }
 
     #[test]
     fn accepts_official_response_and_github_asset_cdn_only() {
