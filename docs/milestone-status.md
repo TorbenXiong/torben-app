@@ -22,7 +22,7 @@ Windows x64 gates required for the next supported release.
 - Git, Visual Studio Code, and Codex CLI remain temporarily unsupported.
   Production builds publish no capabilities or managed sources for them and reject their Core
   management actions with `capability_not_available`.
-- Node.js, Eclipse Temurin JDK, Python, Rust, Go, MySQL, Redis, and PostgreSQL are supported software plugins. Their provider payloads are
+- Node.js, Eclipse Temurin JDK, Python, Rust, Go, 7-Zip, MySQL, Redis, and PostgreSQL are supported software plugins. Their provider payloads are
   installed under `userData/plugins`, and managed runtimes remain under the same `userData` root.
 - Rust uses the official stable MSVC toolchain and shows the three newest stable toolchains by
   default while retaining exact-version installation. MySQL uses official Community Server ZIP

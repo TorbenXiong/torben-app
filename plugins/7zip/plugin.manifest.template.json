@@ -1,0 +1,30 @@
+{
+  "id": "app.torben.plugin.7zip",
+  "displayName": "7-Zip",
+  "version": "0.0.6",
+  "protocolVersion": 1,
+  "minimumHostVersion": "0.0.6",
+  "publisher": "Torben App",
+  "capabilities": [
+    "version_discovery",
+    "external_discovery",
+    "managed_install",
+    "global_selection",
+    "managed_uninstall",
+    "schema_ui"
+  ],
+  "permissions": {
+    "networkDomains": [
+      "github.com",
+      "objects.githubusercontent.com",
+      "release-assets.githubusercontent.com",
+      "mirrors.nju.edu.cn"
+    ],
+    "filesystemRoots": ["managed_app_library", "download_cache", "staging", "plugin_data"],
+    "externalCommands": ["7z"],
+    "packageManagers": []
+  },
+  "targets": [],
+  "signature": null,
+  "revoked": false
+}

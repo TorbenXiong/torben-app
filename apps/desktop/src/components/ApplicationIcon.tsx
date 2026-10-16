@@ -4,6 +4,7 @@ const applicationIconAssets: Record<string, string> = {
   python: "/icons/python.svg",
   rust: "/icons/rust.svg",
   go: "/icons/go.svg",
+  "7zip": "/icons/7zip.svg",
   mysql: "/icons/mysql-logo.png",
   redis: "/icons/redis-mark.svg",
   postgresql: "/icons/postgresql.svg",
@@ -53,6 +54,10 @@ export function RustIcon({ size = 17 }: { size?: number }) {
 
 export function GoIcon({ size = 17 }: { size?: number }) {
   return <ApplicationIcon className="app-nav-icon" id="go" size={size} />;
+}
+
+export function SevenZipIcon({ size = 17 }: { size?: number }) {
+  return <ApplicationIcon className="app-nav-icon" id="7zip" size={size} />;
 }
 
 export function MysqlIcon({ size = 17 }: { size?: number }) {

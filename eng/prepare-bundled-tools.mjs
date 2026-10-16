@@ -34,6 +34,7 @@ if (process.platform === "win32")
     0,
     "torben-plugin-rust",
     "torben-plugin-go",
+    "torben-plugin-7zip",
     "torben-plugin-mysql",
     "torben-plugin-redis",
     "torben-plugin-postgresql",

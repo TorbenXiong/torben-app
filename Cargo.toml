@@ -13,6 +13,7 @@ members = [
   "plugins/python",
   "plugins/rust",
   "plugins/go",
+  "plugins/7zip",
   "plugins/mysql",
   "plugins/postgresql",
   "plugins/redis",
@@ -22,7 +23,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 rust-version = "1.98"
 license = "Apache-2.0"

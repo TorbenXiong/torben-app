@@ -41,6 +41,7 @@ import {
   PythonIcon,
   RedisIcon,
   RustIcon,
+  SevenZipIcon,
 } from "./ApplicationIcon";
 
 const primaryNavigation = [{ to: "/plugins", key: "plugins", icon: Boxes }] as const;
@@ -55,6 +56,7 @@ const supportedApplicationRoutes = new Set([
   "python",
   "rust",
   "go",
+  "7zip",
   "mysql",
   "redis",
   "postgresql",
@@ -241,6 +243,9 @@ export function Layout({
   const goEnabled = plugins.some(
     (plugin) => plugin.id === "app.torben.plugin.go" && plugin.enabled,
   );
+  const sevenZipEnabled = plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.7zip" && plugin.enabled,
+  );
   const mysqlEnabled = plugins.some(
     (plugin) => plugin.id === "app.torben.plugin.mysql" && plugin.enabled,
   );
@@ -285,6 +290,14 @@ export function Layout({
     }
     if (goEnabled)
       runtimePages.push({ to: "/go", key: "go", icon: GoIcon, pluginId: "app.torben.plugin.go" });
+    if (sevenZipEnabled) {
+      runtimePages.push({
+        to: "/7zip",
+        key: "7zip",
+        icon: SevenZipIcon,
+        pluginId: "app.torben.plugin.7zip",
+      });
+    }
     if (mysqlEnabled) {
       runtimePages.push({
         to: "/mysql",
@@ -322,6 +335,7 @@ export function Layout({
     rustEnabled,
     temurinEnabled,
     localPluginOrder,
+    sevenZipEnabled,
   ]);
   const navigation = useMemo(
     () => [
@@ -358,6 +372,7 @@ export function Layout({
           (application.id !== "rust" || rustEnabled) &&
           (application.id !== "mysql" || mysqlEnabled) &&
           (application.id !== "go" || goEnabled) &&
+          (application.id !== "7zip" || sevenZipEnabled) &&
           (application.id !== "redis" || redisEnabled) &&
           (application.id !== "postgresql" || postgresqlEnabled),
       )
@@ -388,18 +403,21 @@ export function Layout({
                   ? "/rust"
                   : application.id === "go"
                     ? "/go"
-                    : application.id === "mysql"
-                      ? "/mysql"
-                      : application.id === "redis"
-                        ? "/redis"
-                        : application.id === "postgresql"
-                          ? "/postgresql"
-                          : "/plugins",
+                    : application.id === "7zip"
+                      ? "/7zip"
+                      : application.id === "mysql"
+                        ? "/mysql"
+                        : application.id === "redis"
+                          ? "/redis"
+                          : application.id === "postgresql"
+                            ? "/postgresql"
+                            : "/plugins",
       }));
     return [...pages, ...applicationCommands];
   }, [
     applications,
     goEnabled,
+    sevenZipEnabled,
     mysqlEnabled,
     navigation,
     nodeEnabled,

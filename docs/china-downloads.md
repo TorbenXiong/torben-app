@@ -26,10 +26,15 @@ MySQL 保留单一来源内的断点续传，切换来源时清除残片。
 | MySQL | 华为 `mirrors.huaweicloud.com/mysql/Downloads` → `repo.huaweicloud.com/mysql/Downloads` → 官方 | Core 固定的 Windows ZIP SHA-256 |
 | Redis | GitHub 官方 asset API → release 地址 | 精确 asset 匹配及 Core 固定的社区 Windows ZIP SHA-256 |
 | PostgreSQL | EDB 官方地址，增加超时、低速检测与重试 | Core 按 WinGet 清单固定的 installer SHA-256 |
+| 7-Zip | 南京大学 `github-release/ip7z/7zip/LatestRelease` 的精确版本文件名 → GitHub release | Core 固定的官方 Windows x64 MSI SHA-256 |
 
 Node.js 镜像索引曾返回 HTTP 200 但落后官方，因此不用于发现版本。Rust 仅镜像安装包，
 避免镜像 manifest 改写 URL/hash；Windows 使用官方 `tar.gz` 并合并组件，保留工具链和文档，
 避免 MSI 管理安装的耗时。Java detached signature 也可经官方 asset API 获取。
+
+7-Zip 的镜像只用于传输已固定的版本文件，不通过 `LatestRelease` 目录发现或升级版本。
+目录缺少该版本或文件校验失败时回退官方；官方 release 跳转到 GitHub asset CDN 是正常下载路径。
+HEAD 200 只证明端点可访问，不能替代完整下载、SHA-256 验证及解包后的 `7z i` 健康检查。
 
 Python 元数据每次请求总超时 6 秒、网络失败重试一次，整个版本查询最多 25 秒，
 在插件 30 秒 RPC 限制内返回错误。Windows 发布 API 不可用时回退独立官方分页索引，

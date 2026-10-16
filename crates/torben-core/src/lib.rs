@@ -26,6 +26,7 @@ mod python_sigstore;
 mod redis;
 mod rust;
 mod schema_ui;
+mod seven_zip;
 mod shell_integration;
 mod source_adapters;
 mod store;
@@ -56,6 +57,7 @@ pub use postgresql::{PostgresqlDistribution, PostgresqlProvider};
 pub use python::{PythonDistribution, PythonInstallKind, PythonProvider, PythonSourceArchive};
 pub use redis::{RedisDistribution, RedisProvider};
 pub use rust::{RustDistribution, RustProvider};
+pub use seven_zip::{SevenZipDistribution, SevenZipProvider};
 use sha2::{Digest, Sha256};
 pub use store::{PluginRecord, StateStore};
 pub use temurin::{TemurinDistribution, TemurinProvider};
@@ -103,6 +105,7 @@ const BUNDLED_TEMURIN_PLUGIN_ID: &str = "app.torben.plugin.temurin";
 const BUNDLED_PYTHON_PLUGIN_ID: &str = "app.torben.plugin.python";
 const BUNDLED_RUST_PLUGIN_ID: &str = "app.torben.plugin.rust";
 const BUNDLED_GO_PLUGIN_ID: &str = "app.torben.plugin.go";
+const BUNDLED_7ZIP_PLUGIN_ID: &str = "app.torben.plugin.7zip";
 const BUNDLED_MYSQL_PLUGIN_ID: &str = "app.torben.plugin.mysql";
 const BUNDLED_MYSQL_PLUGIN_MANIFEST: &str =
     include_str!("../../../plugins/mysql/plugin.manifest.template.json");
@@ -116,6 +119,8 @@ const BUNDLED_RUST_PLUGIN_MANIFEST: &str =
     include_str!("../../../plugins/rust/plugin.manifest.template.json");
 const BUNDLED_GO_PLUGIN_MANIFEST: &str =
     include_str!("../../../plugins/go/plugin.manifest.template.json");
+const BUNDLED_7ZIP_PLUGIN_MANIFEST: &str =
+    include_str!("../../../plugins/7zip/plugin.manifest.template.json");
 const PYTHON_MANAGER_PACKAGE_FILENAME: &str = "python-manager-26.3.msi";
 #[cfg(not(test))]
 const PYTHON_MANAGER_PACKAGE_SHA256: &str =
@@ -202,6 +207,7 @@ pub struct TorbenCore {
     python: PythonProvider,
     rust: RustProvider,
     go: GoProvider,
+    seven_zip: SevenZipProvider,
     mysql: MysqlProvider,
     redis: RedisProvider,
     postgresql: PostgresqlProvider,
@@ -213,6 +219,7 @@ pub struct TorbenCore {
     python_plugin: node_plugin::BundledPlugin,
     rust_plugin: node_plugin::BundledPlugin,
     go_plugin: node_plugin::BundledPlugin,
+    seven_zip_plugin: node_plugin::BundledPlugin,
     mysql_plugin: node_plugin::BundledPlugin,
     redis_plugin: node_plugin::BundledPlugin,
     postgresql_plugin: node_plugin::BundledPlugin,
@@ -362,6 +369,7 @@ impl TorbenCore {
             python: PythonProvider::official()?,
             rust: RustProvider::official()?,
             go: GoProvider::official()?,
+            seven_zip: SevenZipProvider::official()?,
             mysql: MysqlProvider::official()?,
             redis: RedisProvider::windows_community()?,
             postgresql: PostgresqlProvider::official()?,
@@ -373,6 +381,7 @@ impl TorbenCore {
             python_plugin: node_plugin::BundledPlugin::python()?.with_data_root(&paths),
             rust_plugin: node_plugin::BundledPlugin::rust()?.with_data_root(&paths),
             go_plugin: node_plugin::BundledPlugin::go()?.with_data_root(&paths),
+            seven_zip_plugin: node_plugin::BundledPlugin::seven_zip()?.with_data_root(&paths),
             mysql_plugin: node_plugin::BundledPlugin::mysql()?.with_data_root(&paths),
             redis_plugin: node_plugin::BundledPlugin::redis()?.with_data_root(&paths),
             postgresql_plugin: node_plugin::BundledPlugin::postgresql()?.with_data_root(&paths),
@@ -460,6 +469,7 @@ impl TorbenCore {
                     "python" => Some(BUNDLED_PYTHON_PLUGIN_ID),
                     "rust" => Some(BUNDLED_RUST_PLUGIN_ID),
                     "go" => Some(BUNDLED_GO_PLUGIN_ID),
+                    "7zip" => Some(BUNDLED_7ZIP_PLUGIN_ID),
                     "mysql" => Some(BUNDLED_MYSQL_PLUGIN_ID),
                     "redis" => Some(BUNDLED_REDIS_PLUGIN_ID),
                     "postgresql" => Some(BUNDLED_POSTGRESQL_PLUGIN_ID),
@@ -737,6 +747,11 @@ impl TorbenCore {
             }
             "go" => {
                 self.go
+                    .install(&self.paths, app_id, version, plan, journal)
+                    .await
+            }
+            "7zip" => {
+                self.seven_zip
                     .install(&self.paths, app_id, version, plan, journal)
                     .await
             }
@@ -3000,6 +3015,7 @@ impl TorbenCore {
             "python" => self.python.command_path(&install_path, command),
             "rust" => self.rust.command_path(&install_path, command),
             "go" => self.go.command_path(&install_path, command),
+            "7zip" => self.seven_zip.command_path(&install_path, command),
             "mysql" => self.mysql.command_path(&install_path, command),
             "redis" => self.redis.command_path(&install_path, command),
             "postgresql" => self.postgresql.command_path(&install_path, command),
@@ -3217,6 +3233,16 @@ impl TorbenCore {
             });
         }
         if cfg!(any(test, feature = "test-fixtures"))
+            || self.bundled_plugin_enabled(BUNDLED_7ZIP_PLUGIN_ID)?
+        {
+            let (plugin_healthy, plugin_message) = self.seven_zip_plugin.diagnostic();
+            checks.push(DoctorCheck {
+                id: "bundled_plugin.7zip".to_owned(),
+                healthy: plugin_healthy,
+                message: plugin_message,
+            });
+        }
+        if cfg!(any(test, feature = "test-fixtures"))
             || self.bundled_plugin_enabled(BUNDLED_MYSQL_PLUGIN_ID)?
         {
             let (plugin_healthy, plugin_message) = self.mysql_plugin.diagnostic();
@@ -3329,6 +3355,12 @@ impl TorbenCore {
                     true,
                 )?,
                 bundled_plugin_summary(
+                    BUNDLED_7ZIP_PLUGIN_MANIFEST,
+                    BUNDLED_7ZIP_PLUGIN_ID,
+                    "7-Zip",
+                    true,
+                )?,
+                bundled_plugin_summary(
                     BUNDLED_MYSQL_PLUGIN_MANIFEST,
                     BUNDLED_MYSQL_PLUGIN_ID,
                     "MySQL",
@@ -3385,6 +3417,11 @@ impl TorbenCore {
                 (BUNDLED_RUST_PLUGIN_ID, "Rust", BUNDLED_RUST_PLUGIN_MANIFEST),
                 (BUNDLED_GO_PLUGIN_ID, "Go", BUNDLED_GO_PLUGIN_MANIFEST),
                 (
+                    BUNDLED_7ZIP_PLUGIN_ID,
+                    "7-Zip",
+                    BUNDLED_7ZIP_PLUGIN_MANIFEST,
+                ),
+                (
                     BUNDLED_MYSQL_PLUGIN_ID,
                     "MySQL",
                     BUNDLED_MYSQL_PLUGIN_MANIFEST,
@@ -3421,6 +3458,7 @@ impl TorbenCore {
                         | BUNDLED_PYTHON_PLUGIN_ID
                         | BUNDLED_RUST_PLUGIN_ID
                         | BUNDLED_GO_PLUGIN_ID
+                        | BUNDLED_7ZIP_PLUGIN_ID
                         | BUNDLED_MYSQL_PLUGIN_ID
                         | BUNDLED_REDIS_PLUGIN_ID
                         | BUNDLED_POSTGRESQL_PLUGIN_ID
@@ -3668,6 +3706,28 @@ impl TorbenCore {
 
     pub fn uninstall_bundled_go(&self) -> TorbenResult<()> {
         self.uninstall_bundled_provider(BUNDLED_GO_PLUGIN_ID, "Go", "go", "Go toolchain")
+    }
+
+    pub fn install_bundled_7zip(
+        &self,
+        executable: &[u8],
+        shim_executable: &[u8],
+    ) -> TorbenResult<PluginSummary> {
+        self.install_bundled_provider(
+            BundledProviderPackage {
+                plugin_id: BUNDLED_7ZIP_PLUGIN_ID,
+                provider_name: "7-Zip",
+                binary_name: "7zip",
+                manifest_template: BUNDLED_7ZIP_PLUGIN_MANIFEST,
+                executable,
+                resources: &[],
+            },
+            shim_executable,
+        )
+    }
+
+    pub fn uninstall_bundled_7zip(&self) -> TorbenResult<()> {
+        self.uninstall_bundled_provider(BUNDLED_7ZIP_PLUGIN_ID, "7-Zip", "7zip", "7-Zip")
     }
 
     pub fn install_bundled_mysql(
@@ -4039,6 +4099,7 @@ impl TorbenCore {
                 | BUNDLED_PYTHON_PLUGIN_ID
                 | BUNDLED_RUST_PLUGIN_ID
                 | BUNDLED_GO_PLUGIN_ID
+                | BUNDLED_7ZIP_PLUGIN_ID
                 | BUNDLED_MYSQL_PLUGIN_ID
                 | BUNDLED_REDIS_PLUGIN_ID
                 | BUNDLED_POSTGRESQL_PLUGIN_ID
@@ -4053,6 +4114,7 @@ impl TorbenCore {
                     | BUNDLED_PYTHON_PLUGIN_ID
                     | BUNDLED_RUST_PLUGIN_ID
                     | BUNDLED_GO_PLUGIN_ID
+                    | BUNDLED_7ZIP_PLUGIN_ID
                     | BUNDLED_MYSQL_PLUGIN_ID
                     | BUNDLED_REDIS_PLUGIN_ID
                     | BUNDLED_POSTGRESQL_PLUGIN_ID
@@ -4162,6 +4224,7 @@ impl TorbenCore {
                     "python" => self.python_plugin_enabled()?,
                     "rust" => self.bundled_plugin_enabled(BUNDLED_RUST_PLUGIN_ID)?,
                     "go" => self.bundled_plugin_enabled(BUNDLED_GO_PLUGIN_ID)?,
+                    "7zip" => self.bundled_plugin_enabled(BUNDLED_7ZIP_PLUGIN_ID)?,
                     "mysql" => self.bundled_plugin_enabled(BUNDLED_MYSQL_PLUGIN_ID)?,
                     "redis" => self.bundled_plugin_enabled(BUNDLED_REDIS_PLUGIN_ID)?,
                     "postgresql" => self.bundled_plugin_enabled(BUNDLED_POSTGRESQL_PLUGIN_ID)?,
@@ -4245,6 +4308,7 @@ impl TorbenCore {
             "python" => Ok(&self.python_plugin),
             "rust" => Ok(&self.rust_plugin),
             "go" => Ok(&self.go_plugin),
+            "7zip" => Ok(&self.seven_zip_plugin),
             "mysql" => Ok(&self.mysql_plugin),
             "redis" => Ok(&self.redis_plugin),
             "postgresql" => Ok(&self.postgresql_plugin),
@@ -4269,6 +4333,7 @@ impl TorbenCore {
             BUNDLED_PYTHON_PLUGIN_ID => Some(&self.python_plugin),
             BUNDLED_RUST_PLUGIN_ID => Some(&self.rust_plugin),
             BUNDLED_GO_PLUGIN_ID => Some(&self.go_plugin),
+            BUNDLED_7ZIP_PLUGIN_ID => Some(&self.seven_zip_plugin),
             BUNDLED_MYSQL_PLUGIN_ID => Some(&self.mysql_plugin),
             BUNDLED_REDIS_PLUGIN_ID => Some(&self.redis_plugin),
             BUNDLED_POSTGRESQL_PLUGIN_ID => Some(&self.postgresql_plugin),
@@ -4354,7 +4419,7 @@ fn bundled_app_support_available(app_id: &AppId, fixture_build: bool) -> bool {
     // release builds do not expose these applications until their data paths are constrained.
     matches!(
         app_id.as_str(),
-        "node" | "temurin" | "python" | "rust" | "go" | "mysql" | "redis" | "postgresql"
+        "node" | "temurin" | "python" | "rust" | "go" | "7zip" | "mysql" | "redis" | "postgresql"
     ) || (fixture_build && matches!(app_id.as_str(), "git" | "vscode" | "codex"))
 }
 
@@ -5685,6 +5750,7 @@ fn shim_destinations_for_app(paths: &TorbenPaths, app_id: &AppId) -> TorbenResul
         "python" => PYTHON_SHIM_COMMANDS,
         "rust" => RUST_SHIM_COMMANDS,
         "go" => GO_SHIM_COMMANDS,
+        "7zip" => SEVEN_ZIP_SHIM_COMMANDS,
         "mysql" => MYSQL_SHIM_COMMANDS,
         "redis" => REDIS_SHIM_COMMANDS,
         "postgresql" => POSTGRESQL_SHIM_COMMANDS,
@@ -5721,6 +5787,7 @@ const TEMURIN_SHIM_COMMANDS: &[&str] = &["java", "javac"];
 const PYTHON_SHIM_COMMANDS: &[&str] = &["python", "python3", "pip", "pip3"];
 const RUST_SHIM_COMMANDS: &[&str] = &["rustc", "cargo", "rustdoc", "rustfmt"];
 const GO_SHIM_COMMANDS: &[&str] = &["go", "gofmt"];
+const SEVEN_ZIP_SHIM_COMMANDS: &[&str] = &["7z"];
 const MYSQL_SHIM_COMMANDS: &[&str] = &["mysql", "mysqld", "mysqladmin", "mysqldump"];
 const REDIS_SHIM_COMMANDS: &[&str] = &["redis-server", "redis-cli", "redis-benchmark"];
 const POSTGRESQL_SHIM_COMMANDS: &[&str] = &[
@@ -5764,6 +5831,7 @@ const ALL_SHIM_COMMANDS: &[&str] = &[
     "rustfmt",
     "go",
     "gofmt",
+    "7z",
     "mysql",
     "mysqld",
     "mysqladmin",
@@ -9426,8 +9494,8 @@ fn main() {{
 
         let plugins = core.plugins().unwrap();
 
-        assert_eq!(plugins.len(), 13);
-        for plugin in &plugins[..11] {
+        assert_eq!(plugins.len(), 14);
+        for plugin in &plugins[..12] {
             assert_eq!(plugin.origin, PluginOrigin::BuiltIn);
         }
         assert_eq!(plugins[0].origin, PluginOrigin::BuiltIn);
@@ -9436,17 +9504,18 @@ fn main() {{
         assert_eq!(plugins[2].id.as_str(), "app.torben.plugin.python");
         assert_eq!(plugins[3].id.as_str(), "app.torben.plugin.rust");
         assert_eq!(plugins[4].id.as_str(), "app.torben.plugin.go");
-        assert_eq!(plugins[5].id.as_str(), "app.torben.plugin.mysql");
-        assert_eq!(plugins[6].id.as_str(), "app.torben.plugin.redis");
-        assert_eq!(plugins[7].id.as_str(), "app.torben.plugin.postgresql");
-        assert_eq!(plugins[8].id.as_str(), "app.torben.plugin.git");
-        assert_eq!(plugins[9].id.as_str(), "app.torben.plugin.vscode");
-        assert_eq!(plugins[10].id.as_str(), "app.torben.plugin.codex");
-        assert_eq!(plugins[11].origin, PluginOrigin::OfficialRegistry);
-        assert_eq!(plugins[11].display_name, "Official fixture");
-        assert_eq!(plugins[12].origin, PluginOrigin::Sideloaded);
-        assert_eq!(plugins[12].display_name, "Fixture plugin");
-        assert_eq!(plugins[12].permissions.network_domains, ["example.invalid"]);
+        assert_eq!(plugins[5].id.as_str(), "app.torben.plugin.7zip");
+        assert_eq!(plugins[6].id.as_str(), "app.torben.plugin.mysql");
+        assert_eq!(plugins[7].id.as_str(), "app.torben.plugin.redis");
+        assert_eq!(plugins[8].id.as_str(), "app.torben.plugin.postgresql");
+        assert_eq!(plugins[9].id.as_str(), "app.torben.plugin.git");
+        assert_eq!(plugins[10].id.as_str(), "app.torben.plugin.vscode");
+        assert_eq!(plugins[11].id.as_str(), "app.torben.plugin.codex");
+        assert_eq!(plugins[12].origin, PluginOrigin::OfficialRegistry);
+        assert_eq!(plugins[12].display_name, "Official fixture");
+        assert_eq!(plugins[13].origin, PluginOrigin::Sideloaded);
+        assert_eq!(plugins[13].display_name, "Fixture plugin");
+        assert_eq!(plugins[13].permissions.network_domains, ["example.invalid"]);
     }
 
     #[test]
@@ -9982,7 +10051,7 @@ fn main() {{
                 .join("fixture-plugin.bin")
                 .is_file()
         );
-        assert_eq!(core.plugins().unwrap().len(), 12);
+        assert_eq!(core.plugins().unwrap().len(), 13);
 
         let duplicate = core.install_plugin(&manifest_path, true).unwrap_err();
         assert_eq!(duplicate.code, "plugin_already_installed");
@@ -10304,8 +10373,8 @@ fn main() {{
 
         let installed = install_shims_locked(&paths, &source).unwrap();
 
-        assert_eq!(installed.len(), 42);
-        for command in ["go", "gofmt"] {
+        assert_eq!(installed.len(), 43);
+        for command in ["go", "gofmt", "7z"] {
             assert!(
                 installed.contains(
                     &paths

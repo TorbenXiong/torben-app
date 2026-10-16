@@ -1566,6 +1566,10 @@ mod tests {
                 include_str!("../../../plugins/go/plugin.manifest.template.json"),
             ),
             (
+                "7zip",
+                include_str!("../../../plugins/7zip/plugin.manifest.template.json"),
+            ),
+            (
                 "mysql",
                 include_str!("../../../plugins/mysql/plugin.manifest.template.json"),
             ),

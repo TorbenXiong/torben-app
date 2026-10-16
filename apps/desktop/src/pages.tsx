@@ -129,6 +129,7 @@ const bundledApplicationIds: Record<string, string> = {
   "app.torben.plugin.python": "python",
   "app.torben.plugin.rust": "rust",
   "app.torben.plugin.go": "go",
+  "app.torben.plugin.7zip": "7zip",
   "app.torben.plugin.mysql": "mysql",
   "app.torben.plugin.redis": "redis",
   "app.torben.plugin.postgresql": "postgresql",
@@ -143,6 +144,7 @@ const bundledRuntimePages: Record<string, string> = {
   "app.torben.plugin.python": "/python",
   "app.torben.plugin.rust": "/rust",
   "app.torben.plugin.go": "/go",
+  "app.torben.plugin.7zip": "/7zip",
   "app.torben.plugin.mysql": "/mysql",
   "app.torben.plugin.redis": "/redis",
   "app.torben.plugin.postgresql": "/postgresql",
@@ -280,7 +282,7 @@ export function RuntimeDetailPage({
   selected?: SelectionRecord[];
   operations?: OperationEvent[];
   shellIntegration?: ShellIntegrationStatus;
-  appId?: "python" | "rust" | "go" | "mysql" | "redis" | "postgresql";
+  appId?: "python" | "rust" | "go" | "7zip" | "mysql" | "redis" | "postgresql";
   displayName?: string;
 }) {
   const { t } = useTranslation();
@@ -998,6 +1000,10 @@ export function GoDetailPage(props: ComponentProps<typeof RuntimeDetailPage>) {
   return <RuntimeDetailPage {...props} appId="go" displayName="Go" />;
 }
 
+export function SevenZipDetailPage(props: ComponentProps<typeof RuntimeDetailPage>) {
+  return <RuntimeDetailPage {...props} appId="7zip" displayName="7-Zip" />;
+}
+
 export function MysqlDetailPage(props: ComponentProps<typeof RuntimeDetailPage>) {
   return <RuntimeDetailPage {...props} appId="mysql" displayName="MySQL" />;
 }
@@ -1506,8 +1512,10 @@ interface PluginsPageProps {
   onUninstallBundledPython?: () => Promise<void>;
   onInstallBundledRust?: () => Promise<PluginSummary>;
   onInstallBundledGo?: () => Promise<PluginSummary>;
+  onInstallBundled7zip?: () => Promise<PluginSummary>;
   onUninstallBundledRust?: () => Promise<void>;
   onUninstallBundledGo?: () => Promise<void>;
+  onUninstallBundled7zip?: () => Promise<void>;
   onInstallBundledMysql?: () => Promise<PluginSummary>;
   onUninstallBundledMysql?: () => Promise<void>;
   onInstallBundledRedis?: () => Promise<PluginSummary>;
@@ -1564,11 +1572,17 @@ export function PluginsPage({
   onInstallBundledGo = async () => {
     throw new Error("Bundled Go installation is unavailable.");
   },
+  onInstallBundled7zip = async () => {
+    throw new Error("Bundled 7-Zip installation is unavailable.");
+  },
   onInstallBundledRust = async () => {
     throw new Error("Bundled Rust installation is unavailable.");
   },
   onUninstallBundledGo = async () => {
     throw new Error("Bundled Go uninstall is unavailable.");
+  },
+  onUninstallBundled7zip = async () => {
+    throw new Error("Bundled 7-Zip uninstall is unavailable.");
   },
   onUninstallBundledRust = async () => {
     throw new Error("Bundled Rust uninstall is unavailable.");
@@ -1686,6 +1700,7 @@ export function PluginsPage({
       else if (plugin.id === "app.torben.plugin.python") await onInstallBundledPython();
       else if (plugin.id === "app.torben.plugin.rust") await onInstallBundledRust();
       else if (plugin.id === "app.torben.plugin.go") await onInstallBundledGo();
+      else if (plugin.id === "app.torben.plugin.7zip") await onInstallBundled7zip();
       else if (plugin.id === "app.torben.plugin.mysql") await onInstallBundledMysql();
       else if (plugin.id === "app.torben.plugin.redis") await onInstallBundledRedis();
       else if (plugin.id === "app.torben.plugin.postgresql") await onInstallBundledPostgresql();
@@ -1706,6 +1721,7 @@ export function PluginsPage({
       else if (plugin.id === "app.torben.plugin.python") await onUninstallBundledPython();
       else if (plugin.id === "app.torben.plugin.rust") await onUninstallBundledRust();
       else if (plugin.id === "app.torben.plugin.go") await onUninstallBundledGo();
+      else if (plugin.id === "app.torben.plugin.7zip") await onUninstallBundled7zip();
       else if (plugin.id === "app.torben.plugin.mysql") await onUninstallBundledMysql();
       else if (plugin.id === "app.torben.plugin.redis") await onUninstallBundledRedis();
       else if (plugin.id === "app.torben.plugin.postgresql") await onUninstallBundledPostgresql();
@@ -2407,6 +2423,7 @@ function pluginSummary(t: (key: string) => string, plugin: PluginSummary) {
     "app.torben.plugin.python": "pluginsPage.summaryPython",
     "app.torben.plugin.rust": "pluginsPage.summaryRust",
     "app.torben.plugin.go": "pluginsPage.summaryGo",
+    "app.torben.plugin.7zip": "pluginsPage.summary7zip",
     "app.torben.plugin.mysql": "pluginsPage.summaryMysql",
     "app.torben.plugin.redis": "pluginsPage.summaryRedis",
     "app.torben.plugin.postgresql": "pluginsPage.summaryPostgresql",

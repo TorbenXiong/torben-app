@@ -10,6 +10,7 @@ import {
   getOperationEvents,
   getSnapshot,
   initialTorbenUpdateStatus,
+  installBundled7zipPlugin,
   installBundledGoPlugin,
   installBundledMysqlPlugin,
   installBundledNodePlugin,
@@ -21,6 +22,7 @@ import {
   installTorbenUpdate,
   migrateManagedLibrary,
   setShellIntegration,
+  uninstallBundled7zipPlugin,
   uninstallBundledGoPlugin,
   uninstallBundledMysqlPlugin,
   uninstallBundledNodePlugin,
@@ -47,6 +49,7 @@ import {
   RedisDetailPage,
   RustDetailPage,
   SettingsPage,
+  SevenZipDetailPage,
   TemurinDetailPage,
 } from "./pages";
 import { applyThemePreference, resolveLanguagePreference } from "./preferences";
@@ -271,6 +274,7 @@ function AppContent() {
   const pythonEnabled = pluginEnabled("app.torben.plugin.python");
   const rustEnabled = pluginEnabled("app.torben.plugin.rust");
   const goEnabled = pluginEnabled("app.torben.plugin.go");
+  const sevenZipEnabled = pluginEnabled("app.torben.plugin.7zip");
   const mysqlEnabled = pluginEnabled("app.torben.plugin.mysql");
   const redisEnabled = pluginEnabled("app.torben.plugin.redis");
   const postgresqlEnabled = pluginEnabled("app.torben.plugin.postgresql");
@@ -322,13 +326,15 @@ function AppContent() {
                     ? "/rust"
                     : managedUpdates.candidates[0]?.appId === "go"
                       ? "/go"
-                      : managedUpdates.candidates[0]?.appId === "mysql"
-                        ? "/mysql"
-                        : managedUpdates.candidates[0]?.appId === "redis"
-                          ? "/redis"
-                          : managedUpdates.candidates[0]?.appId === "postgresql"
-                            ? "/postgresql"
-                            : "/java"
+                      : managedUpdates.candidates[0]?.appId === "7zip"
+                        ? "/7zip"
+                        : managedUpdates.candidates[0]?.appId === "mysql"
+                          ? "/mysql"
+                          : managedUpdates.candidates[0]?.appId === "redis"
+                            ? "/redis"
+                            : managedUpdates.candidates[0]?.appId === "postgresql"
+                              ? "/postgresql"
+                              : "/java"
             }
           >
             {t("appShell.reviewUpdates")}
@@ -397,6 +403,22 @@ function AppContent() {
               />
             ) : (
               <Navigate replace to="/plugins" />
+            )
+          }
+        />
+        <Route
+          path="/7zip"
+          element={
+            sevenZipEnabled ? (
+              <SevenZipDetailPage
+                installed={snapshot.installed}
+                operations={snapshot.operations}
+                onChanged={refresh}
+                selected={snapshot.selected}
+                shellIntegration={snapshot.shellIntegration}
+              />
+            ) : (
+              <Navigate to="/plugins" replace />
             )
           }
         />
@@ -479,6 +501,7 @@ function AppContent() {
               onInstallBundledPython={installBundledPythonPlugin}
               onInstallBundledRust={installBundledRustPlugin}
               onInstallBundledGo={installBundledGoPlugin}
+              onInstallBundled7zip={installBundled7zipPlugin}
               onInstallBundledMysql={installBundledMysqlPlugin}
               onInstallBundledRedis={installBundledRedisPlugin}
               onInstallBundledPostgresql={installBundledPostgresqlPlugin}
@@ -486,6 +509,7 @@ function AppContent() {
               onUninstallBundledPython={uninstallBundledPythonPlugin}
               onUninstallBundledRust={uninstallBundledRustPlugin}
               onUninstallBundledGo={uninstallBundledGoPlugin}
+              onUninstallBundled7zip={uninstallBundled7zipPlugin}
               onUninstallBundledMysql={uninstallBundledMysqlPlugin}
               onUninstallBundledRedis={uninstallBundledRedisPlugin}
               onUninstallBundledPostgresql={uninstallBundledPostgresqlPlugin}

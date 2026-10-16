@@ -79,6 +79,7 @@ fn query_command_emits_one_success_envelope_on_stdout() {
     assert_eq!(
         ids,
         [
+            "7zip",
             "codex",
             "git",
             "go",
