@@ -1570,6 +1570,10 @@ mod tests {
                 include_str!("../../../plugins/7zip/plugin.manifest.template.json"),
             ),
             (
+                "cmake",
+                include_str!("../../../plugins/cmake/plugin.manifest.template.json"),
+            ),
+            (
                 "mysql",
                 include_str!("../../../plugins/mysql/plugin.manifest.template.json"),
             ),

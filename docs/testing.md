@@ -7,7 +7,7 @@ macOS, Linux, and ARM64 evidence is retained for future platform milestones.
 
 ## Offline development gates
 
-Java, Python, Node.js, Rust, Go, 7-Zip, MySQL, Redis, and PostgreSQL are enabled in production on Windows x64 after their
+Java, Python, Node.js, Rust, Go, 7-Zip, CMake, MySQL, Redis, and PostgreSQL are enabled in production on Windows x64 after their
 provider and managed-runtime paths were constrained below the selected data root. Node.js shims also prepare npm cache,
 global package/configuration, temporary, compile-cache, and REPL history paths under `userData/package-managers/node/npm`; pnpm state is kept under the sibling `node/pnpm` directory. The other provider lifecycle tests below run
 only through unit-test or the default-off `test-fixtures` paths; passing them does not advertise
@@ -101,6 +101,7 @@ The Node.js first-milestone behaviors are covered by these fixture-backed tests:
 | Doctor does not report optional terminal integration or package-manager absence as a broken first-run state, but still rejects outdated Shell ownership and validates shims after a terminal selection exists | `shell_integration_actions_are_idempotent_and_update_doctor`, `doctor_distinguishes_optional_configuration_from_broken_configuration`, and `doctor_detects_outdated_command_shims` in `crates/torben-core/src/lib.rs` |
 | Fresh SQLite state records every embedded migration, the previous bootstrap ledger gap is repaired, and an older Core rejects a future schema before creating or changing application tables | `fresh_database_records_every_embedded_migration`, `repairs_the_preexisting_schema_two_receipt_gap`, and `rejects_a_database_from_a_newer_schema_before_creating_application_tables` in `crates/torben-core/src/store.rs` |
 | Go installs into a custom managed library, automatically selects its first version, resolves both commands and uninstalls without deleting tool state | Go catalog/environment fixtures and `windows_fixture_installs_selects_and_uninstalls_with_a_custom_library` in `crates/torben-core/src/go.rs`, plus the stdio protocol test in `plugins/go/tests/protocol.rs` |
+| CMake keeps the pinned Windows x64 MSI, validates its checksum and version output, exposes external discovery, and creates the `cmake` shim | Provider and fixture coverage in `crates/torben-core/src/cmake.rs`, plus the stdio protocol test in `plugins/cmake/tests/protocol.rs` |
 | Selection updates only its application's aliases; startup preserves legacy restored shims and rejects changes while an unrestored backup exists | Selection and legacy recovery tests in `crates/torben-core/src/lib.rs` |
 | Duplicate desktop acquisition returns immediately and releases its slot after exit, independently of workspace mutation locks | `desktop_instance_lock_rejects_duplicate_and_releases_on_exit` in `crates/torben-core/src/workspace_lock.rs` |
 | SQLite persists the ordered application and source catalog; schema migration preserves existing installation state and mismatched persisted identities fail closed | Catalog availability/source tests in `crates/torben-core/src/catalog.rs`, plus `persists_the_ordered_application_and_complete_source_catalog`, `migration_four_adds_the_catalog_without_changing_existing_installations`, and `rejects_a_persisted_application_with_a_mismatched_row_identity` in `crates/torben-core/src/store.rs` |

@@ -1,9 +1,9 @@
 {
   "id": "app.torben.plugin.go",
   "displayName": "Go",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "protocolVersion": 1,
-  "minimumHostVersion": "0.0.6",
+  "minimumHostVersion": "0.0.7",
   "publisher": "Torben App",
   "capabilities": [
     "version_discovery",

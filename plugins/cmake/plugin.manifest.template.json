@@ -1,0 +1,29 @@
+{
+  "id": "app.torben.plugin.cmake",
+  "displayName": "CMake",
+  "version": "0.0.7",
+  "protocolVersion": 1,
+  "minimumHostVersion": "0.0.7",
+  "publisher": "Torben App",
+  "capabilities": [
+    "version_discovery",
+    "external_discovery",
+    "managed_install",
+    "global_selection",
+    "managed_uninstall",
+    "schema_ui"
+  ],
+  "permissions": {
+    "networkDomains": [
+      "github.com",
+      "objects.githubusercontent.com",
+      "release-assets.githubusercontent.com"
+    ],
+    "filesystemRoots": ["managed_app_library", "download_cache", "staging", "plugin_data"],
+    "externalCommands": ["cmake"],
+    "packageManagers": []
+  },
+  "targets": [],
+  "signature": null,
+  "revoked": false
+}

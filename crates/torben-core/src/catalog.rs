@@ -88,6 +88,20 @@ pub fn applications() -> TorbenResult<Vec<ApplicationDescriptor>> {
             true,
         )?,
         app(
+            "cmake",
+            "CMake",
+            "The official CMake build system for Windows x64.",
+            &["tool", "development"],
+            &[
+                "versions",
+                "install",
+                "select",
+                "uninstall",
+                "external-detection",
+            ],
+            true,
+        )?,
+        app(
             "mysql",
             "MySQL",
             "MySQL Community Server with managed client and server binaries.",
@@ -238,7 +252,7 @@ mod tests {
     fn supported_windows_applications_are_available() {
         let applications = super::applications().unwrap();
 
-        assert_eq!(applications.len(), 12);
+        assert_eq!(applications.len(), 13);
         for app_id in [
             "node",
             "temurin",
@@ -246,6 +260,7 @@ mod tests {
             "rust",
             "go",
             "7zip",
+            "cmake",
             "mysql",
             "redis",
             "postgresql",
@@ -268,6 +283,7 @@ mod tests {
                         | "rust"
                         | "go"
                         | "7zip"
+                        | "cmake"
                         | "mysql"
                         | "redis"
                         | "postgresql"
@@ -283,8 +299,8 @@ mod tests {
         let applications = super::applications().unwrap();
         let sources = super::sources(&applications).unwrap();
 
-        assert_eq!(sources.len(), 13);
-        assert_eq!(sources.iter().filter(|source| source.managed).count(), 9);
+        assert_eq!(sources.len(), 14);
+        assert_eq!(sources.iter().filter(|source| source.managed).count(), 10);
         assert!(
             sources
                 .iter()

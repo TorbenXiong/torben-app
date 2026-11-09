@@ -33,6 +33,7 @@ import { comparePluginOrder, movePlugin, normalizePluginOrder } from "../pluginO
 import type { ApplicationDescriptor, PluginSummary } from "../types";
 import { appVersion } from "../version";
 import {
+  CmakeIcon,
   GoIcon,
   JavaIcon,
   MysqlIcon,
@@ -57,6 +58,7 @@ const supportedApplicationRoutes = new Set([
   "rust",
   "go",
   "7zip",
+  "cmake",
   "mysql",
   "redis",
   "postgresql",
@@ -246,6 +248,9 @@ export function Layout({
   const sevenZipEnabled = plugins.some(
     (plugin) => plugin.id === "app.torben.plugin.7zip" && plugin.enabled,
   );
+  const cmakeEnabled = plugins.some(
+    (plugin) => plugin.id === "app.torben.plugin.cmake" && plugin.enabled,
+  );
   const mysqlEnabled = plugins.some(
     (plugin) => plugin.id === "app.torben.plugin.mysql" && plugin.enabled,
   );
@@ -298,6 +303,14 @@ export function Layout({
         pluginId: "app.torben.plugin.7zip",
       });
     }
+    if (cmakeEnabled) {
+      runtimePages.push({
+        to: "/cmake",
+        key: "cmake",
+        icon: CmakeIcon,
+        pluginId: "app.torben.plugin.cmake",
+      });
+    }
     if (mysqlEnabled) {
       runtimePages.push({
         to: "/mysql",
@@ -336,6 +349,7 @@ export function Layout({
     temurinEnabled,
     localPluginOrder,
     sevenZipEnabled,
+    cmakeEnabled,
   ]);
   const navigation = useMemo(
     () => [
@@ -373,6 +387,7 @@ export function Layout({
           (application.id !== "mysql" || mysqlEnabled) &&
           (application.id !== "go" || goEnabled) &&
           (application.id !== "7zip" || sevenZipEnabled) &&
+          (application.id !== "cmake" || cmakeEnabled) &&
           (application.id !== "redis" || redisEnabled) &&
           (application.id !== "postgresql" || postgresqlEnabled),
       )
@@ -405,19 +420,22 @@ export function Layout({
                     ? "/go"
                     : application.id === "7zip"
                       ? "/7zip"
-                      : application.id === "mysql"
-                        ? "/mysql"
-                        : application.id === "redis"
-                          ? "/redis"
-                          : application.id === "postgresql"
-                            ? "/postgresql"
-                            : "/plugins",
+                      : application.id === "cmake"
+                        ? "/cmake"
+                        : application.id === "mysql"
+                          ? "/mysql"
+                          : application.id === "redis"
+                            ? "/redis"
+                            : application.id === "postgresql"
+                              ? "/postgresql"
+                              : "/plugins",
       }));
     return [...pages, ...applicationCommands];
   }, [
     applications,
     goEnabled,
     sevenZipEnabled,
+    cmakeEnabled,
     mysqlEnabled,
     navigation,
     nodeEnabled,

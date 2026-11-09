@@ -40,6 +40,8 @@ execFileSync(
     "-p",
     "torben-plugin-7zip",
     "-p",
+    "torben-plugin-cmake",
+    "-p",
     "torben-plugin-mysql",
     "-p",
     "torben-plugin-redis",

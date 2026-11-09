@@ -80,6 +80,7 @@ fn query_command_emits_one_success_envelope_on_stdout() {
         ids,
         [
             "7zip",
+            "cmake",
             "codex",
             "git",
             "go",

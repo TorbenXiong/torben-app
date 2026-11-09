@@ -50,6 +50,11 @@ const TASKS: &[ScheduledTaskDefinition] = &[
         interval: VERSION_CATALOG_REFRESH_INTERVAL,
     },
     ScheduledTaskDefinition {
+        id: "refresh-cmake-version-catalog",
+        app_id: "cmake",
+        interval: VERSION_CATALOG_REFRESH_INTERVAL,
+    },
+    ScheduledTaskDefinition {
         id: "refresh-mysql-version-catalog",
         app_id: "mysql",
         interval: VERSION_CATALOG_REFRESH_INTERVAL,
@@ -209,6 +214,13 @@ mod tests {
     fn seven_zip_catalog_refreshes_daily() {
         let task = TASKS.iter().find(|task| task.app_id == "7zip").unwrap();
         assert_eq!(task.id, "refresh-7zip-version-catalog");
+        assert_eq!(task.interval.as_secs(), 86_400);
+    }
+
+    #[test]
+    fn cmake_catalog_refreshes_daily() {
+        let task = TASKS.iter().find(|task| task.app_id == "cmake").unwrap();
+        assert_eq!(task.id, "refresh-cmake-version-catalog");
         assert_eq!(task.interval.as_secs(), 86_400);
     }
 

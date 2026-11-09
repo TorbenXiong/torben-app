@@ -29,6 +29,7 @@ const windowsSidecarNames = Object.freeze([
   "torben-plugin-rust",
   "torben-plugin-go",
   "torben-plugin-7zip",
+  "torben-plugin-cmake",
   "torben-plugin-mysql",
   "torben-plugin-redis",
   "torben-plugin-postgresql",

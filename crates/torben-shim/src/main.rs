@@ -65,6 +65,7 @@ fn app_for_command(command: &str) -> TorbenResult<AppId> {
         "rustc" | "cargo" | "rustdoc" | "rustfmt" => AppId::new("rust"),
         "go" | "gofmt" => AppId::new("go"),
         "7z" => AppId::new("7zip"),
+        "cmake" => AppId::new("cmake"),
         "mysql" | "mysqld" | "mysqladmin" | "mysqldump" => AppId::new("mysql"),
         "redis-server" | "redis-cli" | "redis-benchmark" => AppId::new("redis"),
         "postgres" | "psql" | "pg_ctl" | "initdb" | "pg_isready" | "createdb" | "dropdb"
@@ -110,6 +111,7 @@ fn _is_safe_alias(path: &Path) -> bool {
                 | "go"
                 | "gofmt"
                 | "7z"
+                | "cmake"
                 | "mysql"
                 | "mysqld"
                 | "mysqladmin"

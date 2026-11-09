@@ -11,6 +11,7 @@ import {
   getSnapshot,
   initialTorbenUpdateStatus,
   installBundled7zipPlugin,
+  installBundledCmakePlugin,
   installBundledGoPlugin,
   installBundledMysqlPlugin,
   installBundledNodePlugin,
@@ -23,6 +24,7 @@ import {
   migrateManagedLibrary,
   setShellIntegration,
   uninstallBundled7zipPlugin,
+  uninstallBundledCmakePlugin,
   uninstallBundledGoPlugin,
   uninstallBundledMysqlPlugin,
   uninstallBundledNodePlugin,
@@ -38,6 +40,7 @@ import { RuntimeOperationsProvider } from "./components/RuntimeOperations";
 import i18n from "./i18n";
 import { NodeDetailPage } from "./NodeDetailPage";
 import {
+  CmakeDetailPage,
   DiagnosticsPage,
   GoDetailPage,
   LogsPage,
@@ -275,6 +278,7 @@ function AppContent() {
   const rustEnabled = pluginEnabled("app.torben.plugin.rust");
   const goEnabled = pluginEnabled("app.torben.plugin.go");
   const sevenZipEnabled = pluginEnabled("app.torben.plugin.7zip");
+  const cmakeEnabled = pluginEnabled("app.torben.plugin.cmake");
   const mysqlEnabled = pluginEnabled("app.torben.plugin.mysql");
   const redisEnabled = pluginEnabled("app.torben.plugin.redis");
   const postgresqlEnabled = pluginEnabled("app.torben.plugin.postgresql");
@@ -328,13 +332,15 @@ function AppContent() {
                       ? "/go"
                       : managedUpdates.candidates[0]?.appId === "7zip"
                         ? "/7zip"
-                        : managedUpdates.candidates[0]?.appId === "mysql"
-                          ? "/mysql"
-                          : managedUpdates.candidates[0]?.appId === "redis"
-                            ? "/redis"
-                            : managedUpdates.candidates[0]?.appId === "postgresql"
-                              ? "/postgresql"
-                              : "/java"
+                        : managedUpdates.candidates[0]?.appId === "cmake"
+                          ? "/cmake"
+                          : managedUpdates.candidates[0]?.appId === "mysql"
+                            ? "/mysql"
+                            : managedUpdates.candidates[0]?.appId === "redis"
+                              ? "/redis"
+                              : managedUpdates.candidates[0]?.appId === "postgresql"
+                                ? "/postgresql"
+                                : "/java"
             }
           >
             {t("appShell.reviewUpdates")}
@@ -411,6 +417,22 @@ function AppContent() {
           element={
             sevenZipEnabled ? (
               <SevenZipDetailPage
+                installed={snapshot.installed}
+                operations={snapshot.operations}
+                onChanged={refresh}
+                selected={snapshot.selected}
+                shellIntegration={snapshot.shellIntegration}
+              />
+            ) : (
+              <Navigate to="/plugins" replace />
+            )
+          }
+        />
+        <Route
+          path="/cmake"
+          element={
+            cmakeEnabled ? (
+              <CmakeDetailPage
                 installed={snapshot.installed}
                 operations={snapshot.operations}
                 onChanged={refresh}
@@ -502,6 +524,7 @@ function AppContent() {
               onInstallBundledRust={installBundledRustPlugin}
               onInstallBundledGo={installBundledGoPlugin}
               onInstallBundled7zip={installBundled7zipPlugin}
+              onInstallBundledCmake={installBundledCmakePlugin}
               onInstallBundledMysql={installBundledMysqlPlugin}
               onInstallBundledRedis={installBundledRedisPlugin}
               onInstallBundledPostgresql={installBundledPostgresqlPlugin}
@@ -510,6 +533,7 @@ function AppContent() {
               onUninstallBundledRust={uninstallBundledRustPlugin}
               onUninstallBundledGo={uninstallBundledGoPlugin}
               onUninstallBundled7zip={uninstallBundled7zipPlugin}
+              onUninstallBundledCmake={uninstallBundledCmakePlugin}
               onUninstallBundledMysql={uninstallBundledMysqlPlugin}
               onUninstallBundledRedis={uninstallBundledRedisPlugin}
               onUninstallBundledPostgresql={uninstallBundledPostgresqlPlugin}
