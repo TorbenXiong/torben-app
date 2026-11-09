@@ -93,6 +93,7 @@ impl TorbenPaths {
                     | "go"
                     | "gofmt"
                     | "7z"
+                    | "cmake"
                     | "mysql"
                     | "mysqld"
                     | "mysqladmin"
@@ -440,6 +441,7 @@ mod tests {
             "userData/tools/shims/pnpm.exe",
             "userData/tools/shims/codex.exe",
             "userData/tools/shims/7z.exe",
+            "userData/tools/shims/cmake.exe",
             "userData/tools/shims/mysqld.exe",
             "userData/tools/shims/redis-server.exe",
             "userData/tools/shims/postgres.exe",

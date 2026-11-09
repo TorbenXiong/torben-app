@@ -62,6 +62,11 @@ const EMBEDDED_7ZIP_PLUGIN: &[u8] = include_bytes!(concat!(
     "/../../../target/release/torben-plugin-7zip.exe"
 ));
 #[cfg(all(windows, not(debug_assertions)))]
+const EMBEDDED_CMAKE_PLUGIN: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../target/release/torben-plugin-cmake.exe"
+));
+#[cfg(all(windows, not(debug_assertions)))]
 const EMBEDDED_MYSQL_PLUGIN: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../target/release/torben-plugin-mysql.exe"
@@ -96,6 +101,8 @@ const EMBEDDED_PYTHON_PLUGIN: &[u8] = &[];
 const EMBEDDED_GO_PLUGIN: &[u8] = &[];
 #[cfg(any(not(windows), debug_assertions))]
 const EMBEDDED_7ZIP_PLUGIN: &[u8] = &[];
+#[cfg(any(not(windows), debug_assertions))]
+const EMBEDDED_CMAKE_PLUGIN: &[u8] = &[];
 #[cfg(any(not(windows), debug_assertions))]
 const EMBEDDED_MYSQL_PLUGIN: &[u8] = &[];
 #[cfg(any(not(windows), debug_assertions))]
@@ -899,6 +906,38 @@ async fn uninstall_bundled_7zip_plugin(
 }
 
 #[tauri::command]
+async fn install_bundled_cmake_plugin(
+    app: AppHandle,
+    core: State<'_, Arc<TorbenCore>>,
+) -> Result<PluginSummary, TorbenError> {
+    let install_core = Arc::clone(&core);
+    let summary = tauri::async_runtime::spawn_blocking(move || {
+        install_core.install_bundled_cmake(EMBEDDED_CMAKE_PLUGIN, EMBEDDED_TORBEN_SHIM)
+    })
+    .await
+    .map_err(|error| {
+        TorbenError::internal("The bundled CMake plugin installation task failed.")
+            .with_detail("reason", error.to_string())
+    })??;
+    scheduled_tasks::refresh_after_user_action(Arc::clone(&core), app, AppId::new("cmake")?);
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn uninstall_bundled_cmake_plugin(
+    core: State<'_, Arc<TorbenCore>>,
+) -> Result<(), TorbenError> {
+    let uninstall_core = Arc::clone(&core);
+    tauri::async_runtime::spawn_blocking(move || uninstall_core.uninstall_bundled_cmake())
+        .await
+        .map_err(|error| {
+            TorbenError::internal("The bundled CMake plugin uninstall task failed.")
+                .with_detail("reason", error.to_string())
+        })??;
+    Ok(())
+}
+
+#[tauri::command]
 async fn install_bundled_mysql_plugin(
     core: State<'_, Arc<TorbenCore>>,
     app: tauri::AppHandle,
@@ -1147,6 +1186,13 @@ pub fn run() {
             return;
         }
     };
+    if let Err(error) = core.sync_selected_java_home() {
+        eprintln!("Torben App could not synchronize JAVA_HOME: {error}");
+    }
+    #[cfg(all(windows, not(debug_assertions)))]
+    if let Err(error) = core.refresh_bundled_cmake(EMBEDDED_CMAKE_PLUGIN, EMBEDDED_TORBEN_SHIM) {
+        eprintln!("Torben App could not refresh the bundled CMake plugin: {error}");
+    }
     let updater_public_key = match validate_updater_public_key(UPDATER_PUBLIC_KEY) {
         Ok(value) => value,
         Err(error) => {
@@ -1820,6 +1866,8 @@ fn configure_core_commands(
             uninstall_bundled_go_plugin,
             install_bundled_7zip_plugin,
             uninstall_bundled_7zip_plugin,
+            install_bundled_cmake_plugin,
+            uninstall_bundled_cmake_plugin,
             install_bundled_mysql_plugin,
             uninstall_bundled_mysql_plugin,
             install_bundled_redis_plugin,

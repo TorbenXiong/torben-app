@@ -15,6 +15,10 @@ pub(crate) trait ShellIntegrationBackend: Send + Sync {
     fn status(&self, shim_path: &Path) -> TorbenResult<ShellIntegrationStatus>;
     fn enable(&self, shim_path: &Path) -> TorbenResult<ShellIntegrationStatus>;
     fn disable(&self, shim_path: &Path) -> TorbenResult<ShellIntegrationStatus>;
+
+    fn set_java_home(&self, _java_home: &Path) -> TorbenResult<()> {
+        Ok(())
+    }
 }
 
 pub(crate) fn platform_backend(paths: &TorbenPaths) -> Arc<dyn ShellIntegrationBackend> {
@@ -911,6 +915,7 @@ mod windows {
     use crate::process;
 
     const TARGET: &str = "HKCU\\Environment\\Path";
+    const JAVA_HOME_SCRIPT: &str = r#"$ErrorActionPreference='Stop'; $key=[Microsoft.Win32.Registry]::LocalMachine.CreateSubKey('SYSTEM\CurrentControlSet\Control\Session Manager\Environment'); try{$key.SetValue('JAVA_HOME',$env:TORBEN_JAVA_HOME,[Microsoft.Win32.RegistryValueKind]::String)}finally{$key.Dispose()}; try{Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class TorbenJavaHomeBroadcast { [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result); }'; $result=[UIntPtr]::Zero; [void][TorbenJavaHomeBroadcast]::SendMessageTimeout([IntPtr]0xffff,0x1a,[UIntPtr]::Zero,'Environment',2,5000,[ref]$result)}catch{}"#;
     const OWNERSHIP_RECEIPT_MAX_BYTES: u64 = 16 * 1024;
     const TRANSACTION_RECEIPT_MAX_BYTES: u64 = 128 * 1024;
     const READ_SCRIPT: &str = r"$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $exists=$false; $key=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$false); if($null -eq $key){$value='';$expandedValue='';$kind='ExpandString'}else{try{$kind=$key.GetValueKind('Path').ToString();$value=[string]$key.GetValue('Path','',[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames);$expandedValue=[string]$key.GetValue('Path','');$exists=$true}catch{$value='';$expandedValue='';$kind='ExpandString'}finally{$key.Dispose()}}; [Console]::Out.Write((ConvertTo-Json -Compress @{value=$value;expandedValue=$expandedValue;kind=$kind;exists=$exists}))";
@@ -1142,6 +1147,47 @@ mod windows {
     }
 
     impl ShellIntegrationBackend for WindowsShellIntegration {
+        fn set_java_home(&self, java_home: &Path) -> TorbenResult<()> {
+            let java_home = path_text(java_home)?;
+            if java_home.is_empty()
+                || java_home.contains('\0')
+                || java_home.contains('\r')
+                || java_home.contains('\n')
+            {
+                return Err(TorbenError::new(
+                    "java_home_invalid",
+                    "The selected Java home path is invalid.",
+                )
+                .with_detail("path", java_home));
+            }
+            let output = process::command("powershell.exe")
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    JAVA_HOME_SCRIPT,
+                ])
+                .env("TORBEN_JAVA_HOME", java_home)
+                .output()
+                .map_err(|error| {
+                    TorbenError::new(
+                        "java_home_update_failed",
+                        "Could not start the system JAVA_HOME update.",
+                    )
+                    .with_detail("reason", error.to_string())
+                })?;
+            if output.status.success() {
+                Ok(())
+            } else {
+                Err(TorbenError::new(
+                    "java_home_update_failed",
+                    "Could not update the system JAVA_HOME environment variable.",
+                )
+                .with_detail("reason", String::from_utf8_lossy(&output.stderr).trim()))
+            }
+        }
+
         fn recover(&self, shim_path: &Path) -> TorbenResult<()> {
             self.recover_transaction(path_text(shim_path)?)
         }

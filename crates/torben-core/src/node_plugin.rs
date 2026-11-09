@@ -140,6 +140,16 @@ impl BundledPlugin {
         )
     }
 
+    pub(crate) fn cmake() -> TorbenResult<Self> {
+        Self::discover(
+            "torben-plugin-cmake",
+            "app.torben.plugin.cmake",
+            "cmake",
+            "cmake.official",
+            include_str!("../../../plugins/cmake/plugin.manifest.template.json"),
+        )
+    }
+
     pub(crate) fn mysql() -> TorbenResult<Self> {
         Self::discover(
             "torben-plugin-mysql",

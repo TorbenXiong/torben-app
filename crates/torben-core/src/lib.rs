@@ -2,6 +2,7 @@
 
 mod bundled_shim;
 mod catalog;
+mod cmake;
 mod codex;
 mod database_instances;
 mod diagnostic_log;
@@ -47,6 +48,7 @@ use std::{
     time::Duration,
 };
 
+pub use cmake::{CMakeDistribution, CMakeProvider};
 pub use codex::{CodexDistribution, CodexProvider, CodexSigstoreBundle};
 pub use git::{GitDistribution, GitInstallKind, GitProvider};
 pub use go::{GoDistribution, GoProvider};
@@ -106,6 +108,7 @@ const BUNDLED_PYTHON_PLUGIN_ID: &str = "app.torben.plugin.python";
 const BUNDLED_RUST_PLUGIN_ID: &str = "app.torben.plugin.rust";
 const BUNDLED_GO_PLUGIN_ID: &str = "app.torben.plugin.go";
 const BUNDLED_7ZIP_PLUGIN_ID: &str = "app.torben.plugin.7zip";
+const BUNDLED_CMAKE_PLUGIN_ID: &str = "app.torben.plugin.cmake";
 const BUNDLED_MYSQL_PLUGIN_ID: &str = "app.torben.plugin.mysql";
 const BUNDLED_MYSQL_PLUGIN_MANIFEST: &str =
     include_str!("../../../plugins/mysql/plugin.manifest.template.json");
@@ -121,6 +124,8 @@ const BUNDLED_GO_PLUGIN_MANIFEST: &str =
     include_str!("../../../plugins/go/plugin.manifest.template.json");
 const BUNDLED_7ZIP_PLUGIN_MANIFEST: &str =
     include_str!("../../../plugins/7zip/plugin.manifest.template.json");
+const BUNDLED_CMAKE_PLUGIN_MANIFEST: &str =
+    include_str!("../../../plugins/cmake/plugin.manifest.template.json");
 const PYTHON_MANAGER_PACKAGE_FILENAME: &str = "python-manager-26.3.msi";
 #[cfg(not(test))]
 const PYTHON_MANAGER_PACKAGE_SHA256: &str =
@@ -208,6 +213,7 @@ pub struct TorbenCore {
     rust: RustProvider,
     go: GoProvider,
     seven_zip: SevenZipProvider,
+    cmake: CMakeProvider,
     mysql: MysqlProvider,
     redis: RedisProvider,
     postgresql: PostgresqlProvider,
@@ -220,6 +226,7 @@ pub struct TorbenCore {
     rust_plugin: node_plugin::BundledPlugin,
     go_plugin: node_plugin::BundledPlugin,
     seven_zip_plugin: node_plugin::BundledPlugin,
+    cmake_plugin: node_plugin::BundledPlugin,
     mysql_plugin: node_plugin::BundledPlugin,
     redis_plugin: node_plugin::BundledPlugin,
     postgresql_plugin: node_plugin::BundledPlugin,
@@ -370,6 +377,7 @@ impl TorbenCore {
             rust: RustProvider::official()?,
             go: GoProvider::official()?,
             seven_zip: SevenZipProvider::official()?,
+            cmake: CMakeProvider::official()?,
             mysql: MysqlProvider::official()?,
             redis: RedisProvider::windows_community()?,
             postgresql: PostgresqlProvider::official()?,
@@ -382,6 +390,7 @@ impl TorbenCore {
             rust_plugin: node_plugin::BundledPlugin::rust()?.with_data_root(&paths),
             go_plugin: node_plugin::BundledPlugin::go()?.with_data_root(&paths),
             seven_zip_plugin: node_plugin::BundledPlugin::seven_zip()?.with_data_root(&paths),
+            cmake_plugin: node_plugin::BundledPlugin::cmake()?.with_data_root(&paths),
             mysql_plugin: node_plugin::BundledPlugin::mysql()?.with_data_root(&paths),
             redis_plugin: node_plugin::BundledPlugin::redis()?.with_data_root(&paths),
             postgresql_plugin: node_plugin::BundledPlugin::postgresql()?.with_data_root(&paths),
@@ -470,6 +479,7 @@ impl TorbenCore {
                     "rust" => Some(BUNDLED_RUST_PLUGIN_ID),
                     "go" => Some(BUNDLED_GO_PLUGIN_ID),
                     "7zip" => Some(BUNDLED_7ZIP_PLUGIN_ID),
+                    "cmake" => Some(BUNDLED_CMAKE_PLUGIN_ID),
                     "mysql" => Some(BUNDLED_MYSQL_PLUGIN_ID),
                     "redis" => Some(BUNDLED_REDIS_PLUGIN_ID),
                     "postgresql" => Some(BUNDLED_POSTGRESQL_PLUGIN_ID),
@@ -752,6 +762,11 @@ impl TorbenCore {
             }
             "7zip" => {
                 self.seven_zip
+                    .install(&self.paths, app_id, version, plan, journal)
+                    .await
+            }
+            "cmake" => {
+                self.cmake
                     .install(&self.paths, app_id, version, plan, journal)
                     .await
             }
@@ -1111,6 +1126,14 @@ impl TorbenCore {
             }
             return Err(error);
         }
+        if app_id.as_str() == "temurin"
+            && let Err(error) = self
+                .shell_integration
+                .set_java_home(Path::new(&record.install_path))
+        {
+            journal.fail_and_rollback(&error)?;
+            return Err(error);
+        }
         journal.record(
             torben_contracts::OperationState::Running,
             "commit",
@@ -1266,6 +1289,18 @@ impl TorbenCore {
             return Err(error);
         }
         journal.succeed(format!("Cleared selected {app_id} {previous}"))
+    }
+
+    pub fn sync_selected_java_home(&self) -> TorbenResult<()> {
+        let app_id = AppId::new("temurin")?;
+        let Some(version) = self.store.selected_version(&app_id)? else {
+            return Ok(());
+        };
+        let Some(record) = self.store.get_installation(&app_id, &version)? else {
+            return Ok(());
+        };
+        self.shell_integration
+            .set_java_home(Path::new(&record.install_path))
     }
 
     pub fn operation_events(&self) -> TorbenResult<Vec<OperationEvent>> {
@@ -3016,6 +3051,7 @@ impl TorbenCore {
             "rust" => self.rust.command_path(&install_path, command),
             "go" => self.go.command_path(&install_path, command),
             "7zip" => self.seven_zip.command_path(&install_path, command),
+            "cmake" => self.cmake.command_path(&install_path, command),
             "mysql" => self.mysql.command_path(&install_path, command),
             "redis" => self.redis.command_path(&install_path, command),
             "postgresql" => self.postgresql.command_path(&install_path, command),
@@ -3243,6 +3279,16 @@ impl TorbenCore {
             });
         }
         if cfg!(any(test, feature = "test-fixtures"))
+            || self.bundled_plugin_enabled(BUNDLED_CMAKE_PLUGIN_ID)?
+        {
+            let (plugin_healthy, plugin_message) = self.cmake_plugin.diagnostic();
+            checks.push(DoctorCheck {
+                id: "bundled_plugin.cmake".to_owned(),
+                healthy: plugin_healthy,
+                message: plugin_message,
+            });
+        }
+        if cfg!(any(test, feature = "test-fixtures"))
             || self.bundled_plugin_enabled(BUNDLED_MYSQL_PLUGIN_ID)?
         {
             let (plugin_healthy, plugin_message) = self.mysql_plugin.diagnostic();
@@ -3361,6 +3407,12 @@ impl TorbenCore {
                     true,
                 )?,
                 bundled_plugin_summary(
+                    BUNDLED_CMAKE_PLUGIN_MANIFEST,
+                    BUNDLED_CMAKE_PLUGIN_ID,
+                    "CMake",
+                    true,
+                )?,
+                bundled_plugin_summary(
                     BUNDLED_MYSQL_PLUGIN_MANIFEST,
                     BUNDLED_MYSQL_PLUGIN_ID,
                     "MySQL",
@@ -3422,6 +3474,11 @@ impl TorbenCore {
                     BUNDLED_7ZIP_PLUGIN_MANIFEST,
                 ),
                 (
+                    BUNDLED_CMAKE_PLUGIN_ID,
+                    "CMake",
+                    BUNDLED_CMAKE_PLUGIN_MANIFEST,
+                ),
+                (
                     BUNDLED_MYSQL_PLUGIN_ID,
                     "MySQL",
                     BUNDLED_MYSQL_PLUGIN_MANIFEST,
@@ -3459,6 +3516,7 @@ impl TorbenCore {
                         | BUNDLED_RUST_PLUGIN_ID
                         | BUNDLED_GO_PLUGIN_ID
                         | BUNDLED_7ZIP_PLUGIN_ID
+                        | BUNDLED_CMAKE_PLUGIN_ID
                         | BUNDLED_MYSQL_PLUGIN_ID
                         | BUNDLED_REDIS_PLUGIN_ID
                         | BUNDLED_POSTGRESQL_PLUGIN_ID
@@ -3511,6 +3569,7 @@ impl TorbenCore {
         )
     }
 
+    #[allow(clippy::too_many_lines)]
     fn install_bundled_provider(
         &self,
         package: BundledProviderPackage<'_>,
@@ -3528,7 +3587,18 @@ impl TorbenCore {
         let plugin_id = PluginId::new(plugin_id)?;
         provision_bundled_shim(&self.paths, shim_executable)?;
         if let Some(record) = self.store.get_plugin(&plugin_id)? {
-            return stored_plugin_summary(&record);
+            if executable.is_empty() {
+                return stored_plugin_summary(&record);
+            }
+            return self.refresh_bundled_provider(
+                &plugin_id,
+                provider_name,
+                binary_name,
+                manifest_template,
+                executable,
+                resources,
+                record,
+            );
         }
         if executable.is_empty() {
             return Err(TorbenError::new(
@@ -3609,6 +3679,166 @@ impl TorbenCore {
             .with_detail("reason", error.to_string())),
             (Err(error), _) => Err(error),
         }
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn refresh_bundled_provider(
+        &self,
+        plugin_id: &PluginId,
+        provider_name: &str,
+        binary_name: &str,
+        manifest_template: &str,
+        executable: &[u8],
+        resources: &[BundledPluginResource<'_>],
+        existing: PluginRecord,
+    ) -> TorbenResult<PluginSummary> {
+        if existing.origin != PluginOrigin::BuiltIn {
+            return stored_plugin_summary(&existing);
+        }
+        let version_dir = validate_bundled_plugin_uninstall_path(&self.paths, &existing)?;
+        let executable_name = format!(
+            "torben-plugin-{binary_name}{}",
+            std::env::consts::EXE_SUFFIX
+        );
+        let executable_path = version_dir.join(&executable_name);
+        let expected_hash = hex::encode(Sha256::digest(executable));
+        let current_hash = executable_path
+            .is_file()
+            .then(|| sha256_path(&executable_path).map(hex::encode))
+            .transpose()?;
+        let manifest_matches = serde_json::from_str::<PluginManifest>(&existing.manifest_json)
+            .ok()
+            .and_then(|manifest| {
+                manifest
+                    .targets
+                    .iter()
+                    .find(|target| target.target == node_plugin::current_target())
+                    .map(|target| {
+                        target.executable == executable_name && target.sha256 == expected_hash
+                    })
+            })
+            .unwrap_or(false);
+        if current_hash.as_deref() == Some(expected_hash.as_str()) && manifest_matches {
+            return stored_plugin_summary(&existing);
+        }
+
+        let staging = self.paths.staging_dir().join(format!(
+            "bundled-{binary_name}-refresh-{}",
+            OperationId::new()
+        ));
+        if staging.exists() {
+            return Err(TorbenError::new(
+                "plugin_stage_conflict",
+                "The bundled plugin refresh staging path already exists.",
+            )
+            .with_detail("path", staging.display().to_string()));
+        }
+        std::fs::create_dir_all(&staging).map_err(|error| {
+            TorbenError::new(
+                "plugin_stage_failed",
+                "Could not create the bundled plugin refresh directory.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+        let refresh_result = (|| {
+            let staged_executable = staging.join(&executable_name);
+            write_bundled_payload(&staged_executable, executable)?;
+            for resource in resources {
+                let actual_sha256 = hex::encode(Sha256::digest(resource.contents));
+                if resource.contents.is_empty() || actual_sha256 != resource.expected_sha256 {
+                    return Err(TorbenError::new(
+                        "bundled_plugin_resource_invalid",
+                        format!(
+                            "The bundled {provider_name} resource is missing or does not match its pinned SHA-256."
+                        ),
+                    )
+                    .with_detail("pluginId", plugin_id.to_string())
+                    .with_detail("resource", resource.filename)
+                    .with_detail("expected", resource.expected_sha256)
+                    .with_detail("actual", actual_sha256));
+                }
+                write_bundled_payload(&staging.join(resource.filename), resource.contents)?;
+            }
+            let mut manifest: PluginManifest =
+                serde_json::from_str(manifest_template).map_err(|error| {
+                    TorbenError::internal(format!(
+                        "The bundled {provider_name} manifest is invalid."
+                    ))
+                    .with_detail("reason", error.to_string())
+                })?;
+            manifest.targets = vec![PluginTarget {
+                target: node_plugin::current_target(),
+                executable: executable_name.clone(),
+                sha256: expected_hash,
+            }];
+            if manifest.id != *plugin_id || manifest.version != existing.version {
+                return Err(TorbenError::new(
+                    "bundled_plugin_identity_invalid",
+                    "The refreshed bundled plugin identity does not match its stored record.",
+                )
+                .with_detail("pluginId", plugin_id.to_string())
+                .with_detail("version", manifest.version.to_string()));
+            }
+            let manifest_json = serde_json::to_string(&manifest).map_err(|error| {
+                TorbenError::internal(format!(
+                    "Could not serialize the bundled {provider_name} manifest."
+                ))
+                .with_detail("reason", error.to_string())
+            })?;
+            write_bundled_payload(&staging.join("plugin.json"), manifest_json.as_bytes())?;
+            torben_plugin_host::PluginVerifier::developer_mode()
+                .verify(&staging.join("plugin.json"))?;
+            let refreshed = PluginRecord {
+                id: existing.id.clone(),
+                version: existing.version.clone(),
+                enabled: existing.enabled,
+                manifest_json,
+                origin: PluginOrigin::BuiltIn,
+            };
+            let backup = version_dir.with_file_name(format!(
+                "{}-previous-{}",
+                existing.version,
+                OperationId::new()
+            ));
+            std::fs::rename(&version_dir, &backup).map_err(|error| {
+                TorbenError::new(
+                    "plugin_refresh_stage_failed",
+                    "Could not stage the existing bundled plugin for refresh.",
+                )
+                .with_detail("path", version_dir.display().to_string())
+                .with_detail("reason", error.to_string())
+            })?;
+            if let Err(error) = std::fs::rename(&staging, &version_dir) {
+                let _ = std::fs::rename(&backup, &version_dir);
+                return Err(TorbenError::new(
+                    "plugin_refresh_commit_failed",
+                    "Could not commit the refreshed bundled plugin.",
+                )
+                .with_detail("reason", error.to_string()));
+            }
+            if let Err(error) = self.store.upsert_plugin(&refreshed) {
+                let _ = std::fs::remove_dir_all(&version_dir);
+                let _ = std::fs::rename(&backup, &version_dir);
+                return Err(TorbenError::new(
+                    "plugin_refresh_state_failed",
+                    "Could not commit the refreshed bundled plugin state.",
+                )
+                .with_detail("reason", error.to_string()));
+            }
+            std::fs::remove_dir_all(&backup).map_err(|error| {
+                TorbenError::new(
+                    "plugin_refresh_cleanup_failed",
+                    "The bundled plugin was refreshed, but its previous payload could not be removed.",
+                )
+                .with_detail("path", backup.display().to_string())
+                .with_detail("reason", error.to_string())
+            })?;
+            stored_plugin_summary(&refreshed)
+        })();
+        if refresh_result.is_err() {
+            let _ = std::fs::remove_dir_all(&staging);
+        }
+        refresh_result
     }
 
     pub fn install_bundled_python(
@@ -3728,6 +3958,54 @@ impl TorbenCore {
 
     pub fn uninstall_bundled_7zip(&self) -> TorbenResult<()> {
         self.uninstall_bundled_provider(BUNDLED_7ZIP_PLUGIN_ID, "7-Zip", "7zip", "7-Zip")
+    }
+
+    pub fn install_bundled_cmake(
+        &self,
+        executable: &[u8],
+        shim_executable: &[u8],
+    ) -> TorbenResult<PluginSummary> {
+        self.install_bundled_provider(
+            BundledProviderPackage {
+                plugin_id: BUNDLED_CMAKE_PLUGIN_ID,
+                provider_name: "CMake",
+                binary_name: "cmake",
+                manifest_template: BUNDLED_CMAKE_PLUGIN_MANIFEST,
+                executable,
+                resources: &[],
+            },
+            shim_executable,
+        )
+    }
+
+    pub fn uninstall_bundled_cmake(&self) -> TorbenResult<()> {
+        self.uninstall_bundled_provider(BUNDLED_CMAKE_PLUGIN_ID, "CMake", "cmake", "CMake")
+    }
+
+    pub fn refresh_bundled_cmake(
+        &self,
+        executable: &[u8],
+        shim_executable: &[u8],
+    ) -> TorbenResult<()> {
+        if executable.is_empty() {
+            return Ok(());
+        }
+        let _lock = WorkspaceLock::acquire(self.paths.workspace_lock())?;
+        let plugin_id = PluginId::new(BUNDLED_CMAKE_PLUGIN_ID)?;
+        let Some(record) = self.store.get_plugin(&plugin_id)? else {
+            return Ok(());
+        };
+        provision_bundled_shim(&self.paths, shim_executable)?;
+        let _ = self.refresh_bundled_provider(
+            &plugin_id,
+            "CMake",
+            "cmake",
+            BUNDLED_CMAKE_PLUGIN_MANIFEST,
+            executable,
+            &[],
+            record,
+        )?;
+        Ok(())
     }
 
     pub fn install_bundled_mysql(
@@ -4100,6 +4378,7 @@ impl TorbenCore {
                 | BUNDLED_RUST_PLUGIN_ID
                 | BUNDLED_GO_PLUGIN_ID
                 | BUNDLED_7ZIP_PLUGIN_ID
+                | BUNDLED_CMAKE_PLUGIN_ID
                 | BUNDLED_MYSQL_PLUGIN_ID
                 | BUNDLED_REDIS_PLUGIN_ID
                 | BUNDLED_POSTGRESQL_PLUGIN_ID
@@ -4115,6 +4394,7 @@ impl TorbenCore {
                     | BUNDLED_RUST_PLUGIN_ID
                     | BUNDLED_GO_PLUGIN_ID
                     | BUNDLED_7ZIP_PLUGIN_ID
+                    | BUNDLED_CMAKE_PLUGIN_ID
                     | BUNDLED_MYSQL_PLUGIN_ID
                     | BUNDLED_REDIS_PLUGIN_ID
                     | BUNDLED_POSTGRESQL_PLUGIN_ID
@@ -4225,6 +4505,7 @@ impl TorbenCore {
                     "rust" => self.bundled_plugin_enabled(BUNDLED_RUST_PLUGIN_ID)?,
                     "go" => self.bundled_plugin_enabled(BUNDLED_GO_PLUGIN_ID)?,
                     "7zip" => self.bundled_plugin_enabled(BUNDLED_7ZIP_PLUGIN_ID)?,
+                    "cmake" => self.bundled_plugin_enabled(BUNDLED_CMAKE_PLUGIN_ID)?,
                     "mysql" => self.bundled_plugin_enabled(BUNDLED_MYSQL_PLUGIN_ID)?,
                     "redis" => self.bundled_plugin_enabled(BUNDLED_REDIS_PLUGIN_ID)?,
                     "postgresql" => self.bundled_plugin_enabled(BUNDLED_POSTGRESQL_PLUGIN_ID)?,
@@ -4309,6 +4590,7 @@ impl TorbenCore {
             "rust" => Ok(&self.rust_plugin),
             "go" => Ok(&self.go_plugin),
             "7zip" => Ok(&self.seven_zip_plugin),
+            "cmake" => Ok(&self.cmake_plugin),
             "mysql" => Ok(&self.mysql_plugin),
             "redis" => Ok(&self.redis_plugin),
             "postgresql" => Ok(&self.postgresql_plugin),
@@ -4334,6 +4616,7 @@ impl TorbenCore {
             BUNDLED_RUST_PLUGIN_ID => Some(&self.rust_plugin),
             BUNDLED_GO_PLUGIN_ID => Some(&self.go_plugin),
             BUNDLED_7ZIP_PLUGIN_ID => Some(&self.seven_zip_plugin),
+            BUNDLED_CMAKE_PLUGIN_ID => Some(&self.cmake_plugin),
             BUNDLED_MYSQL_PLUGIN_ID => Some(&self.mysql_plugin),
             BUNDLED_REDIS_PLUGIN_ID => Some(&self.redis_plugin),
             BUNDLED_POSTGRESQL_PLUGIN_ID => Some(&self.postgresql_plugin),
@@ -4419,7 +4702,16 @@ fn bundled_app_support_available(app_id: &AppId, fixture_build: bool) -> bool {
     // release builds do not expose these applications until their data paths are constrained.
     matches!(
         app_id.as_str(),
-        "node" | "temurin" | "python" | "rust" | "go" | "7zip" | "mysql" | "redis" | "postgresql"
+        "node"
+            | "temurin"
+            | "python"
+            | "rust"
+            | "go"
+            | "7zip"
+            | "cmake"
+            | "mysql"
+            | "redis"
+            | "postgresql"
     ) || (fixture_build && matches!(app_id.as_str(), "git" | "vscode" | "codex"))
 }
 
@@ -5751,6 +6043,7 @@ fn shim_destinations_for_app(paths: &TorbenPaths, app_id: &AppId) -> TorbenResul
         "rust" => RUST_SHIM_COMMANDS,
         "go" => GO_SHIM_COMMANDS,
         "7zip" => SEVEN_ZIP_SHIM_COMMANDS,
+        "cmake" => CMAKE_SHIM_COMMANDS,
         "mysql" => MYSQL_SHIM_COMMANDS,
         "redis" => REDIS_SHIM_COMMANDS,
         "postgresql" => POSTGRESQL_SHIM_COMMANDS,
@@ -5788,6 +6081,7 @@ const PYTHON_SHIM_COMMANDS: &[&str] = &["python", "python3", "pip", "pip3"];
 const RUST_SHIM_COMMANDS: &[&str] = &["rustc", "cargo", "rustdoc", "rustfmt"];
 const GO_SHIM_COMMANDS: &[&str] = &["go", "gofmt"];
 const SEVEN_ZIP_SHIM_COMMANDS: &[&str] = &["7z"];
+const CMAKE_SHIM_COMMANDS: &[&str] = &["cmake"];
 const MYSQL_SHIM_COMMANDS: &[&str] = &["mysql", "mysqld", "mysqladmin", "mysqldump"];
 const REDIS_SHIM_COMMANDS: &[&str] = &["redis-server", "redis-cli", "redis-benchmark"];
 const POSTGRESQL_SHIM_COMMANDS: &[&str] = &[
@@ -5832,6 +6126,7 @@ const ALL_SHIM_COMMANDS: &[&str] = &[
     "go",
     "gofmt",
     "7z",
+    "cmake",
     "mysql",
     "mysqld",
     "mysqladmin",
@@ -9494,8 +9789,8 @@ fn main() {{
 
         let plugins = core.plugins().unwrap();
 
-        assert_eq!(plugins.len(), 14);
-        for plugin in &plugins[..12] {
+        assert_eq!(plugins.len(), 15);
+        for plugin in &plugins[..13] {
             assert_eq!(plugin.origin, PluginOrigin::BuiltIn);
         }
         assert_eq!(plugins[0].origin, PluginOrigin::BuiltIn);
@@ -9505,17 +9800,18 @@ fn main() {{
         assert_eq!(plugins[3].id.as_str(), "app.torben.plugin.rust");
         assert_eq!(plugins[4].id.as_str(), "app.torben.plugin.go");
         assert_eq!(plugins[5].id.as_str(), "app.torben.plugin.7zip");
-        assert_eq!(plugins[6].id.as_str(), "app.torben.plugin.mysql");
-        assert_eq!(plugins[7].id.as_str(), "app.torben.plugin.redis");
-        assert_eq!(plugins[8].id.as_str(), "app.torben.plugin.postgresql");
-        assert_eq!(plugins[9].id.as_str(), "app.torben.plugin.git");
-        assert_eq!(plugins[10].id.as_str(), "app.torben.plugin.vscode");
-        assert_eq!(plugins[11].id.as_str(), "app.torben.plugin.codex");
-        assert_eq!(plugins[12].origin, PluginOrigin::OfficialRegistry);
-        assert_eq!(plugins[12].display_name, "Official fixture");
-        assert_eq!(plugins[13].origin, PluginOrigin::Sideloaded);
-        assert_eq!(plugins[13].display_name, "Fixture plugin");
-        assert_eq!(plugins[13].permissions.network_domains, ["example.invalid"]);
+        assert_eq!(plugins[6].id.as_str(), "app.torben.plugin.cmake");
+        assert_eq!(plugins[7].id.as_str(), "app.torben.plugin.mysql");
+        assert_eq!(plugins[8].id.as_str(), "app.torben.plugin.redis");
+        assert_eq!(plugins[9].id.as_str(), "app.torben.plugin.postgresql");
+        assert_eq!(plugins[10].id.as_str(), "app.torben.plugin.git");
+        assert_eq!(plugins[11].id.as_str(), "app.torben.plugin.vscode");
+        assert_eq!(plugins[12].id.as_str(), "app.torben.plugin.codex");
+        assert_eq!(plugins[13].origin, PluginOrigin::OfficialRegistry);
+        assert_eq!(plugins[13].display_name, "Official fixture");
+        assert_eq!(plugins[14].origin, PluginOrigin::Sideloaded);
+        assert_eq!(plugins[14].display_name, "Fixture plugin");
+        assert_eq!(plugins[14].permissions.network_domains, ["example.invalid"]);
     }
 
     #[test]
@@ -10051,7 +10347,7 @@ fn main() {{
                 .join("fixture-plugin.bin")
                 .is_file()
         );
-        assert_eq!(core.plugins().unwrap().len(), 13);
+        assert_eq!(core.plugins().unwrap().len(), 14);
 
         let duplicate = core.install_plugin(&manifest_path, true).unwrap_err();
         assert_eq!(duplicate.code, "plugin_already_installed");
@@ -10373,8 +10669,8 @@ fn main() {{
 
         let installed = install_shims_locked(&paths, &source).unwrap();
 
-        assert_eq!(installed.len(), 43);
-        for command in ["go", "gofmt", "7z"] {
+        assert_eq!(installed.len(), 44);
+        for command in ["go", "gofmt", "7z", "cmake"] {
             assert!(
                 installed.contains(
                     &paths
